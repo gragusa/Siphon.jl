@@ -11,7 +11,8 @@ using DelimitedFiles
 
 @testset "General EM - MARSS Validation" begin
     # Load MARSS reference data
-    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header=true)[1]
+    data =
+        readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')  # Convert to p × n format (3 × 200)
 
     # Model dimensions
@@ -20,12 +21,16 @@ using DelimitedFiles
     r = 2  # shocks
 
     # Initial values
-    Z_init = [1.0 0.0;
-              0.0 1.0;
-              0.5 0.5]  # Start with different values
+    Z_init = [
+        1.0 0.0;
+        0.0 1.0;
+        0.5 0.5
+    ]  # Start with different values
 
-    T_init = [0.5 0.0;
-              0.0 0.5]  # Start with smaller AR coefficients
+    T_init = [
+        0.5 0.0;
+        0.0 0.5
+    ]  # Start with smaller AR coefficients
 
     R = Matrix(1.0I, m, r)
     H_init = [1.0, 1.0, 1.0]
@@ -42,9 +47,11 @@ using DelimitedFiles
 
     # Free parameter masks
     # Z: first two rows fixed (identity), third row free
-    Z_free = [false false;
-              false false;
-              true  true]
+    Z_free = [
+        false false;
+        false false;
+        true true
+    ]
 
     # T: all elements free
     T_free = trues(m, m)
@@ -54,10 +61,24 @@ using DelimitedFiles
     Q_free = trues(r)
 
     # Run EM
-    result = _em_general_ssm(Z_init, T_init, R, H_init, Q_init, y, a1, P1;
-                              Z_free=Z_free, T_free=T_free,
-                              H_free=H_free, Q_free=Q_free,
-                              maxiter=2000, tol_ll=1e-8, tol_param=1e-6, verbose=false)
+    result = _em_general_ssm(
+        Z_init,
+        T_init,
+        R,
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free,
+        Q_free = Q_free,
+        maxiter = 2000,
+        tol_ll = 1e-8,
+        tol_param = 1e-6,
+        verbose = false,
+    )
 
     # MARSS reference values (from marss_general_results.csv)
     marss_B11 = 0.748645313949298
@@ -95,19 +116,19 @@ using DelimitedFiles
     println("converged = $(result.converged)")
 
     # Test against MARSS values (5% tolerance for parameters)
-    @test isapprox(result.T[1,1], marss_B11, rtol=0.05)
-    @test isapprox(result.T[1,2], marss_B12, rtol=0.05)
-    @test isapprox(result.T[2,1], marss_B21, rtol=0.05)
-    @test isapprox(result.T[2,2], marss_B22, rtol=0.05)
-    @test isapprox(result.Z[3,1], marss_Z31, rtol=0.05)
-    @test isapprox(result.Z[3,2], marss_Z32, rtol=0.05)
-    @test isapprox(result.Q_diag[1], marss_Q11, rtol=0.05)
-    @test isapprox(result.Q_diag[2], marss_Q22, rtol=0.05)
-    @test isapprox(result.H_diag[1], marss_R11, rtol=0.05)
-    @test isapprox(result.H_diag[2], marss_R22, rtol=0.05)
-    @test isapprox(result.H_diag[3], marss_R33, rtol=0.05)
+    @test isapprox(result.T[1, 1], marss_B11, rtol = 0.05)
+    @test isapprox(result.T[1, 2], marss_B12, rtol = 0.05)
+    @test isapprox(result.T[2, 1], marss_B21, rtol = 0.05)
+    @test isapprox(result.T[2, 2], marss_B22, rtol = 0.05)
+    @test isapprox(result.Z[3, 1], marss_Z31, rtol = 0.05)
+    @test isapprox(result.Z[3, 2], marss_Z32, rtol = 0.05)
+    @test isapprox(result.Q_diag[1], marss_Q11, rtol = 0.05)
+    @test isapprox(result.Q_diag[2], marss_Q22, rtol = 0.05)
+    @test isapprox(result.H_diag[1], marss_R11, rtol = 0.05)
+    @test isapprox(result.H_diag[2], marss_R22, rtol = 0.05)
+    @test isapprox(result.H_diag[3], marss_R33, rtol = 0.05)
     # Log-likelihood should match closely now that initial state is propagated correctly
-    @test isapprox(result.loglik, marss_loglik, rtol=0.001)
+    @test isapprox(result.loglik, marss_loglik, rtol = 0.001)
 
     # Siphon.jl should achieve at least as good a log-likelihood as MARSS
     # (higher is better for log-likelihood, i.e., less negative)
@@ -116,7 +137,8 @@ end
 
 @testset "General EM - Log-likelihood Improvement" begin
     # Load MARSS reference data
-    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header=true)[1]
+    data =
+        readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     p, m, r = 3, 2, 2
@@ -138,10 +160,24 @@ end
     H_free = trues(p)
     Q_free = trues(r)
 
-    result = _em_general_ssm(Z_init, T_init, R, H_init, Q_init, y, a1, P1;
-                              Z_free=Z_free, T_free=T_free,
-                              H_free=H_free, Q_free=Q_free,
-                              maxiter=100, tol_ll=1e-9, tol_param=1e-6, verbose=false)
+    result = _em_general_ssm(
+        Z_init,
+        T_init,
+        R,
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free,
+        Q_free = Q_free,
+        maxiter = 100,
+        tol_ll = 1e-9,
+        tol_param = 1e-6,
+        verbose = false,
+    )
 
     # EM should improve log-likelihood overall
     ll_first = result.loglik_history[1]
@@ -150,7 +186,7 @@ end
 
     # Count significant decreases (> 0.1 in log-likelihood)
     n_significant_decreases = 0
-    for i in 2:length(result.loglik_history)
+    for i = 2:length(result.loglik_history)
         if result.loglik_history[i] < result.loglik_history[i-1] - 0.1
             n_significant_decreases += 1
         end

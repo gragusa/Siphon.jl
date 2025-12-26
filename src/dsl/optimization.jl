@@ -86,16 +86,19 @@ result5 = optimize_ssm(spec, y;
 result6 = optimize_ssm(spec, y; use_static=false)
 ```
 """
-function optimize_ssm(spec::SSMSpec, y::AbstractMatrix;
-                      method=Optim.LBFGS(),
-                      θ0::Union{Nothing, AbstractVector, NamedTuple}=nothing,
-                      ad_backend=Optimization.AutoForwardDiff(),
-                      use_static::Bool=true,
-                      prob_kwargs::NamedTuple=NamedTuple(),
-                      kwargs...)
+function optimize_ssm(
+    spec::SSMSpec,
+    y::AbstractMatrix;
+    method = Optim.LBFGS(),
+    θ0::Union{Nothing,AbstractVector,NamedTuple} = nothing,
+    ad_backend = Optimization.AutoForwardDiff(),
+    use_static::Bool = true,
+    prob_kwargs::NamedTuple = NamedTuple(),
+    kwargs...,
+)
 
     # Create log-density object
-    ld = SSMLogDensity(spec, y; use_static=use_static)
+    ld = SSMLogDensity(spec, y; use_static = use_static)
 
     # Initial values in constrained space
     θ0_c = if θ0 === nothing
@@ -125,10 +128,12 @@ function optimize_ssm(spec::SSMSpec, y::AbstractMatrix;
     θ_opt, _ = transform_to_constrained(spec, result.u)
     ll_opt = -result.objective
 
-    return (θ=θ_opt,
-            loglik=ll_opt,
-            result=result,
-            converged=result.retcode == Optimization.SciMLBase.ReturnCode.Success)
+    return (
+        θ = θ_opt,
+        loglik = ll_opt,
+        result = result,
+        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success,
+    )
 end
 
 """
@@ -144,17 +149,21 @@ Note: Standard errors are approximate when using parameter transformations.
 For accurate standard errors on constrained parameters, use the delta method
 or bootstrap.
 """
-function optimize_ssm_with_stderr(spec::SSMSpec, y::AbstractMatrix;
-                                   use_static::Bool=true, kwargs...)
+function optimize_ssm_with_stderr(
+    spec::SSMSpec,
+    y::AbstractMatrix;
+    use_static::Bool = true,
+    kwargs...,
+)
     # First optimize
-    opt_result = optimize_ssm(spec, y; use_static=use_static, kwargs...)
+    opt_result = optimize_ssm(spec, y; use_static = use_static, kwargs...)
 
     if !opt_result.converged
         @warn "Optimization did not converge; standard errors may be unreliable"
     end
 
     # Compute Hessian at optimum (in unconstrained space)
-    ld = SSMLogDensity(spec, y; use_static=use_static)
+    ld = SSMLogDensity(spec, y; use_static = use_static)
     θ_u_opt = transform_to_unconstrained(spec, opt_result.θ)
 
     H = ForwardDiff.hessian(θ -> -logdensity(ld, θ), θ_u_opt)
@@ -181,19 +190,23 @@ function optimize_ssm_with_stderr(spec::SSMSpec, y::AbstractMatrix;
             end
         end
 
-        return (θ=opt_result.θ,
-                loglik=opt_result.loglik,
-                result=opt_result.result,
-                converged=opt_result.converged,
-                stderr=stderr_c,
-                hessian=H)
+        return (
+            θ = opt_result.θ,
+            loglik = opt_result.loglik,
+            result = opt_result.result,
+            converged = opt_result.converged,
+            stderr = stderr_c,
+            hessian = H,
+        )
     catch e
         @warn "Failed to compute standard errors: $(e)"
-        return (θ=opt_result.θ,
-                loglik=opt_result.loglik,
-                result=opt_result.result,
-                converged=opt_result.converged,
-                stderr=fill(NaN, length(opt_result.θ)),
-                hessian=H)
+        return (
+            θ = opt_result.θ,
+            loglik = opt_result.loglik,
+            result = opt_result.result,
+            converged = opt_result.converged,
+            stderr = fill(NaN, length(opt_result.θ)),
+            hessian = H,
+        )
     end
 end

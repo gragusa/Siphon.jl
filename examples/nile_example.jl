@@ -43,12 +43,12 @@ println("\n=== Method 2: Using custom_ssm() ===")
 
 spec2 = custom_ssm(
     Z = [1.0],
-    H = [FreeParam(:var_obs, init=10000.0, lower=0.0)],
+    H = [FreeParam(:var_obs, init = 10000.0, lower = 0.0)],
     T = [1.0],
     R = [1.0],
-    Q = [FreeParam(:var_level, init=2500.0, lower=0.0)],
+    Q = [FreeParam(:var_level, init = 2500.0, lower = 0.0)],
     a1 = [0.0],
-    P1 = [1e7]
+    P1 = [1e7],
 )
 
 println("Parameters: ", param_names(spec2))
@@ -87,8 +87,8 @@ function grid_search(negloglik)
     best_θ = [1.0, 1.0]
 
     # Grid search over variance values directly
-    for var_obs in 10000:1000:20000
-        for var_level in 500:100:3000
+    for var_obs = 10000:1000:20000
+        for var_level = 500:100:3000
             θ = [Float64(var_obs), Float64(var_level)]
             nll = negloglik(θ)
             if nll < best_nll

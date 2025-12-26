@@ -77,10 +77,10 @@ end
 
 @testset "ARMA Matrix Structure" begin
     @testset "ARMA(2,2) matrices" begin
-        spec = arma(2, 2; ar_init=[0.7, -0.2], ma_init=[0.4, 0.1], var_init=1.5)
+        spec = arma(2, 2; ar_init = [0.7, -0.2], ma_init = [0.4, 0.1], var_init = 1.5)
 
         # Build matrices at initial values
-        theta = (φ1=0.7, φ2=-0.2, θ1=0.4, θ2=0.1, var=1.5)
+        theta = (φ1 = 0.7, φ2 = -0.2, θ1 = 0.4, θ2 = 0.1, var = 1.5)
         kfparms = Siphon.build_kfparms(spec, theta)
 
         # Z = [1 0 0]
@@ -122,16 +122,16 @@ end
     σ² = 1.0
     y = zeros(n)
     ε = randn(n)
-    for t in 2:n
+    for t = 2:n
         y[t] = φ * y[t-1] + sqrt(σ²) * ε[t]
     end
     y_mat = reshape(y, 1, n)
 
     # Fit AR(1) = ARMA(1,0)
-    spec = arma(1, 0; ar_init=[0.5], var_init=1.0)
+    spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
 
     # Log-likelihood should be computable
-    theta = (φ1=0.8, var=1.0)
+    theta = (φ1 = 0.8, var = 1.0)
     ll = Siphon.ssm_loglik(spec, theta, y_mat)
     @test isfinite(ll)
     @test ll < 0
@@ -149,23 +149,23 @@ end
         # Simulate AR(1)
         y = zeros(n)
         ε = sqrt(var_true) * randn(n)
-        for t in 2:n
+        for t = 2:n
             y[t] = φ_true * y[t-1] + ε[t]
         end
         y_mat = reshape(y, 1, n)
 
         # Estimate
-        spec = arma(1, 0; ar_init=[0.5], var_init=1.0)
+        spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
         model = StateSpaceModel(spec, n)
         fit!(MLE(), model, y_mat)
 
         params = parameters(model)
 
         # AR coefficient should be close to true value
-        @test isapprox(params.φ1, φ_true, atol=0.15)
+        @test isapprox(params.φ1, φ_true, atol = 0.15)
 
         # Variance should be close
-        @test isapprox(params.var, var_true, rtol=0.3)
+        @test isapprox(params.var, var_true, rtol = 0.3)
 
         # Log-likelihood should be finite
         @test isfinite(loglikelihood(model))
@@ -180,13 +180,13 @@ end
         # Simulate MA(1)
         ε = sqrt(var_true) * randn(n + 1)
         y = zeros(n)
-        for t in 1:n
+        for t = 1:n
             y[t] = ε[t+1] + θ_true * ε[t]
         end
         y_mat = reshape(y, 1, n)
 
         # Estimate
-        spec = arma(0, 1; ma_init=[0.3], var_init=1.0)
+        spec = arma(0, 1; ma_init = [0.3], var_init = 1.0)
         model = StateSpaceModel(spec, n)
         fit!(MLE(), model, y_mat)
 
@@ -194,7 +194,7 @@ end
 
         # MA coefficient should be reasonable
         # (MA estimation can be harder than AR)
-        @test isapprox(params.θ1, θ_true, atol=0.3)
+        @test isapprox(params.θ1, θ_true, atol = 0.3)
 
         # Variance should be in reasonable range
         @test params.var > 0.5 * var_true
@@ -289,7 +289,7 @@ end
 
     y = zeros(n)
     ε = sqrt(var_true) * randn(n)
-    for t in 2:n
+    for t = 2:n
         y[t] = φ_true * y[t-1] + ε[t]
     end
     y_mat = reshape(y, 1, n)
@@ -297,7 +297,7 @@ end
     # Fit with EM
     spec = arma(1, 0)
     model = StateSpaceModel(spec, n)
-    fit!(EM(), model, y_mat; maxiter=100)
+    fit!(EM(), model, y_mat; maxiter = 100)
 
     @test model.fitted
     @test isfinite(loglikelihood(model))
@@ -331,14 +331,14 @@ end
     σ² = 1.0
     y = zeros(n)
     ε = randn(n)
-    for t in 2:n
+    for t = 2:n
         y[t] = φ * y[t-1] + ε[t]
     end
     y_mat = reshape(y, 1, n)
 
     # Fit with Siphon
-    spec = arma(1, 0; ar_init=[0.5], var_init=1.0)
-    theta_true = (φ1=φ, var=σ²)
+    spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
+    theta_true = (φ1 = φ, var = σ²)
 
     # Compute log-likelihood at true parameters
     ll_true = Siphon.ssm_loglik(spec, theta_true, y_mat)
@@ -376,7 +376,7 @@ end
     # Simulate
     ε = sqrt(σ²) * randn(n + 10)
     y = zeros(n)
-    for t in 3:n
+    for t = 3:n
         y[t] = φ1 * y[t-1] + φ2 * y[t-2] + ε[t+10] + θ1 * ε[t+9]
     end
     y_mat = reshape(y, 1, n)
@@ -417,21 +417,21 @@ end
     y = randn(1, n)
 
     # ARMA(1,1) via template
-    spec_template = arma(1, 1; ar_init=[0.6], ma_init=[0.3], var_init=1.0)
+    spec_template = arma(1, 1; ar_init = [0.6], ma_init = [0.3], var_init = 1.0)
 
     # ARMA(1,1) via custom_ssm using proper matrix type annotations
     r = 2  # max(1, 1+1) = 2
 
     # Build T matrix with Union type
-    T_mat = Union{Float64, FreeParam}[
-        FreeParam(:φ1, init=0.6, lower=-Inf, upper=Inf)  1.0;
-        0.0                                              0.0
+    T_mat = Union{Float64,FreeParam}[
+        FreeParam(:φ1, init = 0.6, lower = -Inf, upper = Inf) 1.0;
+        0.0 0.0
     ]
 
     # Build R matrix with Union type
-    R_mat = Union{Float64, FreeParam}[
+    R_mat = Union{Float64,FreeParam}[
         1.0;
-        FreeParam(:θ1, init=0.3, lower=-Inf, upper=Inf)
+        FreeParam(:θ1, init = 0.3, lower = -Inf, upper = Inf)
     ]
     R_mat = reshape(R_mat, 2, 1)  # Make it a proper 2x1 matrix
 
@@ -440,10 +440,10 @@ end
         H = zeros_mat(1, 1),
         T = T_mat,
         R = R_mat,
-        Q = reshape([FreeParam(:var, init=1.0, lower=0.0)], 1, 1),
+        Q = reshape([FreeParam(:var, init = 1.0, lower = 0.0)], 1, 1),
         a1 = [0.0, 0.0],
         P1 = 1e7 * Matrix(1.0I, 2, 2),
-        name = :ARMA11_custom
+        name = :ARMA11_custom,
     )
 
     # Both should have same dimensions
@@ -451,7 +451,7 @@ end
     @test spec_template.n_obs == spec_custom.n_obs
 
     # Build matrices at same parameters
-    theta = (φ1=0.6, θ1=0.3, var=1.0)
+    theta = (φ1 = 0.6, θ1 = 0.3, var = 1.0)
 
     kf_template = Siphon.build_kfparms(spec_template, theta)
     kf_custom = Siphon.build_kfparms(spec_custom, theta)

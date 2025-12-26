@@ -31,7 +31,7 @@ println("Loading data...")
 data_path = joinpath(@__DIR__, "qt_factor_data.csv")
 
 # Read CSV - first row is header, first column is date
-raw_data = readdlm(data_path, ',', Any; header=true)
+raw_data = readdlm(data_path, ',', Any; header = true)
 data_matrix = raw_data[1]
 header = raw_data[2]
 
@@ -53,7 +53,7 @@ y_raw_t = permutedims(y_raw)
 # ============================================
 
 # Count missing values per variable
-missing_counts = [count(isnan, y_raw_t[i, :]) for i in 1:n_vars]
+missing_counts = [count(isnan, y_raw_t[i, :]) for i = 1:n_vars]
 println()
 println("Missing data summary:")
 println("  Variables with no missing: ", count(==(0), missing_counts))
@@ -83,7 +83,7 @@ println("Standardizing data...")
 # Compute means and stds ignoring NaN
 means = zeros(N)
 stds = zeros(N)
-for i in 1:N
+for i = 1:N
     valid_obs = filter(!isnan, y[i, :])
     means[i] = mean(valid_obs)
     stds[i] = std(valid_obs)
@@ -94,8 +94,8 @@ end
 
 # Standardize
 y_std = similar(y)
-for i in 1:N
-    for t in 1:n
+for i = 1:N
+    for t = 1:n
         if isnan(y[i, t])
             y_std[i, t] = NaN
         else
@@ -130,21 +130,25 @@ println("  Loading lags (p): 0 (static)")
 println("  Error AR lags (r): 0 (white noise)")
 println()
 
-model1 = DynamicFactorModel(N, n_factors, n;
-                            loading_lags=0,
-                            factor_lags=factor_lags,
-                            error_lags=0)
+model1 = DynamicFactorModel(
+    N,
+    n_factors,
+    n;
+    loading_lags = 0,
+    factor_lags = factor_lags,
+    error_lags = 0,
+)
 
 t_start = time()
-fit!(EM(), model1, y_std; maxiter=200, tol=1e-6, verbose=true)
+fit!(EM(), model1, y_std; maxiter = 200, tol = 1e-6, verbose = true)
 t_elapsed = time() - t_start
 
 println()
 println("Model 1 Results:")
 println("  Converged: ", isconverged(model1))
 println("  Iterations: ", niterations(model1))
-println("  Final log-likelihood: ", round(loglikelihood(model1), digits=2))
-println("  Total time: ", round(t_elapsed, digits=2), " seconds")
+println("  Final log-likelihood: ", round(loglikelihood(model1), digits = 2))
+println("  Total time: ", round(t_elapsed, digits = 2), " seconds")
 println()
 
 # ============================================
@@ -164,25 +168,29 @@ println("  Loading lags (p): 0 (static)")
 println("  Error AR lags (r): 1")
 println()
 
-model2 = DynamicFactorModel(N, n_factors, n;
-                            loading_lags=0,
-                            factor_lags=factor_lags,
-                            error_lags=1)
+model2 = DynamicFactorModel(
+    N,
+    n_factors,
+    n;
+    loading_lags = 0,
+    factor_lags = factor_lags,
+    error_lags = 1,
+)
 
 t_start = time()
-fit!(EM(), model2, y_std; maxiter=200, tol=1e-6, verbose=true)
+fit!(EM(), model2, y_std; maxiter = 200, tol = 1e-6, verbose = true)
 t_elapsed = time() - t_start
 
 println()
 println("Model 2 Results:")
 println("  Converged: ", isconverged(model2))
 println("  Iterations: ", niterations(model2))
-println("  Final log-likelihood: ", round(loglikelihood(model2), digits=2))
-println("  Total time: ", round(t_elapsed, digits=2), " seconds")
+println("  Final log-likelihood: ", round(loglikelihood(model2), digits = 2))
+println("  Total time: ", round(t_elapsed, digits = 2), " seconds")
 println()
 δ2 = ar_coefficients(model2)
 if !isempty(δ2)
-    println("  AR(1) error coefficient δ₁: ", round(δ2[1], digits=4))
+    println("  AR(1) error coefficient δ₁: ", round(δ2[1], digits = 4))
 end
 println()
 
@@ -203,21 +211,25 @@ println("  Loading lags (p): 1 (dynamic)")
 println("  Error AR lags (r): 0")
 println()
 
-model3 = DynamicFactorModel(N, n_factors, n;
-                            loading_lags=1,
-                            factor_lags=factor_lags,
-                            error_lags=0)
+model3 = DynamicFactorModel(
+    N,
+    n_factors,
+    n;
+    loading_lags = 1,
+    factor_lags = factor_lags,
+    error_lags = 0,
+)
 
 t_start = time()
-fit!(EM(), model3, y_std; maxiter=200, tol=1e-6, verbose=true)
+fit!(EM(), model3, y_std; maxiter = 200, tol = 1e-6, verbose = true)
 t_elapsed = time() - t_start
 
 println()
 println("Model 3 Results:")
 println("  Converged: ", isconverged(model3))
 println("  Iterations: ", niterations(model3))
-println("  Final log-likelihood: ", round(loglikelihood(model3), digits=2))
-println("  Total time: ", round(t_elapsed, digits=2), " seconds")
+println("  Final log-likelihood: ", round(loglikelihood(model3), digits = 2))
+println("  Total time: ", round(t_elapsed, digits = 2), " seconds")
 println()
 
 # ============================================
@@ -237,25 +249,29 @@ println("  Loading lags (p): 1 (dynamic)")
 println("  Error AR lags (r): 1")
 println()
 
-model4 = DynamicFactorModel(N, n_factors, n;
-                            loading_lags=1,
-                            factor_lags=factor_lags,
-                            error_lags=1)
+model4 = DynamicFactorModel(
+    N,
+    n_factors,
+    n;
+    loading_lags = 1,
+    factor_lags = factor_lags,
+    error_lags = 1,
+)
 
 t_start = time()
-fit!(EM(), model4, y_std; maxiter=200, tol=1e-6, verbose=true)
+fit!(EM(), model4, y_std; maxiter = 200, tol = 1e-6, verbose = true)
 t_elapsed = time() - t_start
 
 println()
 println("Model 4 Results:")
 println("  Converged: ", isconverged(model4))
 println("  Iterations: ", niterations(model4))
-println("  Final log-likelihood: ", round(loglikelihood(model4), digits=2))
-println("  Total time: ", round(t_elapsed, digits=2), " seconds")
+println("  Final log-likelihood: ", round(loglikelihood(model4), digits = 2))
+println("  Total time: ", round(t_elapsed, digits = 2), " seconds")
 println()
 δ4 = ar_coefficients(model4)
 if !isempty(δ4)
-    println("  AR(1) error coefficient δ₁: ", round(δ4[1], digits=4))
+    println("  AR(1) error coefficient δ₁: ", round(δ4[1], digits = 4))
 end
 println()
 
@@ -288,8 +304,17 @@ println("| Model                        | LogLik       | Iterations | State Dim 
 println("|------------------------------|--------------|------------|-----------|")
 for (name, model, m) in models
     ll_str = @sprintf("%.2f", loglikelihood(model))
-    println("| ", rpad(name, 28), " | ", lpad(ll_str, 12), " | ",
-            lpad(string(niterations(model)), 10), " | ", lpad(string(m), 9), " |")
+    println(
+        "| ",
+        rpad(name, 28),
+        " | ",
+        lpad(ll_str, 12),
+        " | ",
+        lpad(string(niterations(model)), 10),
+        " | ",
+        lpad(string(m), 9),
+        " |",
+    )
 end
 
 # Best model by log-likelihood
@@ -314,21 +339,21 @@ println()
 Φ = var_coefficients(best_model)
 println("Factor VAR coefficients (diagonal of Φ matrices):")
 for (lag, Φ_lag) in enumerate(Φ)
-    println("  Φ_$lag diagonal: ", round.(diag(Φ_lag), digits=3))
+    println("  Φ_$lag diagonal: ", round.(diag(Φ_lag), digits = 3))
 end
 println()
 
 # Factor innovation covariance
 Σ_η = innovation_cov(best_model)
 println("Factor innovation covariance Σ_η (diagonal):")
-println("  ", round.(diag(Σ_η), digits=4))
+println("  ", round.(diag(Σ_η), digits = 4))
 println()
 
 # AR error coefficients (if applicable)
 δ = ar_coefficients(best_model)
 if !isempty(δ) && !all(δ .== 0)
     println("AR error coefficients δ:")
-    println("  ", round.(δ, digits=4))
+    println("  ", round.(δ, digits = 4))
     println()
 end
 
@@ -336,23 +361,27 @@ end
 Λ = loadings(best_model)
 println("Factor loadings Λ₀ summary:")
 Λ0 = Λ[1]  # First element is Λ₀ (contemporaneous loadings)
-for k in 1:n_factors
+for k = 1:n_factors
     loadings_k = Λ0[:, k]
-    println("  Factor $k: mean=$(round(mean(loadings_k), digits=3)), " *
-            "std=$(round(std(loadings_k), digits=3)), " *
-            "max|λ|=$(round(maximum(abs, loadings_k), digits=3))")
+    println(
+        "  Factor $k: mean=$(round(mean(loadings_k), digits=3)), " *
+        "std=$(round(std(loadings_k), digits=3)), " *
+        "max|λ|=$(round(maximum(abs, loadings_k), digits=3))",
+    )
 end
 println()
 
 # Factor summary statistics
 smoothed_factors = factors(best_model)
 println("Smoothed factor summary:")
-for k in 1:n_factors
+for k = 1:n_factors
     f_k = smoothed_factors[k, :]
-    println("  Factor $k: mean=$(round(mean(f_k), digits=3)), " *
-            "std=$(round(std(f_k), digits=3)), " *
-            "min=$(round(minimum(f_k), digits=2)), " *
-            "max=$(round(maximum(f_k), digits=2))")
+    println(
+        "  Factor $k: mean=$(round(mean(f_k), digits=3)), " *
+        "std=$(round(std(f_k), digits=3)), " *
+        "min=$(round(minimum(f_k), digits=2)), " *
+        "max=$(round(maximum(f_k), digits=2))",
+    )
 end
 println()
 

@@ -21,7 +21,7 @@ using Random
         [σ²_obs;;],    # H
         [1.0;;],       # T
         [1.0;;],       # R
-        [σ²_state;;]   # Q
+        [σ²_state;;],   # Q
     )
 
     # Generate data
@@ -55,9 +55,7 @@ end
     σ²_obs = 100.0
     σ²_state = 10.0
 
-    p = KFParms(
-        [1.0;;], [σ²_obs;;], [1.0;;], [1.0;;], [σ²_state;;]
-    )
+    p = KFParms([1.0;;], [σ²_obs;;], [1.0;;], [1.0;;], [σ²_state;;])
 
     n = 50
     y = randn(1, n)
@@ -106,7 +104,7 @@ end
         [σ²_obs;;],                    # H
         [1.0 1.0; 0.0 1.0],            # T
         [1.0 0.0; 0.0 1.0],            # R
-        [σ²_level 0.0; 0.0 σ²_slope]   # Q
+        [σ²_level 0.0; 0.0 σ²_slope],   # Q
     )
 
     n = 100
@@ -126,9 +124,7 @@ end
 @testset "Diffuse filter - missing data handling" begin
     Random.seed!(4567)
 
-    p = KFParms(
-        [1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;]
-    )
+    p = KFParms([1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;])
 
     n = 50
     y = randn(1, n)
@@ -154,9 +150,7 @@ end
     Random.seed!(5678)
 
     # After diffuse period, Pinf should be zero and filter should behave normally
-    p = KFParms(
-        [1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;]
-    )
+    p = KFParms([1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;])
 
     n = 100
     y = randn(1, n)
@@ -169,7 +163,7 @@ end
     d = diffuse_period(result)
 
     # After diffuse period, covariances should be finite and reasonable
-    for t in (d+1):n
+    for t = (d+1):n
         P_t = result.Pt[:, :, t]
         @test all(isfinite.(P_t))
         @test all(P_t .> 0)  # Should be positive
@@ -182,9 +176,7 @@ end
     # The key difference: exact diffuse doesn't count first observation in likelihood
     # when Finf is invertible
 
-    p = KFParms(
-        [1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;]
-    )
+    p = KFParms([1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;])
 
     n = 200
     y = randn(1, n)
@@ -315,13 +307,13 @@ end
 
     # Compare filtered states (after diffuse period)
     d = diffuse_period(ws)
-    for t in (d+1):n
+    for t = (d+1):n
         @test filtered_states(ws)[:, t] ≈ result.att[:, t] rtol=1e-10
         @test predicted_states(ws)[:, t] ≈ result.at[:, t] rtol=1e-10
     end
 
     # Compare prediction errors
-    for t in (d+1):n
+    for t = (d+1):n
         @test prediction_errors(ws)[:, t] ≈ result.vt[:, t] rtol=1e-10
     end
 end

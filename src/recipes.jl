@@ -46,7 +46,7 @@ Compute confidence band bounds for a vector of means and variances.
 # Returns
 - `(lower, upper)`: Tuple of vectors with lower and upper bounds
 """
-function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real=0.95)
+function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real = 0.95)
     z = quantile_normal((1 + level) / 2)
     std = sqrt.(var)
     lower = mean .- z .* std
@@ -69,14 +69,14 @@ Extracts diagonal variances from covariance matrices.
 # Returns
 - `(lower, upper)`: Tuple of matrices (m × n) with lower and upper bounds
 """
-function confidence_bands(mean::Matrix{T}, cov::Array{T,3}, level::Real=0.95) where T
+function confidence_bands(mean::Matrix{T}, cov::Array{T,3}, level::Real = 0.95) where {T}
     m, n = size(mean)
     z = quantile_normal((1 + level) / 2)
     lower = similar(mean)
     upper = similar(mean)
 
-    @inbounds for t in 1:n
-        for i in 1:m
+    @inbounds for t = 1:n
+        for i = 1:m
             std_i = sqrt(cov[i, i, t])
             lower[i, t] = mean[i, t] - z * std_i
             upper[i, t] = mean[i, t] + z * std_i
@@ -113,16 +113,23 @@ function select_vars(vars, n_vars::Int)
     if vars === :all || vars === nothing
         return 1:n_vars
     elseif vars isa Integer
-        1 ≤ vars ≤ n_vars || throw(ArgumentError("Variable index $vars out of range [1, $n_vars]"))
+        1 ≤ vars ≤ n_vars ||
+            throw(ArgumentError("Variable index $vars out of range [1, $n_vars]"))
         return [vars]
     elseif vars isa AbstractVector{<:Integer}
-        all(1 .≤ vars .≤ n_vars) || throw(ArgumentError("Variable indices out of range [1, $n_vars]"))
+        all(1 .≤ vars .≤ n_vars) ||
+            throw(ArgumentError("Variable indices out of range [1, $n_vars]"))
         return vars
     elseif vars isa AbstractRange
-        all(1 .≤ vars .≤ n_vars) || throw(ArgumentError("Variable indices out of range [1, $n_vars]"))
+        all(1 .≤ vars .≤ n_vars) ||
+            throw(ArgumentError("Variable indices out of range [1, $n_vars]"))
         return vars
     else
-        throw(ArgumentError("vars must be :all, an integer, vector of integers, or range. Got: $(typeof(vars))"))
+        throw(
+            ArgumentError(
+                "vars must be :all, an integer, vector of integers, or range. Got: $(typeof(vars))",
+            ),
+        )
     end
 end
 
@@ -158,21 +165,39 @@ sr = SmootherResult(p, y, a1, P1)
 struct SmootherResult{T<:Real}
     alpha::Matrix{T}
     V::Array{T,3}
-    p::Union{KFParms, Nothing}
-    time::Union{AbstractVector, Nothing}
+    p::Union{KFParms,Nothing}
+    time::Union{AbstractVector,Nothing}
 end
 
 # Constructor from NamedTuple (output of kalman_smoother)
-function SmootherResult(nt::NamedTuple; p::Union{KFParms, Nothing}=nothing, time::Union{AbstractVector, Nothing}=nothing)
+function SmootherResult(
+    nt::NamedTuple;
+    p::Union{KFParms,Nothing} = nothing,
+    time::Union{AbstractVector,Nothing} = nothing,
+)
     SmootherResult(nt.alpha, nt.V, p, time)
 end
 
 # Convenience constructor: run filter+smoother (functional API)
-function SmootherResult(p::KFParms, y::AbstractMatrix, a1, P1; time::Union{AbstractVector, Nothing}=nothing)
+function SmootherResult(
+    p::KFParms,
+    y::AbstractMatrix,
+    a1,
+    P1;
+    time::Union{AbstractVector,Nothing} = nothing,
+)
     filt = kalman_filter(p, y, a1, P1)
-    nt = kalman_smoother(p.Z, p.T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                         missing_mask=filt.missing_mask, Ptt=filt.Ptt)
-    SmootherResult(nt; p=p, time=time)
+    nt = kalman_smoother(
+        p.Z,
+        p.T,
+        filt.at,
+        filt.Pt,
+        filt.vt,
+        filt.Ft;
+        missing_mask = filt.missing_mask,
+        Ptt = filt.Ptt,
+    )
+    SmootherResult(nt; p = p, time = time)
 end
 
 # Constructor from KalmanWorkspace (in-place API - RECOMMENDED)
@@ -193,7 +218,10 @@ smooth = SmootherResult(ws)
 plot(smooth)
 ```
 """
-function SmootherResult(ws::KalmanWorkspace{T}; time::Union{AbstractVector, Nothing}=nothing) where T
+function SmootherResult(
+    ws::KalmanWorkspace{T};
+    time::Union{AbstractVector,Nothing} = nothing,
+) where {T}
     SmootherResult{T}(ws.αs, ws.Vs, nothing, time)
 end
 
@@ -231,11 +259,11 @@ struct ForecastResult{T<:Real}
     a::Matrix{T}
     P::Array{T,3}
     F::Array{T,3}
-    time::Union{AbstractVector, Nothing}
+    time::Union{AbstractVector,Nothing}
 end
 
 # Constructor from NamedTuple (output of forecast)
-function ForecastResult(nt::NamedTuple; time::Union{AbstractVector, Nothing}=nothing)
+function ForecastResult(nt::NamedTuple; time::Union{AbstractVector,Nothing} = nothing)
     ForecastResult(nt.yhat, nt.a, nt.P, nt.F, time)
 end
 
@@ -326,7 +354,7 @@ plot(result, filtered=false)    # Predicted instead of filtered
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         state_mean = states[var_idx, :]
-        state_var = [covs[var_idx, var_idx, t] for t in 1:n]
+        state_var = [covs[var_idx, var_idx, t] for t = 1:n]
 
         # Confidence bands
         if band
@@ -434,7 +462,7 @@ plot(ws, vars=1, level=0.90)    # State 1 with 90% CI
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         state_mean = states[var_idx, :]
-        state_var = [covs[var_idx, var_idx, t] for t in 1:n]
+        state_var = [covs[var_idx, var_idx, t] for t = 1:n]
 
         if band
             lower, upper = confidence_bands(state_mean, state_var, level)
@@ -510,7 +538,7 @@ plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         state_mean = alpha[var_idx, :]
-        state_var = [V[var_idx, var_idx, t] for t in 1:n]
+        state_var = [V[var_idx, var_idx, t] for t = 1:n]
 
         if band
             lower, upper = confidence_bands(state_mean, state_var, level)
@@ -598,7 +626,7 @@ plot(fc, level=0.90)               # 90% CI
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         fc_mean = means[var_idx, :]
-        fc_var = [covs[var_idx, var_idx, t] for t in 1:h]
+        fc_var = [covs[var_idx, var_idx, t] for t = 1:h]
 
         if band
             lower, upper = confidence_bands(fc_mean, fc_var, level)
@@ -651,7 +679,7 @@ smooth = SmootherResult(p, y, a1, P1)
 plot((result, smooth), vars=1)  # Compare state 1
 ```
 """
-@recipe function f(results::Tuple{KalmanFilterResult, SmootherResult})
+@recipe function f(results::Tuple{KalmanFilterResult,SmootherResult})
     filt, smooth = results
 
     vars = get(plotattributes, :vars, :all)
@@ -677,7 +705,7 @@ plot((result, smooth), vars=1)  # Compare state 1
         # Smoother confidence band (if requested)
         if band
             smooth_mean = smooth.alpha[var_idx, :]
-            smooth_var = [smooth.V[var_idx, var_idx, t] for t in 1:n]
+            smooth_var = [smooth.V[var_idx, var_idx, t] for t = 1:n]
             lower, upper = confidence_bands(smooth_mean, smooth_var, level)
 
             @series begin
@@ -790,7 +818,7 @@ plot(result, ObservablePlot, actual=y)      # With actual data overlay
             pred_var = zeros(n)
             z_row = Z[var_idx, :]
             h_var = H[var_idx, var_idx]
-            for t in 1:n
+            for t = 1:n
                 pred_var[t] = dot(z_row, Pt[:, :, t] * z_row) + h_var
             end
 

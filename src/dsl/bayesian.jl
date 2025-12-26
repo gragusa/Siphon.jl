@@ -106,7 +106,7 @@ result = optimize(θ -> -logdensity(ld, θ), θ0, LBFGS())
 # θ_hat is a NamedTuple like (σ_obs = 12.3, σ_level = 3.4)
 ```
 """
-struct SSMLogDensity{S<:SSMSpec, T, Y<:AbstractMatrix, P}
+struct SSMLogDensity{S<:SSMSpec,T,Y<:AbstractMatrix,P}
     spec::S
     transformation::T
     y::Y
@@ -114,7 +114,12 @@ struct SSMLogDensity{S<:SSMSpec, T, Y<:AbstractMatrix, P}
     use_static::Bool
 end
 
-function SSMLogDensity(spec::SSMSpec, y::AbstractMatrix; prior=nothing, use_static::Bool=true)
+function SSMLogDensity(
+    spec::SSMSpec,
+    y::AbstractMatrix;
+    prior = nothing,
+    use_static::Bool = true,
+)
     t = build_transformation(spec)
     SSMLogDensity(spec, t, y, prior, use_static)
 end
@@ -135,7 +140,7 @@ function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
 
     # Build state-space components (with optional StaticArrays)
-    ss = build_linear_state_space(ld.spec, θ_nt, ld.y; use_static=ld.use_static)
+    ss = build_linear_state_space(ld.spec, θ_nt, ld.y; use_static = ld.use_static)
 
     # Compute log-likelihood
     ll = kalman_loglik(ss.p, ld.y, ss.a1, ss.P1)
@@ -158,8 +163,7 @@ LogDensityProblems.capabilities(::Type{<:SSMLogDensity}) =
 
 LogDensityProblems.dimension(ld::SSMLogDensity) = n_params(ld.spec)
 
-LogDensityProblems.logdensity(ld::SSMLogDensity, θ::AbstractVector) =
-    logdensity(ld, θ)
+LogDensityProblems.logdensity(ld::SSMLogDensity, θ::AbstractVector) = logdensity(ld, θ)
 
 # ============================================
 # Prior Types
@@ -187,7 +191,7 @@ prior = NormalPrior(
 )
 ```
 """
-struct NormalPrior{M<:NamedTuple, S<:NamedTuple}
+struct NormalPrior{M<:NamedTuple,S<:NamedTuple}
     μ::M
     σ::S
 end
@@ -204,7 +208,7 @@ function (p::NormalPrior)(θ::NamedTuple)
 end
 
 # Also support vector-based priors for backwards compatibility
-struct NormalPriorVec{M<:AbstractVector, S<:AbstractVector}
+struct NormalPriorVec{M<:AbstractVector,S<:AbstractVector}
     μ::M
     σ::S
 end
@@ -221,7 +225,7 @@ end
 function _normal_logpdf(θ, μ, σ)
     n = length(θ)
     result = zero(eltype(θ))
-    for i in 1:n
+    for i = 1:n
         result += -0.5 * ((θ[i] - μ[i]) / σ[i])^2 - log(σ[i])
     end
     result - n * 0.5 * log(2π)
@@ -238,7 +242,7 @@ Assumes θ contains standard deviations (will square them).
 prior = InverseGammaPrior(2.0, 1.0, (:σ_obs, :σ_level))
 ```
 """
-struct InverseGammaPrior{A<:Real, B<:Real, N}
+struct InverseGammaPrior{A<:Real,B<:Real,N}
     α::A
     β::B
     param_names::N  # Tuple of Symbols

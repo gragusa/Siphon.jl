@@ -28,16 +28,16 @@ using Random
     filt = kalman_filter(p, y, a1, P1)
 
     # Without cross-covariances
-    result1 = kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                               compute_crosscov=false)
+    result1 =
+        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = false)
     @test haskey(result1, :alpha)
     @test haskey(result1, :V)
     @test size(result1.alpha) == (1, 30)
     @test size(result1.V) == (1, 1, 30)
 
     # With cross-covariances
-    result2 = kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                               compute_crosscov=true)
+    result2 =
+        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
     @test haskey(result2, :P_crosslag)
     @test size(result2.P_crosslag) == (1, 1, 29)  # n-1 cross-covariances
 
@@ -58,7 +58,7 @@ end
     states = zeros(n)
     y_data = zeros(1, n)
     states[1] = 0.0
-    for t in 1:n
+    for t = 1:n
         if t > 1
             states[t] = states[t-1] + sqrt(true_var_level) * randn()
         end
@@ -67,7 +67,7 @@ end
 
     # Use unified fit!(EM(), ...) API
     model = StateSpaceModel(spec, n)
-    fit!(EM(), model, y_data; maxiter=100, verbose=false)
+    fit!(EM(), model, y_data; maxiter = 100, verbose = false)
 
     @test isfinite(loglikelihood(model))
 end
@@ -79,7 +79,7 @@ end
 
     spec = local_level()
     model = StateSpaceModel(spec, size(y, 2))
-    fit!(EM(), model, y; maxiter=300, tol=1e-8)
+    fit!(EM(), model, y; maxiter = 300, tol = 1e-8)
 
     # Get parameter names and values
     names = param_names(spec)
@@ -90,8 +90,8 @@ end
     # var_obs ≈ 15099, var_level ≈ 1469.1
     # Note: fit!(EM(), ...) uses a different code path than _em_local_level
     # so we use slightly higher tolerance
-    @test isapprox(model.theta_values[var_obs_idx], 15099.0, rtol=0.10)
-    @test isapprox(model.theta_values[var_level_idx], 1469.1, rtol=0.10)
+    @test isapprox(model.theta_values[var_obs_idx], 15099.0, rtol = 0.10)
+    @test isapprox(model.theta_values[var_level_idx], 1469.1, rtol = 0.10)
 end
 
 @testset "_em_local_level log-likelihood monotonicity" begin
@@ -100,10 +100,10 @@ end
     y = randn(1, 50) .* 10 .+ 100
 
     # Use internal function directly for testing
-    result = Siphon.DSL._em_local_level(spec, y; maxiter=50, verbose=false)
+    result = Siphon.DSL._em_local_level(spec, y; maxiter = 50, verbose = false)
 
     # Log-likelihood should be monotonically non-decreasing
-    for i in 2:length(result.loglik_history)
+    for i = 2:length(result.loglik_history)
         @test result.loglik_history[i] >= result.loglik_history[i-1] - 1e-8
     end
 end
@@ -115,52 +115,52 @@ end
     y = reshape(nile[:, 1], 1, :)
 
     spec = local_level()
-    result_em = Siphon.DSL._em_local_level(spec, y; maxiter=300, tol_ll=1e-8)
+    result_em = Siphon.DSL._em_local_level(spec, y; maxiter = 300, tol_ll = 1e-8)
 
     @test result_em.converged
 
     # EM should match D&K reference MLE values
     # var_obs ≈ 15099, var_level ≈ 1469.1
-    @test isapprox(result_em.theta.var_obs, 15099.0, rtol=0.01)
-    @test isapprox(result_em.theta.var_level, 1469.1, rtol=0.01)
+    @test isapprox(result_em.theta.var_obs, 15099.0, rtol = 0.01)
+    @test isapprox(result_em.theta.var_level, 1469.1, rtol = 0.01)
 
     # Log-likelihood should match D&K value
     # ll ≈ -641.59
-    @test isapprox(result_em.loglik, -641.59, rtol=0.001)
+    @test isapprox(result_em.loglik, -641.59, rtol = 0.001)
 end
 
 @testset "_em_local_level with fixed var_obs" begin
     # Fix var_obs, estimate var_level only
-    spec_fixed = local_level(var_obs=15099.0)
+    spec_fixed = local_level(var_obs = 15099.0)
 
     nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
     y = reshape(nile[:, 1], 1, :)
 
-    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter=300, tol_ll=1e-8)
+    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 
     @test result.converged
     @test length(param_names(spec_fixed)) == 1
     @test :var_level in param_names(spec_fixed)
 
     # Should recover var_level ≈ 1469.1
-    @test isapprox(result.theta.var_level, 1469.1, rtol=0.1)
+    @test isapprox(result.theta.var_level, 1469.1, rtol = 0.1)
 end
 
 @testset "_em_local_level with fixed var_level" begin
     # Fix var_level, estimate var_obs only
-    spec_fixed = local_level(var_level=1469.0)
+    spec_fixed = local_level(var_level = 1469.0)
 
     nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
     y = reshape(nile[:, 1], 1, :)
 
-    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter=300, tol_ll=1e-8)
+    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 
     @test result.converged
     @test length(param_names(spec_fixed)) == 1
     @test :var_obs in param_names(spec_fixed)
 
     # Should recover var_obs ≈ 15099
-    @test isapprox(result.theta.var_obs, 15099.0, rtol=0.1)
+    @test isapprox(result.theta.var_obs, 15099.0, rtol = 0.1)
 end
 
 @testset "EMResult fields" begin
@@ -169,7 +169,7 @@ end
     y = randn(1, 50) .* 10 .+ 100
 
     # Use internal function to get EMResult
-    result = Siphon.DSL._em_local_level(spec, y; maxiter=50)
+    result = Siphon.DSL._em_local_level(spec, y; maxiter = 50)
 
     # Check all fields exist and have correct types
     @test result.theta isa NamedTuple
@@ -202,8 +202,15 @@ end
         p = KFParms(Z, H, T, R, Q)
 
         filt = kalman_filter(p, y, a1, P1)
-        smooth = kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                                  compute_crosscov=true)
+        smooth = kalman_smoother(
+            Z,
+            T,
+            filt.at,
+            filt.Pt,
+            filt.vt,
+            filt.Ft;
+            compute_crosscov = true,
+        )
 
         # Sum of smoothed states and cross-covariances
         return sum(smooth.alpha) + sum(smooth.P_crosslag)
@@ -247,7 +254,7 @@ end
     L_H = cholesky(Symmetric(H_true)).L
 
     states[:, 1] = zeros(m)
-    for t in 1:n
+    for t = 1:n
         if t > 1
             states[:, t] = T_true * states[:, t-1] + L_Q * randn(m)
         end
@@ -268,10 +275,23 @@ end
     H_free = trues(p, p)
     Q_free = trues(m, m)
 
-    result = Siphon.DSL._em_general_ssm_full_cov(Z_init, T_init, R, H_init, Q_init, y, a1, P1;
-                                     Z_free=Z_free, T_free=T_free,
-                                     H_free=H_free, Q_free=Q_free,
-                                     maxiter=500, tol_ll=1e-5, verbose=false)
+    result = Siphon.DSL._em_general_ssm_full_cov(
+        Z_init,
+        T_init,
+        R,
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free,
+        Q_free = Q_free,
+        maxiter = 500,
+        tol_ll = 1e-5,
+        verbose = false,
+    )
 
     # May not fully converge but should make progress
     @test result.iterations > 1
@@ -308,11 +328,21 @@ end
 
     y = randn(2, 50)
 
-    result = Siphon.DSL._em_general_ssm_full_cov(Z, T, R, H, Q, y, a1, P1;
-                                     maxiter=50, verbose=false)
+    result = Siphon.DSL._em_general_ssm_full_cov(
+        Z,
+        T,
+        R,
+        H,
+        Q,
+        y,
+        a1,
+        P1;
+        maxiter = 50,
+        verbose = false,
+    )
 
     # Log-likelihood should be monotonically non-decreasing
-    for i in 2:length(result.loglik_history)
+    for i = 2:length(result.loglik_history)
         @test result.loglik_history[i] >= result.loglik_history[i-1] - 1e-6
     end
 end
@@ -337,10 +367,22 @@ end
     H_free = trues(2, 2)
     Q_free = trues(2, 2)
 
-    result = Siphon.DSL._em_general_ssm_full_cov(Z, T, R, H_init, Q_init, y, a1, P1;
-                                     Z_free=Z_free, T_free=T_free,
-                                     H_free=H_free, Q_free=Q_free,
-                                     maxiter=100, verbose=false)
+    result = Siphon.DSL._em_general_ssm_full_cov(
+        Z,
+        T,
+        R,
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free,
+        Q_free = Q_free,
+        maxiter = 100,
+        verbose = false,
+    )
 
     # Z and T should remain unchanged
     @test result.Z ≈ Z
@@ -400,12 +442,21 @@ end
     Q_free_diag = trues(r)
 
     result_diag = Siphon.DSL._em_general_ssm(
-        Z_init, T_init, R,
-        H_init_diag, Q_init_diag,
-        y, a1, P1;
-        Z_free=Z_free_diag, T_free=T_free_diag,
-        H_free=H_free_diag, Q_free=Q_free_diag,
-        maxiter=200, tol_ll=1e-8, verbose=false
+        Z_init,
+        T_init,
+        R,
+        H_init_diag,
+        Q_init_diag,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free_diag,
+        T_free = T_free_diag,
+        H_free = H_free_diag,
+        Q_free = Q_free_diag,
+        maxiter = 200,
+        tol_ll = 1e-8,
+        verbose = false,
     )
 
     # Method 2: Full covariance EM with diagonal constraints
@@ -414,20 +465,29 @@ end
 
     # Only diagonal elements are free
     H_free_full = falses(p, p)
-    H_free_full[1,1] = true
-    H_free_full[2,2] = true
+    H_free_full[1, 1] = true
+    H_free_full[2, 2] = true
 
     Q_free_full = falses(r, r)
-    Q_free_full[1,1] = true
-    Q_free_full[2,2] = true
+    Q_free_full[1, 1] = true
+    Q_free_full[2, 2] = true
 
     result_full = Siphon.DSL._em_general_ssm_full_cov(
-        Z_init, T_init, R,
-        H_init_full, Q_init_full,
-        y, a1, P1;
-        Z_free=Z_free_diag, T_free=T_free_diag,
-        H_free=H_free_full, Q_free=Q_free_full,
-        maxiter=200, tol_ll=1e-8, verbose=false
+        Z_init,
+        T_init,
+        R,
+        H_init_full,
+        Q_init_full,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free_diag,
+        T_free = T_free_diag,
+        H_free = H_free_full,
+        Q_free = Q_free_full,
+        maxiter = 200,
+        tol_ll = 1e-8,
+        verbose = false,
     )
 
     # Both methods should produce the same results
@@ -437,8 +497,8 @@ end
     @test maximum(abs.(result_diag.Q_diag - diag(result_full.Q))) < 1e-10
     @test abs(result_diag.loglik - result_full.loglik) < 1e-10
     # Off-diagonals should be exactly zero (they were fixed)
-    @test result_full.H[1,2] == 0.0
-    @test result_full.Q[1,2] == 0.0
+    @test result_full.H[1, 2] == 0.0
+    @test result_full.Q[1, 2] == 0.0
 end
 
 @testset "_mstep_full_cov produces symmetric matrices" begin
@@ -461,13 +521,12 @@ end
     # Run filter and smoother
     kfp = KFParms(Z, H, T, R, Q)
     filt = kalman_filter(kfp, y, a1, P1)
-    smooth = kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                              compute_crosscov=true)
+    smooth =
+        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
 
     # Run M-step
-    Z_new, T_new, H_new, Q_new = Siphon.DSL._mstep_full_cov(
-        Z, T, R, y, smooth.alpha, smooth.V, smooth.P_crosslag
-    )
+    Z_new, T_new, H_new, Q_new =
+        Siphon.DSL._mstep_full_cov(Z, T, R, y, smooth.alpha, smooth.V, smooth.P_crosslag)
 
     # Check symmetry
     @test H_new ≈ H_new' atol=1e-10

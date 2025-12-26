@@ -98,14 +98,21 @@ struct CovMatrixExpr
     var_init::Vector{Float64}
 
     # Constructor with var_init
-    function CovMatrixExpr(n::Int, σ_param_names::Vector{Symbol},
-                           corr_param_names::Vector{Symbol}, var_init::Vector{Float64})
+    function CovMatrixExpr(
+        n::Int,
+        σ_param_names::Vector{Symbol},
+        corr_param_names::Vector{Symbol},
+        var_init::Vector{Float64},
+    )
         new(n, σ_param_names, corr_param_names, var_init)
     end
 
     # Backwards-compatible constructor without var_init
-    function CovMatrixExpr(n::Int, σ_param_names::Vector{Symbol},
-                           corr_param_names::Vector{Symbol})
+    function CovMatrixExpr(
+        n::Int,
+        σ_param_names::Vector{Symbol},
+        corr_param_names::Vector{Symbol},
+    )
         new(n, σ_param_names, corr_param_names, Float64[])
     end
 end
@@ -151,8 +158,11 @@ end
 
 Build covariance matrix from vector parameters (legacy API).
 """
-function build_from_expr(expr::CovMatrixExpr, theta::AbstractVector{T},
-                         param_map::Dict{Symbol,Int}) where T
+function build_from_expr(
+    expr::CovMatrixExpr,
+    theta::AbstractVector{T},
+    param_map::Dict{Symbol,Int},
+) where {T}
     n = expr.n
 
     # Build D from σ parameters
@@ -202,7 +212,7 @@ end
 
 # Helper to get element type from NamedTuple
 _eltype(θ::NamedTuple) = promote_type(typeof.(values(θ))...)
-_eltype(θ::NamedTuple{(), Tuple{}}) = Float64  # Empty NamedTuple
+_eltype(θ::NamedTuple{(),Tuple{}}) = Float64  # Empty NamedTuple
 
 """
     evaluate_element(elem::MatrixElement, θ::NamedTuple)
@@ -317,8 +327,11 @@ end
 
 Build a matrix from specification and parameter vector (legacy API).
 """
-function build_matrix(spec::SSMMatrixSpec, theta::AbstractVector{T},
-                      param_map::Dict{Symbol,Int}) where T
+function build_matrix(
+    spec::SSMMatrixSpec,
+    theta::AbstractVector{T},
+    param_map::Dict{Symbol,Int},
+) where {T}
     m, n = spec.dims
     M = zeros(T, m, n)
 
@@ -374,7 +387,7 @@ end
 
 Build KFParms from specification and parameter vector.
 """
-function build_kfparms(spec::SSMSpec, theta::AbstractVector{T}) where T
+function build_kfparms(spec::SSMSpec, theta::AbstractVector{T}) where {T}
     param_map = Dict{Symbol,Int}(p.name => i for (i, p) in enumerate(spec.params))
 
     Z = build_matrix_or_expr(:Z, spec, theta, param_map)
@@ -386,8 +399,12 @@ function build_kfparms(spec::SSMSpec, theta::AbstractVector{T}) where T
     KFParms(Z, H, Tr, R, Q)
 end
 
-function build_matrix_or_expr(name::Symbol, spec::SSMSpec, theta::AbstractVector{T},
-                               param_map::Dict{Symbol,Int}) where T
+function build_matrix_or_expr(
+    name::Symbol,
+    spec::SSMSpec,
+    theta::AbstractVector{T},
+    param_map::Dict{Symbol,Int},
+) where {T}
     if haskey(spec.matrix_exprs, name)
         expr = spec.matrix_exprs[name]
         return build_from_expr(expr, theta, param_map)
@@ -397,7 +414,11 @@ function build_matrix_or_expr(name::Symbol, spec::SSMSpec, theta::AbstractVector
     end
 end
 
-function build_from_expr(expr, theta::AbstractVector{T}, param_map::Dict{Symbol,Int}) where T
+function build_from_expr(
+    expr,
+    theta::AbstractVector{T},
+    param_map::Dict{Symbol,Int},
+) where {T}
     θ_dict = Dict{Symbol,T}()
     for p in expr.params
         if haskey(param_map, p.name)
@@ -412,7 +433,7 @@ end
 
 Build initial state (a1, P1) from specification and parameter vector.
 """
-function build_initial_state(spec::SSMSpec, theta::AbstractVector{T}) where T
+function build_initial_state(spec::SSMSpec, theta::AbstractVector{T}) where {T}
     param_map = Dict{Symbol,Int}(p.name => i for (i, p) in enumerate(spec.params))
 
     a1 = T[evaluate_element(elem, theta, param_map) for elem in spec.a1]
@@ -444,8 +465,12 @@ Returns a NamedTuple with:
 - `a1`: Initial state mean vector
 - `P1`: Initial state covariance matrix
 """
-function build_linear_state_space(spec::SSMSpec, θ::Union{AbstractVector, NamedTuple}, y;
-                                   use_static::Bool=true)
+function build_linear_state_space(
+    spec::SSMSpec,
+    θ::Union{AbstractVector,NamedTuple},
+    y;
+    use_static::Bool = true,
+)
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
 
@@ -454,9 +479,9 @@ function build_linear_state_space(spec::SSMSpec, θ::Union{AbstractVector, Named
         p = KFParms_static(kfparms.Z, kfparms.H, kfparms.T, kfparms.R, kfparms.Q)
         a1_out = to_static_if_small(a1)
         P1_out = to_static_if_small(P1)
-        return (p=p, a1=a1_out, P1=P1_out)
+        return (p = p, a1 = a1_out, P1 = P1_out)
     else
-        return (p=kfparms, a1=a1, P1=P1)
+        return (p = kfparms, a1 = a1, P1 = P1)
     end
 end
 

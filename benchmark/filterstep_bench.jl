@@ -31,8 +31,16 @@ function benchmark_filterstep_scalar()
     y = 105.0
 
     println("\n--- Pure scalar step ---")
-    @btime filterstep_scalar_pure($a, $P, $(parms.Z), $(parms.H),
-                                   $(parms.T), $(parms.R), $(parms.Q), $y)
+    @btime filterstep_scalar_pure(
+        $a,
+        $P,
+        $(parms.Z),
+        $(parms.H),
+        $(parms.T),
+        $(parms.R),
+        $(parms.Q),
+        $y,
+    )
 end
 
 function benchmark_filterstep_small()
@@ -49,8 +57,16 @@ function benchmark_filterstep_small()
     y = randn(1)
 
     println("\n--- Pure matrix step ---")
-    @btime filterstep_pure($a, $P, $(parms.Z), $(parms.H),
-                           $(parms.T), $(parms.R), $(parms.Q), $y)
+    @btime filterstep_pure(
+        $a,
+        $P,
+        $(parms.Z),
+        $(parms.H),
+        $(parms.T),
+        $(parms.R),
+        $(parms.Q),
+        $y,
+    )
 
     # In-place
     a_out = similar(a)
@@ -58,9 +74,19 @@ function benchmark_filterstep_small()
     cache = FilterCache(m, 1, m)
 
     println("\n--- In-place matrix step ---")
-    @btime filterstep_inplace!($a_out, $P_out, $a, $P,
-                                $(parms.Z), $(parms.H), $(parms.T),
-                                $(parms.R), $(parms.Q), $y, $cache)
+    @btime filterstep_inplace!(
+        $a_out,
+        $P_out,
+        $a,
+        $P,
+        $(parms.Z),
+        $(parms.H),
+        $(parms.T),
+        $(parms.R),
+        $(parms.Q),
+        $y,
+        $cache,
+    )
 end
 
 function benchmark_filterstep_medium()
@@ -69,7 +95,7 @@ function benchmark_filterstep_medium()
     println("="^60)
 
     rng = benchmark_rng()
-    parms = medium_matrix(; rng=rng)
+    parms = medium_matrix(; rng = rng)
     m, p, r = 10, 3, 5
 
     a = randn(m)
@@ -78,8 +104,16 @@ function benchmark_filterstep_medium()
     y = randn(p)
 
     println("\n--- Pure matrix step ---")
-    @btime filterstep_pure($a, $P, $(parms.Z), $(parms.H),
-                           $(parms.T), $(parms.R), $(parms.Q), $y)
+    @btime filterstep_pure(
+        $a,
+        $P,
+        $(parms.Z),
+        $(parms.H),
+        $(parms.T),
+        $(parms.R),
+        $(parms.Q),
+        $y,
+    )
 
     # In-place
     a_out = similar(a)
@@ -87,9 +121,19 @@ function benchmark_filterstep_medium()
     cache = FilterCache(m, p, r)
 
     println("\n--- In-place matrix step ---")
-    @btime filterstep_inplace!($a_out, $P_out, $a, $P,
-                                $(parms.Z), $(parms.H), $(parms.T),
-                                $(parms.R), $(parms.Q), $y, $cache)
+    @btime filterstep_inplace!(
+        $a_out,
+        $P_out,
+        $a,
+        $P,
+        $(parms.Z),
+        $(parms.H),
+        $(parms.T),
+        $(parms.R),
+        $(parms.Q),
+        $y,
+        $cache,
+    )
 end
 
 function benchmark_filterstep_static()

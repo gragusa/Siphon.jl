@@ -102,13 +102,22 @@ end
     @test result_exact.loglik ≈ ll_exact
 
     # After diffuse period, filtered states should be similar
-    for t in (d+2):size(y, 2)
+    for t = (d+2):size(y, 2)
         @test result_exact.att[1, t] ≈ result_approx.att[1, t] rtol=0.01
     end
 
     # Test in-place version matches pure functional
-    ws = DiffuseKalmanWorkspace(Z_nile, H_nile, T_nile, R_nile, Q_nile,
-                                 a1, P1_star, P1_inf, size(y, 2))
+    ws = DiffuseKalmanWorkspace(
+        Z_nile,
+        H_nile,
+        T_nile,
+        R_nile,
+        Q_nile,
+        a1,
+        P1_star,
+        P1_inf,
+        size(y, 2),
+    )
     ll_inplace = kalman_filter!(ws, y)
     @test ll_inplace ≈ ll_exact rtol=1e-10
     @test diffuse_period(ws) == d
@@ -131,7 +140,7 @@ end
     end
 
     # Initial values
-    y_var = sum((y .- sum(y)/length(y)).^2) / (length(y) - 1)
+    y_var = sum((y .- sum(y)/length(y)) .^ 2) / (length(y) - 1)
     θ0 = [log(y_var/2), log(y_var/2)]
 
     # Optimize
@@ -158,7 +167,7 @@ end
     # Should match matrix version
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     ll_mat = kalman_loglik(p, y, a1_nile, P1_nile)
-    @test isapprox(ll, ll_mat, rtol=1e-10)
+    @test isapprox(ll, ll_mat, rtol = 1e-10)
 end
 
 @testset "kalman_filter" begin
@@ -194,7 +203,7 @@ end
 
     # Log-likelihood should match kalman_loglik
     ll_direct = kalman_loglik(p, y, a1_nile, P1_nile)
-    @test isapprox(result.loglik, ll_direct, rtol=1e-10)
+    @test isapprox(result.loglik, ll_direct, rtol = 1e-10)
 
     # Test accessor methods
     @test Siphon.predicted_states(result) === result.at
@@ -206,9 +215,7 @@ end
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     result = kalman_filter(p, y, a1_nile, P1_nile)
 
-    smooth = kalman_smoother(Z_nile, T_nile,
-                              result.at, result.Pt,
-                              result.vt, result.Ft)
+    smooth = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
     alpha_smooth = smooth.alpha
     V_smooth = smooth.V
 
@@ -223,12 +230,12 @@ end
     @test all(V_smooth .> 0)
 
     # Smoothed variance should be smaller than predicted variance
-    for t in 2:n-1
+    for t = 2:(n-1)
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t]
     end
 
     # Reference value at t=100 from D&K Table 2.1
-    @test isapprox(alpha_smooth[1, 100], 798.4, rtol=0.01)
+    @test isapprox(alpha_smooth[1, 100], 798.4, rtol = 0.01)
 end
 
 @testset "kalman_smoother AD" begin
@@ -260,18 +267,24 @@ end
 
     # Compare with separate calls
     ll = kalman_loglik(p, y, a1_nile, P1_nile)
-    @test isapprox(result.loglik, ll, rtol=1e-10)
+    @test isapprox(result.loglik, ll, rtol = 1e-10)
 end
 
 @testset "kalman_smoother_scalar" begin
-    result_scalar = kalman_filter_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
+    result_scalar =
+        kalman_filter_scalar(1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
 
     # Check struct type
     @test result_scalar isa Siphon.KalmanFilterResultScalar
 
-    alpha, V = kalman_smoother_scalar(1.0, 1.0, result_scalar.at, result_scalar.Pt,
-                                       result_scalar.vt, result_scalar.Ft)
+    alpha, V = kalman_smoother_scalar(
+        1.0,
+        1.0,
+        result_scalar.at,
+        result_scalar.Pt,
+        result_scalar.vt,
+        result_scalar.Ft,
+    )
 
     n = length(nile)
     @test length(alpha) == n
@@ -280,9 +293,10 @@ end
     # Should match matrix version
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     result = kalman_filter(p, y, a1_nile, P1_nile)
-    alpha_mat, V_mat = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
+    alpha_mat, V_mat =
+        kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
 
-    @test isapprox(alpha, vec(alpha_mat), rtol=1e-10)
+    @test isapprox(alpha, vec(alpha_mat), rtol = 1e-10)
 end
 
 # DSL tests

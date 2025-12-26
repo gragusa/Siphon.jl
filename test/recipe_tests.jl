@@ -71,7 +71,7 @@ end
     m, n = 2, 10
     mean = rand(m, n)
     cov = zeros(m, m, n)
-    for t in 1:n
+    for t = 1:n
         cov[1, 1, t] = 1.0
         cov[2, 2, t] = 4.0
     end
@@ -89,7 +89,7 @@ end
 
     # Test wrapping NamedTuple
     m, n = 2, 10
-    nt = (alpha=rand(m, n), V=rand(m, m, n))
+    nt = (alpha = rand(m, n), V = rand(m, m, n))
     sr = SmootherResult(nt)
 
     @test sr.alpha == nt.alpha
@@ -98,7 +98,7 @@ end
     @test sr.time === nothing
 
     # With optional arguments
-    sr2 = SmootherResult(nt; time=1:n)
+    sr2 = SmootherResult(nt; time = 1:n)
     @test sr2.time == 1:n
 
     # Accessor methods
@@ -111,8 +111,12 @@ end
     using Siphon: ForecastResult
 
     p_obs, m_state, h = 3, 2, 12
-    nt = (yhat=rand(p_obs, h), a=rand(m_state, h),
-          P=rand(m_state, m_state, h), F=rand(p_obs, p_obs, h))
+    nt = (
+        yhat = rand(p_obs, h),
+        a = rand(m_state, h),
+        P = rand(m_state, m_state, h),
+        F = rand(p_obs, p_obs, h),
+    )
 
     fr = ForecastResult(nt)
 
@@ -123,7 +127,7 @@ end
     @test fr.time === nothing
 
     # With time
-    fr2 = ForecastResult(nt; time=101:112)
+    fr2 = ForecastResult(nt; time = 101:112)
     @test fr2.time == 101:112
 
     # Accessor methods
@@ -211,7 +215,7 @@ end
 
     # Create mock forecast result
     h = 12
-    nt = (yhat=rand(1, h), a=rand(1, h), P=rand(1, 1, h), F=rand(1, 1, h))
+    nt = (yhat = rand(1, h), a = rand(1, h), P = rand(1, 1, h), F = rand(1, 1, h))
     fr = ForecastResult(nt)
 
     # Observations (default)
@@ -374,8 +378,16 @@ end
     y = reshape(nile[:, 1], 1, :)
     n = size(y, 2)
 
-    ws = KalmanWorkspace([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;],
-                          [0.0], [1e7;;], n)
+    ws = KalmanWorkspace(
+        [1.0;;],
+        [15099.0;;],
+        [1.0;;],
+        [1.0;;],
+        [1469.0;;],
+        [0.0],
+        [1e7;;],
+        n,
+    )
     kalman_filter!(ws, y)
     kalman_smoother!(ws)
 
@@ -404,8 +416,16 @@ end
     y = reshape(nile[:, 1], 1, :)
     n = size(y, 2)
 
-    ws = KalmanWorkspace([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;],
-                          [0.0], [1e7;;], n)
+    ws = KalmanWorkspace(
+        [1.0;;],
+        [15099.0;;],
+        [1.0;;],
+        [1.0;;],
+        [1469.0;;],
+        [0.0],
+        [1e7;;],
+        n,
+    )
     kalman_filter!(ws, y)
     kalman_smoother!(ws)
 
