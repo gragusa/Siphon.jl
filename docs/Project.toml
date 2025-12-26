@@ -1,0 +1,11 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Siphon = "4bbcb006-69a8-46c4-bd0b-6b150ee03dfc"
+RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+
+[sources]
+Siphon = {path = ".."}
+
+[compat]
+Documenter = "1"
+RecipesBase = "1.3"

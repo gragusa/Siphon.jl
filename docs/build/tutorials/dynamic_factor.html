@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Dynamic Factor Models · Filthy.jl</title><meta name="title" content="Dynamic Factor Models · Filthy.jl"/><meta property="og:title" content="Dynamic Factor Models · Filthy.jl"/><meta property="twitter:title" content="Dynamic Factor Models · Filthy.jl"/><meta name="description" content="Documentation for Filthy.jl."/><meta property="og:description" content="Documentation for Filthy.jl."/><meta property="twitter:description" content="Documentation for Filthy.jl."/><meta property="og:url" content="https://gragusa.github.io/Filthy.jl/stable/tutorials/dynamic_factor.html"/><meta property="twitter:url" content="https://gragusa.github.io/Filthy.jl/stable/tutorials/dynamic_factor.html"/><link rel="canonical" href="https://gragusa.github.io/Filthy.jl/stable/tutorials/dynamic_factor.html"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../index.html">Filthy.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../index.html">Home</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="getting_started.html">Getting Started</a></li><li><a class="tocitem" href="custom_models.html">Custom Models</a></li><li class="is-active"><a class="tocitem" href="dynamic_factor.html">Dynamic Factor Models</a><ul class="internal"><li><a class="tocitem" href="#Model-Overview"><span>Model Overview</span></a></li><li><a class="tocitem" href="#High-Level-API:-DynamicFactorModel"><span>High-Level API: DynamicFactorModel</span></a></li><li><a class="tocitem" href="#DSL-Approach:-dynamic_factor-Template"><span>DSL Approach: dynamic_factor Template</span></a></li><li><a class="tocitem" href="#Complete-Example:-Macroeconomic-Factor-Model"><span>Complete Example: Macroeconomic Factor Model</span></a></li><li><a class="tocitem" href="#Forecasting"><span>Forecasting</span></a></li><li><a class="tocitem" href="#Tips-and-Best-Practices"><span>Tips and Best Practices</span></a></li><li><a class="tocitem" href="#Function-Reference"><span>Function Reference</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li></ul></li><li><a class="tocitem" href="estimation_methods.html">Estimation Methods</a></li><li><a class="tocitem" href="transformations.html">Parameter Transformations</a></li><li><a class="tocitem" href="visualization.html">Visualization</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../api/core.html">Core Functions</a></li><li><a class="tocitem" href="../api/dsl.html">DSL &amp; Templates</a></li><li><a class="tocitem" href="../api/matrix_helpers.html">Matrix Helpers</a></li><li><a class="tocitem" href="../api/optimization.html">Optimization &amp; Bayesian</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href="dynamic_factor.html">Dynamic Factor Models</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="dynamic_factor.html">Dynamic Factor Models</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/gragusa/Filthy.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/gragusa/Filthy.jl/blob/master/docs/src/tutorials/dynamic_factor.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Dynamic-Factor-Models"><a class="docs-heading-anchor" href="#Dynamic-Factor-Models">Dynamic Factor Models</a><a id="Dynamic-Factor-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Dynamic-Factor-Models" title="Permalink"></a></h1><p>This tutorial covers dynamic factor models (DFMs) in Filthy.jl. DFMs are widely used in macroeconomics, finance, and other fields to extract common latent factors from a large panel of observed time series.</p><p>Filthy.jl provides two approaches:</p><ol><li><strong>DSL approach</strong> (<code>dynamic_factor</code> template): Flexible specification with MLE estimation</li><li><strong>High-level API</strong> (<code>DynamicFactorModel</code>): Specialized type with EM estimation for large panels</li></ol><h2 id="Model-Overview"><a class="docs-heading-anchor" href="#Model-Overview">Model Overview</a><a id="Model-Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Overview" title="Permalink"></a></h2><h3 id="Mathematical-Formulation"><a class="docs-heading-anchor" href="#Mathematical-Formulation">Mathematical Formulation</a><a id="Mathematical-Formulation-1"></a><a class="docs-heading-anchor-permalink" href="#Mathematical-Formulation" title="Permalink"></a></h3><p>The general dynamic factor model is:</p><p class="math-container">\[\begin{aligned}
+X_t &amp;= \Lambda(L) f_t + e_t \\
+f_t &amp;= \Psi(L) f_{t-1} + \eta_t, \quad \eta_t \sim N(0, \Sigma_\eta) \\
+e_{it} &amp;= \delta(L) e_{i,t-1} + v_{it}, \quad v_{it} \sim N(0, \sigma^2_i)
+\end{aligned}\]</p><p>Where:</p><ul><li><span>$X_t$</span> is the <span>$N \times 1$</span> vector of observables</li><li><span>$f_t$</span> is the <span>$k \times 1$</span> vector of latent factors</li><li><span>$\Lambda(L) = \Lambda_0 + \Lambda_1 L + \cdots$</span> are dynamic factor loadings</li><li><span>$\Psi(L)$</span> is the factor VAR polynomial</li><li><span>$\delta(L)$</span> captures AR dynamics in idiosyncratic errors</li></ul><h2 id="High-Level-API:-DynamicFactorModel"><a class="docs-heading-anchor" href="#High-Level-API:-DynamicFactorModel">High-Level API: DynamicFactorModel</a><a id="High-Level-API:-DynamicFactorModel-1"></a><a class="docs-heading-anchor-permalink" href="#High-Level-API:-DynamicFactorModel" title="Permalink"></a></h2><p>For large-scale applications, use the <code>DynamicFactorModel</code> type with EM estimation:</p><pre><code class="language-julia hljs">using Filthy
+include(&quot;src/inplace.jl&quot;)
+
+# Create model: 100 observables, 6 factors, 200 time periods
+model = DynamicFactorModel(
+    100,              # N: number of observables
+    6,                # k: number of factors
+    200;              # n: number of time periods
+    factor_lags = 3,  # VAR(3) factor dynamics
+    error_lags = 1    # AR(1) idiosyncratic errors
+)
+
+# Fit with EM algorithm
+fit!(EM(), model, y; maxiter=500, tol=1e-6, verbose=true)
+
+# Check convergence
+println(&quot;Converged: &quot;, isconverged(model))
+println(&quot;Log-likelihood: &quot;, loglikelihood(model))
+
+# Access results
+f = factors(model)              # k × n smoothed factors
+Λ = loadings(model)             # Factor loadings [Λ₀, Λ₁, ...]
+Φ = var_coefficients(model)     # VAR coefficients [Φ₁, ..., Φ_q]
+δ = ar_coefficients(model)      # AR error coefficients
+Σ_η = innovation_cov(model)     # Factor innovation covariance
+σ²_v = idiosyncratic_variances(model)  # Idiosyncratic variances</code></pre><h3 id="Model-Configurations"><a class="docs-heading-anchor" href="#Model-Configurations">Model Configurations</a><a id="Model-Configurations-1"></a><a class="docs-heading-anchor-permalink" href="#Model-Configurations" title="Permalink"></a></h3><table><tr><th style="text-align: right">Configuration</th><th style="text-align: right">loading_lags</th><th style="text-align: right">factor_lags</th><th style="text-align: right">error_lags</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right">Simple DFM</td><td style="text-align: right">0</td><td style="text-align: right">q</td><td style="text-align: right">0</td><td style="text-align: right">Static loadings, VAR(q) factors</td></tr><tr><td style="text-align: right">AR errors</td><td style="text-align: right">0</td><td style="text-align: right">q</td><td style="text-align: right">r</td><td style="text-align: right">Static loadings, AR(r) errors</td></tr><tr><td style="text-align: right">Dynamic loadings</td><td style="text-align: right">p</td><td style="text-align: right">q</td><td style="text-align: right">0</td><td style="text-align: right">Dynamic loadings with p lags</td></tr><tr><td style="text-align: right">Full DFM</td><td style="text-align: right">p</td><td style="text-align: right">q</td><td style="text-align: right">r</td><td style="text-align: right">Dynamic loadings + AR errors</td></tr></table><h3 id="State-Dimension"><a class="docs-heading-anchor" href="#State-Dimension">State Dimension</a><a id="State-Dimension-1"></a><a class="docs-heading-anchor-permalink" href="#State-Dimension" title="Permalink"></a></h3><p>The state vector stacks current and lagged factors (and errors if r &gt; 0):</p><p class="math-container">\[\alpha_t = [f_t&#39;, f_{t-1}&#39;, \ldots, f_{t-s+1}&#39;, e_t&#39;, e_{t-1}&#39;, \ldots, e_{t-r+1}&#39;]&#39;\]</p><p>where <span>$s = \max(q, p+1)$</span>. State dimension: <span>$m = k \times s + N \times r$</span>.</p><h2 id="DSL-Approach:-dynamic_factor-Template"><a class="docs-heading-anchor" href="#DSL-Approach:-dynamic_factor-Template">DSL Approach: dynamic_factor Template</a><a id="DSL-Approach:-dynamic_factor-Template-1"></a><a class="docs-heading-anchor-permalink" href="#DSL-Approach:-dynamic_factor-Template" title="Permalink"></a></h2><p>For smaller models or when you need MLE with AD:</p><pre><code class="language-julia hljs">using Filthy
+
+# 8 observables, 2 factors, AR(1) dynamics
+spec = dynamic_factor(8, 2)
+
+println(&quot;Parameters: &quot;, param_names(spec))
+println(&quot;Number of states: &quot;, spec.n_states)
+
+# Estimate via MLE
+result = optimize_ssm(spec, y)</code></pre><h3 id="Identification"><a class="docs-heading-anchor" href="#Identification">Identification</a><a id="Identification-1"></a><a class="docs-heading-anchor-permalink" href="#Identification" title="Permalink"></a></h3><p>For identification, the first <span>$k$</span> rows of <span>$\Lambda_0$</span> form a lower triangular structure:</p><ul><li><span>$\lambda_{i,i} = 1$</span> for <span>$i \leq k$</span></li><li><span>$\lambda_{i,j} = 0$</span> for <span>$i &lt; j \leq k$</span></li></ul><p class="math-container">\[\Lambda_0 = \begin{bmatrix}
+1 &amp; 0 \\
+\lambda_{2,1} &amp; 1 \\
+\lambda_{3,1} &amp; \lambda_{3,2} \\
+\vdots &amp; \vdots
+\end{bmatrix}\]</p><h3 id="Multiple-Lags"><a class="docs-heading-anchor" href="#Multiple-Lags">Multiple Lags</a><a id="Multiple-Lags-1"></a><a class="docs-heading-anchor-permalink" href="#Multiple-Lags" title="Permalink"></a></h3><pre><code class="language-julia hljs"># 5 observables, 2 factors, VAR(3) factor dynamics, 1 lag in loadings
+spec = dynamic_factor(5, 2; factor_lags=3, obs_lags=1)
+
+println(&quot;States: &quot;, spec.n_states)  # 6 = 2 factors × max(3, 1+1)</code></pre><h2 id="Complete-Example:-Macroeconomic-Factor-Model"><a class="docs-heading-anchor" href="#Complete-Example:-Macroeconomic-Factor-Model">Complete Example: Macroeconomic Factor Model</a><a id="Complete-Example:-Macroeconomic-Factor-Model-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example:-Macroeconomic-Factor-Model" title="Permalink"></a></h2><h3 id="Using-DynamicFactorModel-(Recommended-for-Large-Panels)"><a class="docs-heading-anchor" href="#Using-DynamicFactorModel-(Recommended-for-Large-Panels)">Using DynamicFactorModel (Recommended for Large Panels)</a><a id="Using-DynamicFactorModel-(Recommended-for-Large-Panels)-1"></a><a class="docs-heading-anchor-permalink" href="#Using-DynamicFactorModel-(Recommended-for-Large-Panels)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Filthy
+using LinearAlgebra
+using Statistics
+include(&quot;src/inplace.jl&quot;)
+
+# Load FRED-QD or similar macro data
+# y should be N × n (observables × time)
+
+N, n = 100, 200  # 100 series, 200 quarters
+k = 6            # 6 factors
+
+# Create and fit model
+model = DynamicFactorModel(N, k, n;
+    factor_lags = 3,   # VAR(3)
+    error_lags = 1     # AR(1) errors
+)
+
+fit!(EM(), model, y; maxiter=200, verbose=true)
+
+# Variance decomposition
+f = factors(model)
+Λ = loadings(model)[1]  # Contemporaneous loadings
+factor_cov = (f * f&#39;) / n
+
+communalities = zeros(N)
+for i in 1:N
+    λ_i = Λ[i, :]
+    communalities[i] = λ_i&#39; * factor_cov * λ_i
+end
+
+idio_var = idiosyncratic_variances(model)
+var_explained = communalities ./ (communalities .+ idio_var)
+
+println(&quot;Average variance explained: &quot;, mean(var_explained) * 100, &quot;%&quot;)</code></pre><h3 id="Using-DSL-(For-Smaller-Models-with-MLE)"><a class="docs-heading-anchor" href="#Using-DSL-(For-Smaller-Models-with-MLE)">Using DSL (For Smaller Models with MLE)</a><a id="Using-DSL-(For-Smaller-Models-with-MLE)-1"></a><a class="docs-heading-anchor-permalink" href="#Using-DSL-(For-Smaller-Models-with-MLE)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Filthy
+using Random
+using LinearAlgebra
+
+Random.seed!(42)
+
+# Simulate data from a 2-factor model
+n_obs, T = 8, 200
+
+true_loadings = [1.0 0.0; 0.5 1.0; 0.8 0.3; 0.3 0.7;
+                 0.6 0.4; 0.4 0.6; 0.7 0.2; 0.2 0.8]
+true_φ = [0.9, 0.7]
+true_σ_factor = [0.5, 0.4]
+true_σ_obs = fill(0.3, n_obs)
+
+# Simulate factors
+f = zeros(2, T)
+for t in 2:T
+    f[:, t] = Diagonal(true_φ) * f[:, t-1] + Diagonal(true_σ_factor) * randn(2)
+end
+
+# Generate observations
+y = zeros(n_obs, T)
+for t in 1:T
+    y[:, t] = true_loadings * f[:, t] + Diagonal(true_σ_obs) * randn(n_obs)
+end
+
+# Specify and estimate model
+spec = dynamic_factor(n_obs, 2;
+    loadings_init = 0.5,
+    ar_init = 0.7,
+    σ_obs_init = 0.5,
+    σ_factor_init = 0.5
+)
+
+result = optimize_ssm(spec, y)
+
+println(&quot;Estimated AR coefficients:&quot;)
+println(&quot;  φ_1_1 = &quot;, round(result.θ.φ_1_1, digits=3), &quot; (true: 0.9)&quot;)
+println(&quot;  φ_2_1 = &quot;, round(result.θ.φ_2_1, digits=3), &quot; (true: 0.7)&quot;)
+
+# Extract smoothed factors
+ss = build_linear_state_space(spec, result.θ, y)
+filt = kalman_filter_full(ss.p, y, ss.a1, ss.P1)
+smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+
+println(&quot;\nCorrelation with true factors:&quot;)
+println(&quot;  Factor 1: &quot;, round(cor(smooth.alpha[1, :], f[1, :]), digits=3))
+println(&quot;  Factor 2: &quot;, round(cor(smooth.alpha[2, :], f[2, :]), digits=3))</code></pre><h2 id="Forecasting"><a class="docs-heading-anchor" href="#Forecasting">Forecasting</a><a id="Forecasting-1"></a><a class="docs-heading-anchor-permalink" href="#Forecasting" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Forecast h steps ahead
+fc = forecast(model, 12)  # 12-step forecast
+
+# Access forecast components
+fc.obs_mean      # N × h forecasted observations
+fc.obs_cov       # N × N × h forecast covariances
+fc.factor_mean   # k × h forecasted factors
+fc.factor_cov    # k × k × h factor forecast covariances</code></pre><h2 id="Tips-and-Best-Practices"><a class="docs-heading-anchor" href="#Tips-and-Best-Practices">Tips and Best Practices</a><a id="Tips-and-Best-Practices-1"></a><a class="docs-heading-anchor-permalink" href="#Tips-and-Best-Practices" title="Permalink"></a></h2><ol><li><p><strong>Number of factors</strong>: Start with fewer factors. Use information criteria or scree plots to select k.</p></li><li><p><strong>Initialization</strong>: The EM algorithm uses PCA for initialization. For MLE, good initial values help.</p></li><li><p><strong>Large panels</strong>: Use <code>DynamicFactorModel</code> with EM for N &gt; 20. The in-place implementation is memory-efficient.</p></li><li><p><strong>Missing data</strong>: Both approaches handle missing values (NaN) automatically.</p></li><li><p><strong>AR errors</strong>: Include AR errors (<code>error_lags &gt; 0</code>) when idiosyncratic components are persistent.</p></li><li><p><strong>Dynamic loadings</strong>: Use <code>loading_lags &gt; 0</code> when factors have delayed effects on observables.</p></li><li><p><strong>Convergence</strong>: Check <code>isconverged(model)</code> and examine the log-likelihood history.</p></li></ol><h2 id="Function-Reference"><a class="docs-heading-anchor" href="#Function-Reference">Function Reference</a><a id="Function-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#Function-Reference" title="Permalink"></a></h2><h3 id="DynamicFactorModel-Constructor"><a class="docs-heading-anchor" href="#DynamicFactorModel-Constructor">DynamicFactorModel Constructor</a><a id="DynamicFactorModel-Constructor-1"></a><a class="docs-heading-anchor-permalink" href="#DynamicFactorModel-Constructor" title="Permalink"></a></h3><pre><code class="language-julia hljs">DynamicFactorModel(n_obs, n_factors, n_times;
+    loading_lags = 0,   # Lags in λ(L), 0 = static loadings
+    factor_lags = 1,    # Lags in factor VAR
+    error_lags = 0,     # Lags in AR errors, 0 = white noise
+    T = Float64         # Element type
+)</code></pre><h3 id="dynamic_factor-Template"><a class="docs-heading-anchor" href="#dynamic_factor-Template">dynamic_factor Template</a><a id="dynamic_factor-Template-1"></a><a class="docs-heading-anchor-permalink" href="#dynamic_factor-Template" title="Permalink"></a></h3><pre><code class="language-julia hljs">dynamic_factor(n_obs, n_factors;
+    factor_lags = 1,           # AR lags in factor dynamics
+    obs_lags = 0,              # Lagged factor loadings
+    correlated_errors = false, # Full H matrix if true
+    loadings_init = 0.5,       # Initial loading values
+    ar_init = 0.5,             # Initial AR coefficient
+    σ_obs_init = 1.0,          # Initial obs error std dev
+    σ_factor_init = 1.0,       # Initial factor std dev
+    diffuse = true             # Diffuse initialization
+)</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li>Learn about <strong><a href="custom_models.html">Custom Models</a></strong> for more flexible specifications</li><li>Check the <strong><a href="../api/core.html">Core Functions</a></strong> API reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="custom_models.html">« Custom Models</a><a class="docs-footer-nextpage" href="estimation_methods.html">Estimation Methods »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 25 December 2025 11:12">Thursday 25 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

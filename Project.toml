@@ -1,0 +1,38 @@
+name = "Siphon"
+uuid = "4bbcb006-69a8-46c4-bd0b-6b150ee03dfc"
+version = "0.1.0"
+author = "Giuseppe Ragusa <giuseppe.ragusa@gmail.com>"
+
+[deps]
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
+LogDensityProblemsAD = "996a588d-648d-4e1f-a8f0-a84b347e47b1"
+Optimization = "7f7a1694-90dd-40f0-9382-eb1efda571ba"
+OptimizationOptimJL = "36348300-93cb-4f02-beb5-3c3902f8871e"
+RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
+RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
+
+[compat]
+LogDensityProblems = "2.2.0"
+LogDensityProblemsAD = "1.13.1"
+Optimization = "5.2.0"
+OptimizationOptimJL = "0.4"
+RCall = "0.14.10"
+RecipesBase = "1.3"
+TransformVariables = "0.8.18"
+julia = "1.10"
+
+[extras]
+DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TestItems = "1c621080-faea-4a02-84b6-bbd5e436b8fe"
+TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
+
+[targets]
+test = ["Test", "DelimitedFiles", "Random", "RecipesBase", "TestItems", "TestItemRunner"]

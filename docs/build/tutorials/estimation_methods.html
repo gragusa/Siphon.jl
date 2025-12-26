@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Estimation Methods · Filthy.jl</title><meta name="title" content="Estimation Methods · Filthy.jl"/><meta property="og:title" content="Estimation Methods · Filthy.jl"/><meta property="twitter:title" content="Estimation Methods · Filthy.jl"/><meta name="description" content="Documentation for Filthy.jl."/><meta property="og:description" content="Documentation for Filthy.jl."/><meta property="twitter:description" content="Documentation for Filthy.jl."/><meta property="og:url" content="https://gragusa.github.io/Filthy.jl/stable/tutorials/estimation_methods.html"/><meta property="twitter:url" content="https://gragusa.github.io/Filthy.jl/stable/tutorials/estimation_methods.html"/><link rel="canonical" href="https://gragusa.github.io/Filthy.jl/stable/tutorials/estimation_methods.html"/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../index.html">Filthy.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../index.html">Home</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="getting_started.html">Getting Started</a></li><li><a class="tocitem" href="custom_models.html">Custom Models</a></li><li><a class="tocitem" href="dynamic_factor.html">Dynamic Factor Models</a></li><li class="is-active"><a class="tocitem" href="estimation_methods.html">Estimation Methods</a><ul class="internal"><li><a class="tocitem" href="#The-DNS-Model"><span>The DNS Model</span></a></li><li><a class="tocitem" href="#Simulating-Test-Data"><span>Simulating Test Data</span></a></li><li><a class="tocitem" href="#Approach-1:-DSL-with-optimize_ssm-(MLE)"><span>Approach 1: DSL with optimize_ssm (MLE)</span></a></li><li><a class="tocitem" href="#Approach-2:-DSL-with-profile*em*ssm-(Profile-EM)"><span>Approach 2: DSL with profile<em>em</em>ssm (Profile EM)</span></a></li><li><a class="tocitem" href="#Approach-3:-StateSpaceModel-with-fit!"><span>Approach 3: StateSpaceModel with fit!</span></a></li><li><a class="tocitem" href="#Comparison:-When-to-Use-Each-Approach"><span>Comparison: When to Use Each Approach</span></a></li><li><a class="tocitem" href="#Complete-Example:-DNS-with-Full-Pipeline"><span>Complete Example: DNS with Full Pipeline</span></a></li><li><a class="tocitem" href="#Summary"><span>Summary</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li></ul></li><li><a class="tocitem" href="transformations.html">Parameter Transformations</a></li><li><a class="tocitem" href="visualization.html">Visualization</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../api/core.html">Core Functions</a></li><li><a class="tocitem" href="../api/dsl.html">DSL &amp; Templates</a></li><li><a class="tocitem" href="../api/matrix_helpers.html">Matrix Helpers</a></li><li><a class="tocitem" href="../api/optimization.html">Optimization &amp; Bayesian</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href="estimation_methods.html">Estimation Methods</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href="estimation_methods.html">Estimation Methods</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/gragusa/Filthy.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/gragusa/Filthy.jl/blob/master/docs/src/tutorials/estimation_methods.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Estimation-Methods:-DSL-vs-Convenience-Functions"><a class="docs-heading-anchor" href="#Estimation-Methods:-DSL-vs-Convenience-Functions">Estimation Methods: DSL vs Convenience Functions</a><a id="Estimation-Methods:-DSL-vs-Convenience-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Estimation-Methods:-DSL-vs-Convenience-Functions" title="Permalink"></a></h1><p>This tutorial demonstrates how to specify and estimate the same model using Filthy.jl&#39;s two main approaches:</p><ol><li><strong>DSL approach</strong>: Use <code>SSMSpec</code> with <code>optimize_ssm()</code> or <code>em_ssm()</code> for maximum flexibility</li><li><strong>High-level API</strong>: Use specialized types like <code>StateSpaceModel</code> or <code>DynamicFactorModel</code> with <code>fit!()</code> for convenience</li></ol><p>We&#39;ll use the <strong>Dynamic Nelson-Siegel (DNS)</strong> yield curve model as our running example.</p><h2 id="The-DNS-Model"><a class="docs-heading-anchor" href="#The-DNS-Model">The DNS Model</a><a id="The-DNS-Model-1"></a><a class="docs-heading-anchor-permalink" href="#The-DNS-Model" title="Permalink"></a></h2><p>The Dynamic Nelson-Siegel model decomposes the yield curve into three latent factors:</p><p class="math-container">\[\begin{aligned}
+y_t &amp;= Z(\lambda) f_t + \varepsilon_t, \quad \varepsilon_t \sim N(0, H) \\
+f_{t+1} &amp;= T f_t + \eta_t, \quad \eta_t \sim N(0, Q)
+\end{aligned}\]</p><p>where:</p><ul><li><span>$y_t$</span> is the <span>$p \times 1$</span> vector of yields at different maturities</li><li><span>$f_t = [L_t, S_t, C_t]&#39;$</span> are Level, Slope, and Curvature factors</li><li><span>$Z(\lambda)$</span> is the <span>$p \times 3$</span> loading matrix with decay parameter <span>$\lambda$</span></li></ul><p>The factor loadings are:</p><p class="math-container">\[Z(\lambda)_i = \begin{bmatrix} 1 &amp; \frac{1-e^{-\lambda\tau_i}}{\lambda\tau_i} &amp; \frac{1-e^{-\lambda\tau_i}}{\lambda\tau_i} - e^{-\lambda\tau_i} \end{bmatrix}\]</p><h2 id="Simulating-Test-Data"><a class="docs-heading-anchor" href="#Simulating-Test-Data">Simulating Test Data</a><a id="Simulating-Test-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Simulating-Test-Data" title="Permalink"></a></h2><p>First, let&#39;s simulate data from a known DNS model:</p><pre><code class="language-julia hljs">using Filthy
+using LinearAlgebra
+using Random
+using Statistics
+
+Random.seed!(42)
+
+# Maturities in months
+maturities = [3, 6, 12, 24, 36, 60, 84, 120]
+n_maturities = length(maturities)
+n_obs = 200
+
+# True parameters
+λ_true = 0.0609
+T_true = Diagonal([0.99, 0.95, 0.90])
+Q_true = Diagonal([0.01, 0.02, 0.03])
+H_true = 0.0001 * I(n_maturities)
+
+# Build DNS loadings
+function dns_loadings(λ, maturities)
+    p = length(maturities)
+    Z = ones(p, 3)
+    for (i, τ) in enumerate(maturities)
+        x = λ * τ
+        Z[i, 2] = x &lt; 1e-10 ? 1.0 - x/2 : (1 - exp(-x)) / x
+        Z[i, 3] = Z[i, 2] - exp(-x)
+    end
+    return Z
+end
+
+Z_true = dns_loadings(λ_true, maturities)
+
+# Simulate factors and yields
+L_Q = cholesky(Symmetric(Matrix(Q_true))).L
+L_H = cholesky(Symmetric(Matrix(H_true))).L
+
+factors = zeros(3, n_obs)
+yields = zeros(n_maturities, n_obs)
+
+for t in 1:n_obs
+    if t &gt; 1
+        factors[:, t] = T_true * factors[:, t-1] + L_Q * randn(3)
+    end
+    yields[:, t] = Z_true * factors[:, t] + L_H * randn(n_maturities)
+end
+
+println(&quot;Simulated $n_obs observations at $(n_maturities) maturities&quot;)</code></pre><h2 id="Approach-1:-DSL-with-optimize_ssm-(MLE)"><a class="docs-heading-anchor" href="#Approach-1:-DSL-with-optimize_ssm-(MLE)">Approach 1: DSL with optimize_ssm (MLE)</a><a id="Approach-1:-DSL-with-optimize_ssm-(MLE)-1"></a><a class="docs-heading-anchor-permalink" href="#Approach-1:-DSL-with-optimize_ssm-(MLE)" title="Permalink"></a></h2><p>The DSL approach uses <code>dns_model()</code> to create a specification and <code>optimize_ssm()</code> for MLE:</p><pre><code class="language-julia hljs"># Create DNS specification with diagonal dynamics
+spec = dns_model(maturities;
+    T_structure = :diagonal,  # Diagonal AR(1) for each factor
+    H_structure = :diagonal,  # Diagonal observation variances
+    Q_structure = :diagonal,  # Diagonal state variances
+    λ_init = 0.06,
+    T_init = 0.9,
+    Q_init = 0.01,
+    H_init = 0.001
+)
+
+println(&quot;Parameters: &quot;, param_names(spec))
+# [:λ, :T_L, :T_S, :T_C, :Q_L, :Q_S, :Q_C, :H_1, ..., :H_8]
+
+# Estimate via MLE (gradient-based optimization)
+result_mle = optimize_ssm(spec, yields; maxiters=500)
+
+println(&quot;Estimated λ: &quot;, round(result_mle.θ.λ, digits=4), &quot; (true: $λ_true)&quot;)
+println(&quot;Estimated T diagonal: &quot;, [result_mle.θ.T_L, result_mle.θ.T_S, result_mle.θ.T_C])
+println(&quot;Log-likelihood: &quot;, round(result_mle.loglik, digits=2))</code></pre><h3 id="Extracting-Smoothed-Factors"><a class="docs-heading-anchor" href="#Extracting-Smoothed-Factors">Extracting Smoothed Factors</a><a id="Extracting-Smoothed-Factors-1"></a><a class="docs-heading-anchor-permalink" href="#Extracting-Smoothed-Factors" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Build state-space with estimated parameters
+ss = build_linear_state_space(spec, result_mle.θ, yields)
+
+# Run filter and smoother
+filt = kalman_filter_full(ss.p, yields, ss.a1, ss.P1)
+smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+
+# Compare with true factors
+for (i, name) in enumerate([&quot;Level&quot;, &quot;Slope&quot;, &quot;Curvature&quot;])
+    corr = cor(factors[i, :], smooth.alpha[i, :])
+    println(&quot;$name correlation: &quot;, round(corr, digits=4))
+end</code></pre><h2 id="Approach-2:-DSL-with-profile*em*ssm-(Profile-EM)"><a class="docs-heading-anchor" href="#Approach-2:-DSL-with-profile*em*ssm-(Profile-EM)">Approach 2: DSL with profile<em>em</em>ssm (Profile EM)</a><a id="Approach-2:-DSL-with-profile*em*ssm-(Profile-EM)-1"></a><a class="docs-heading-anchor-permalink" href="#Approach-2:-DSL-with-profile*em*ssm-(Profile-EM)" title="Permalink"></a></h2><p>For DNS models, the decay parameter <span>$\lambda$</span> appears nonlinearly in the loadings, making pure EM difficult. The <strong>profile EM</strong> approach:</p><ol><li>Grids over <span>$\lambda$</span> values</li><li>For each <span>$\lambda$</span>, runs EM to estimate T, Q, H</li><li>Returns the <span>$\lambda$</span> with highest log-likelihood</li></ol><pre><code class="language-julia hljs"># Create spec with full covariance structures (for EM)
+spec_full = dns_model(maturities;
+    T_structure = :full,      # Full 3×3 VAR matrix
+    H_structure = :diagonal,
+    Q_structure = :full,      # Full 3×3 covariance
+    λ_init = 0.06
+)
+
+# Profile EM estimation
+result_em = profile_em_ssm(spec_full, yields;
+    λ_grid = 0.02:0.01:0.12,  # Grid of λ values to search
+    maxiter = 200,
+    verbose = true
+)
+
+println(&quot;\nProfile EM Results:&quot;)
+println(&quot;Optimal λ: &quot;, round(result_em.λ_optimal, digits=4), &quot; (true: $λ_true)&quot;)
+println(&quot;Log-likelihood: &quot;, round(result_em.loglik, digits=2))
+
+# Access estimated matrices
+T_est = result_em.em_result.T
+Q_est = result_em.em_result.Q
+H_est = result_em.em_result.H
+
+println(&quot;\nEstimated T (factor dynamics):&quot;)
+display(round.(T_est, digits=3))
+
+println(&quot;\nEstimated Q diagonal: &quot;, round.(diag(Q_est), digits=4))
+println(&quot;True Q diagonal: &quot;, diag(Q_true))</code></pre><h2 id="Approach-3:-StateSpaceModel-with-fit!"><a class="docs-heading-anchor" href="#Approach-3:-StateSpaceModel-with-fit!">Approach 3: StateSpaceModel with fit!</a><a id="Approach-3:-StateSpaceModel-with-fit!-1"></a><a class="docs-heading-anchor-permalink" href="#Approach-3:-StateSpaceModel-with-fit!" title="Permalink"></a></h2><p>The <code>StateSpaceModel</code> type wraps an <code>SSMSpec</code> and provides a convenient <code>fit!</code> interface:</p><pre><code class="language-julia hljs">include(&quot;src/inplace.jl&quot;)  # Load in-place implementations
+
+# Create StateSpaceModel from spec
+spec = dns_model(maturities;
+    T_structure = :diagonal,
+    H_structure = :diagonal,
+    Q_structure = :diagonal,
+    λ_init = 0.06
+)
+
+model = StateSpaceModel(spec, n_obs)
+
+# Fit with MLE
+fit!(MLE(), model, yields)
+
+println(&quot;MLE Results:&quot;)
+println(&quot;Converged: &quot;, isconverged(model))
+println(&quot;Log-likelihood: &quot;, round(loglikelihood(model), digits=2))
+println(&quot;Parameters: &quot;, parameters(model))
+
+# Access filtered states directly
+f = filtered_states(model)
+println(&quot;Filtered state at t=100: &quot;, f[:, 100])</code></pre><h3 id="StateSpaceModel-with-EM"><a class="docs-heading-anchor" href="#StateSpaceModel-with-EM">StateSpaceModel with EM</a><a id="StateSpaceModel-with-EM-1"></a><a class="docs-heading-anchor-permalink" href="#StateSpaceModel-with-EM" title="Permalink"></a></h3><p>For models where EM is applicable (currently <code>local_level</code>), you can use <code>fit!(EM(), ...)</code>:</p><pre><code class="language-julia hljs"># Local level model example (EM works well here)
+spec_ll = local_level(var_obs=:free, var_level=:free)
+model_ll = StateSpaceModel(spec_ll, n_obs)
+
+# Simulate local level data
+y_ll = cumsum(randn(n_obs)) + 0.5 * randn(n_obs)
+y_ll = reshape(y_ll, 1, n_obs)
+
+# Fit with EM
+fit!(EM(), model_ll, y_ll; maxiter=200, tol=1e-6, verbose=true)
+
+println(&quot;\nLocal Level EM Results:&quot;)
+println(&quot;Converged: &quot;, isconverged(model_ll))
+println(&quot;Iterations: &quot;, niterations(model_ll))
+println(&quot;Parameters: &quot;, parameters(model_ll))</code></pre><h2 id="Comparison:-When-to-Use-Each-Approach"><a class="docs-heading-anchor" href="#Comparison:-When-to-Use-Each-Approach">Comparison: When to Use Each Approach</a><a id="Comparison:-When-to-Use-Each-Approach-1"></a><a class="docs-heading-anchor-permalink" href="#Comparison:-When-to-Use-Each-Approach" title="Permalink"></a></h2><table><tr><th style="text-align: right">Approach</th><th style="text-align: right">Best For</th><th style="text-align: right">Advantages</th><th style="text-align: right">Limitations</th></tr><tr><td style="text-align: right"><code>optimize_ssm()</code></td><td style="text-align: right">General MLE</td><td style="text-align: right">AD-compatible, any model structure</td><td style="text-align: right">May converge slowly for many parameters</td></tr><tr><td style="text-align: right"><code>profile_em_ssm()</code></td><td style="text-align: right">DNS/Svensson models</td><td style="text-align: right">Robust for λ estimation, full covariances</td><td style="text-align: right">Requires grid search over λ</td></tr><tr><td style="text-align: right"><code>em_ssm()</code></td><td style="text-align: right">Diagonal variances</td><td style="text-align: right">Fast closed-form updates</td><td style="text-align: right">Limited to specific model structures</td></tr><tr><td style="text-align: right"><code>fit!(MLE(), ...)</code></td><td style="text-align: right">Convenience API</td><td style="text-align: right">Clean interface, auto memory management</td><td style="text-align: right">Same as optimize_ssm</td></tr><tr><td style="text-align: right"><code>fit!(EM(), ...)</code></td><td style="text-align: right">Large-scale EM</td><td style="text-align: right">Zero-allocation, efficient</td><td style="text-align: right">Limited model support</td></tr></table><h2 id="Complete-Example:-DNS-with-Full-Pipeline"><a class="docs-heading-anchor" href="#Complete-Example:-DNS-with-Full-Pipeline">Complete Example: DNS with Full Pipeline</a><a id="Complete-Example:-DNS-with-Full-Pipeline-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example:-DNS-with-Full-Pipeline" title="Permalink"></a></h2><p>Here&#39;s a complete workflow combining specification, estimation, and analysis:</p><pre><code class="language-julia hljs">using Filthy
+using LinearAlgebra
+using Statistics
+
+include(&quot;src/inplace.jl&quot;)
+
+# 1. SPECIFY MODEL
+maturities = [3, 6, 12, 24, 60, 120]
+spec = dns_model(maturities;
+    T_structure = :full,
+    Q_structure = :full,
+    H_structure = :diagonal,
+    λ_init = 0.06
+)
+
+println(&quot;Model: &quot;, spec.name)
+println(&quot;Parameters: &quot;, length(spec.params))
+println(&quot;States: &quot;, spec.n_states)
+
+# 2. LOAD/SIMULATE DATA
+# (Using simulated data from above)
+
+# 3. ESTIMATE
+result = profile_em_ssm(spec, yields;
+    λ_grid = 0.03:0.005:0.10,
+    maxiter = 300,
+    verbose = false
+)
+
+# 4. EXTRACT RESULTS
+λ_opt = result.λ_optimal
+T_opt = result.em_result.T
+Q_opt = result.em_result.Q
+H_opt = result.em_result.H
+
+println(&quot;\n=== Estimation Results ===&quot;)
+println(&quot;λ: &quot;, round(λ_opt, digits=4))
+println(&quot;T eigenvalues: &quot;, round.(eigvals(T_opt), digits=3))
+println(&quot;Q diagonal: &quot;, round.(diag(Q_opt), digits=5))
+
+# 5. SMOOTH FACTORS
+Z_opt = dns_loadings(λ_opt, maturities)
+p_final = KFParms(Z_opt, H_opt, T_opt, Matrix{Float64}(I, 3, 3), Q_opt)
+a1 = zeros(3)
+P1 = 1e4 * Matrix{Float64}(I, 3, 3)
+
+filt = kalman_filter_full(p_final, yields, a1, P1)
+smooth = kalman_smoother(Z_opt, T_opt, filt.at, filt.Pt, filt.vt, filt.Ft)
+
+# 6. ANALYZE FACTORS
+println(&quot;\n=== Factor Analysis ===&quot;)
+for (i, name) in enumerate([&quot;Level&quot;, &quot;Slope&quot;, &quot;Curvature&quot;])
+    f = smooth.alpha[i, :]
+    println(&quot;$name: mean=$(round(mean(f), digits=2)), std=$(round(std(f), digits=2))&quot;)
+end
+
+# 7. FORECAST (optional)
+# Build forecast from final state
+h = 12  # 12-period ahead
+f_last = smooth.alpha[:, end]
+f_forecast = zeros(3, h)
+for t in 1:h
+    f_forecast[:, t] = T_opt^t * f_last
+end
+
+y_forecast = Z_opt * f_forecast
+println(&quot;\n=== 12-Period Yield Forecast ===&quot;)
+println(&quot;Short rate (3m): &quot;, round.(y_forecast[1, :], digits=2))</code></pre><h2 id="Summary"><a class="docs-heading-anchor" href="#Summary">Summary</a><a id="Summary-1"></a><a class="docs-heading-anchor-permalink" href="#Summary" title="Permalink"></a></h2><p>Filthy.jl provides multiple estimation approaches to suit different needs:</p><ol><li><strong><code>optimize_ssm(spec, y)</code></strong>: General-purpose MLE using automatic differentiation</li><li><strong><code>em_ssm(spec, y)</code></strong>: EM algorithm for models with closed-form M-steps</li><li><strong><code>profile_em_ssm(spec, y)</code></strong>: Profile EM for DNS models with nonlinear λ</li><li><strong><code>fit!(MLE(), model, y)</code></strong>: Convenience wrapper with pre-allocated storage</li><li><strong><code>fit!(EM(), model, y)</code></strong>: High-performance EM for large-scale applications</li></ol><p>Choose based on your model structure, computational requirements, and preference for API style.</p><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li>See <strong><a href="custom_models.html">Custom Models</a></strong> for building your own specifications</li><li>See <strong><a href="dynamic_factor.html">Dynamic Factor Models</a></strong> for large-panel factor analysis</li><li>See <strong><a href="transformations.html">Parameter Transformations</a></strong> for understanding constraints</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="dynamic_factor.html">« Dynamic Factor Models</a><a class="docs-footer-nextpage" href="transformations.html">Parameter Transformations »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 25 December 2025 11:12">Thursday 25 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
