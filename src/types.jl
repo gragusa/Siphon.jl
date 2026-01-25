@@ -16,7 +16,7 @@ y_t = Z * α_t + ε_t,    ε_t ~ N(0, H)
 - `R`: State noise selection matrix (m × r)
 - `Q`: State noise covariance (r × r)
 """
-struct KFParms{Zt, Ht, Tt, Rt, Qt}
+struct KFParms{Zt,Ht,Tt,Rt,Qt}
     Z::Zt
     H::Ht
     T::Tt
@@ -31,8 +31,9 @@ numstates(T::Real) = 1
 nummeasur(Z::AbstractMatrix) = size(Z, 1)
 nummeasur(Z::Real) = 1
 
-Base.size(p::KFParms{P}) where P<:Real = (1, 1, 1)
-Base.size(p::KFParms{P}) where P<:AbstractArray = (size(p.Z, 1), size(p.T, 1), size(p.Q, 1))
+Base.size(p::KFParms{P}) where {P<:Real} = (1, 1, 1)
+Base.size(p::KFParms{P}) where {P<:AbstractArray} =
+    (size(p.Z, 1), size(p.T, 1), size(p.Q, 1))
 
 # ============================================
 # StaticArrays automatic conversion
@@ -93,7 +94,7 @@ function KFParms_static(Z, H, T, R, Q)
         to_static_if_small(H),
         to_static_if_small(T),
         to_static_if_small(R),
-        to_static_if_small(Q)
+        to_static_if_small(Q),
     )
 end
 
@@ -192,7 +193,7 @@ Use accessor methods for clear, consistent API:
 - `kalman_gains(r)` → `Kt`
 - `loglikelihood(r)` → `loglik`
 """
-struct KalmanFilterResult{T<:Real, P<:KFParms}
+struct KalmanFilterResult{T<:Real,P<:KFParms}
     # Model parameters
     p::P
     # Log-likelihood
@@ -370,12 +371,12 @@ mutable struct SmootherWorkspace{T<:Real}
     N::Array{T,3}          # m × m × n: smoothing recursion auxiliary
 end
 
-function SmootherWorkspace(m::Int, n::Int, ::Type{T}=Float64) where T
+function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
     SmootherWorkspace{T}(
         Matrix{T}(undef, m, n),
         Array{T}(undef, m, m, n),
         Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n)
+        Array{T}(undef, m, m, n),
     )
 end
 
@@ -434,7 +435,7 @@ After the diffuse period (t > d), standard Kalman filter recursion is used.
 - `kalman_loglik_diffuse`: Compute log-likelihood with diffuse initialization
 - `KalmanFilterResult`: Standard filter result without diffuse initialization
 """
-struct DiffuseFilterResult{T<:Real, P<:KFParms}
+struct DiffuseFilterResult{T<:Real,P<:KFParms}
     # Model parameters
     p::P
     # Log-likelihood (non-diffuse observations only)

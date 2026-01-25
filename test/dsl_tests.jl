@@ -13,7 +13,7 @@ using Statistics: cor
 
 @testset "SSMParameter" begin
     # Basic construction
-    p = SSMParameter(:σ; init=1.0, lower=0.0, upper=Inf)
+    p = SSMParameter(:σ; init = 1.0, lower = 0.0, upper = Inf)
     @test p.name == :σ
     @test p.init == 1.0
     @test p.lower == 0.0
@@ -26,7 +26,7 @@ using Statistics: cor
     @test p2.upper == Inf
 
     # Invalid init
-    @test_throws ArgumentError SSMParameter(:x; init=10.0, lower=0.0, upper=5.0)
+    @test_throws ArgumentError SSMParameter(:x; init = 10.0, lower = 0.0, upper = 5.0)
 end
 
 # ============================================
@@ -48,7 +48,7 @@ end
     @test all(upper .== Inf)
 
     # Fixed parameter
-    spec_fixed = local_level(var_obs=225.0)
+    spec_fixed = local_level(var_obs = 225.0)
     @test length(spec_fixed.params) == 1
     @test param_names(spec_fixed) == [:var_level]
 end
@@ -94,12 +94,12 @@ end
 @testset "custom_ssm basic" begin
     spec = custom_ssm(
         Z = [1.0],
-        H = [FreeParam(:var_obs, init=100.0, lower=0.0)],
+        H = [FreeParam(:var_obs, init = 100.0, lower = 0.0)],
         T = [1.0],
         R = [1.0],
-        Q = [FreeParam(:var_level, init=25.0, lower=0.0)],
+        Q = [FreeParam(:var_level, init = 25.0, lower = 0.0)],
         a1 = [0.0],
-        P1 = [1e7]
+        P1 = [1e7],
     )
 
     @test spec.n_states == 1
@@ -117,20 +117,22 @@ end
         R = [1.0;;],
         Q = [1.0;;],
         a1 = [0.0],      # wrong length
-        P1 = [1e7;;]
+        P1 = [1e7;;],
     )
 end
 
 @testset "custom_ssm with mixed matrices" begin
     spec = custom_ssm(
         Z = [1.0 0.0],
-        H = [FreeParam(:var_obs, init=1.0, lower=0.0);;],
+        H = [FreeParam(:var_obs, init = 1.0, lower = 0.0);;],
         T = [1.0 1.0; 0.0 1.0],
         R = Matrix(1.0I, 2, 2),
-        Q = [FreeParam(:var_level, init=0.01, lower=0.0) 0.0;
-             0.0 FreeParam(:var_slope, init=0.0001, lower=0.0)],
+        Q = [
+            FreeParam(:var_level, init = 0.01, lower = 0.0) 0.0;
+            0.0 FreeParam(:var_slope, init = 0.0001, lower = 0.0)
+        ],
         a1 = [0.0, 0.0],
-        P1 = 1e7 * Matrix(1.0I, 2, 2)
+        P1 = 1e7 * Matrix(1.0I, 2, 2),
     )
 
     @test spec.n_states == 2
@@ -142,22 +144,22 @@ end
 # ============================================
 
 @testset "diag_free" begin
-    mat = diag_free([:a, :b, :c], init=1.0)
+    mat = diag_free([:a, :b, :c], init = 1.0)
     @test size(mat) == (3, 3)
-    @test mat[1,1] isa FreeParam
-    @test mat[1,1].name == :a
-    @test mat[1,2] == 0.0
-    @test mat[2,2].name == :b
+    @test mat[1, 1] isa FreeParam
+    @test mat[1, 1].name == :a
+    @test mat[1, 2] == 0.0
+    @test mat[2, 2].name == :b
 
     # With prefix
-    mat2 = diag_free(3, :σ, init=2.0)
-    @test mat2[1,1].name == :σ_1
-    @test mat2[2,2].name == :σ_2
-    @test mat2[3,3].name == :σ_3
+    mat2 = diag_free(3, :σ, init = 2.0)
+    @test mat2[1, 1].name == :σ_1
+    @test mat2[2, 2].name == :σ_2
+    @test mat2[3, 3].name == :σ_3
 end
 
 @testset "scalar_free" begin
-    mat = scalar_free(:σ, init=5.0)
+    mat = scalar_free(:σ, init = 5.0)
     @test length(mat) == 1  # Returns a 1-element vector
     @test mat[1].name == :σ
     @test mat[1].init == 5.0
@@ -175,38 +177,38 @@ end
 @testset "selection_mat" begin
     R = selection_mat(3, 2)
     @test size(R) == (3, 2)
-    @test R[1,1] == 1.0
-    @test R[2,2] == 1.0
-    @test R[3,1] == 0.0
-    @test R[3,2] == 0.0
+    @test R[1, 1] == 1.0
+    @test R[2, 2] == 1.0
+    @test R[3, 1] == 0.0
+    @test R[3, 2] == 0.0
 end
 
 @testset "companion_mat" begin
     T = companion_mat(3, :φ)
     @test size(T) == (3, 3)
-    @test T[1,1] isa FreeParam
-    @test T[1,1].name == :φ_1
-    @test T[1,2] == 1.0
-    @test T[2,3] == 1.0
-    @test T[3,3] == 0.0
+    @test T[1, 1] isa FreeParam
+    @test T[1, 1].name == :φ_1
+    @test T[1, 2] == 1.0
+    @test T[2, 3] == 1.0
+    @test T[3, 3] == 0.0
 end
 
 @testset "lower_triangular_free" begin
     L = lower_triangular_free(3, :L)
-    @test L[1,1] isa FreeParam
-    @test L[2,1] isa FreeParam
-    @test L[3,1] isa FreeParam
-    @test L[1,2] == 0.0
-    @test L[1,3] == 0.0
-    @test L[2,2] isa FreeParam
+    @test L[1, 1] isa FreeParam
+    @test L[2, 1] isa FreeParam
+    @test L[3, 1] isa FreeParam
+    @test L[1, 2] == 0.0
+    @test L[1, 3] == 0.0
+    @test L[2, 2] isa FreeParam
 end
 
 @testset "symmetric_free" begin
     S = symmetric_free(2, :Σ)
-    @test S[1,2] === S[2,1]  # Same reference
-    @test S[1,1] isa FreeParam
-    @test S[1,1].name == :Σ_1_1
-    @test S[1,2].name == :Σ_2_1
+    @test S[1, 2] === S[2, 1]  # Same reference
+    @test S[1, 1] isa FreeParam
+    @test S[1, 1].name == :Σ_1_1
+    @test S[1, 2].name == :Σ_2_1
 end
 
 # ============================================
@@ -228,14 +230,16 @@ end
 
     spec = custom_ssm(
         Z = Z,
-        H = diag_free(3, :var_obs, init=0.01),
-        T = [FreeParam(:φ_L, init=0.9, lower=0.0, upper=0.9999) 0.0 0.0;
-             0.0 FreeParam(:φ_S, init=0.9, lower=0.0, upper=0.9999) 0.0;
-             0.0 0.0 FreeParam(:φ_C, init=0.9, lower=0.0, upper=0.9999)],
+        H = diag_free(3, :var_obs, init = 0.01),
+        T = [
+            FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
+            0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
+            0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)
+        ],
         R = identity_mat(3),
-        Q = diag_free([:var_L, :var_S, :var_C], init=0.01),
+        Q = diag_free([:var_L, :var_S, :var_C], init = 0.01),
         a1 = [0.0, 0.0, 0.0],
-        P1 = 1e6 * identity_mat(3)
+        P1 = 1e6 * identity_mat(3),
     )
 
     @test :λ in param_names(spec)
@@ -348,9 +352,9 @@ end
     # NormalPrior now takes NamedTuple arguments (variance parameters)
     prior = NormalPrior(
         (var_obs = 25.0, var_level = 25.0),
-        (var_obs = 100.0, var_level = 100.0)
+        (var_obs = 100.0, var_level = 100.0),
     )
-    ld = SSMLogDensity(spec, y; prior=prior)
+    ld = SSMLogDensity(spec, y; prior = prior)
 
     θ_u = transform_to_unconstrained(spec, initial_values(spec))
     ll_with_prior = logdensity(ld, θ_u)
@@ -408,7 +412,8 @@ end
     ld = SSMLogDensity(spec, y)
 
     @test LogDensityProblems.dimension(ld) == 2
-    @test LogDensityProblems.capabilities(typeof(ld)) == LogDensityProblems.LogDensityOrder{0}()
+    @test LogDensityProblems.capabilities(typeof(ld)) ==
+          LogDensityProblems.LogDensityOrder{0}()
 
     θ_u = transform_to_unconstrained(spec, initial_values(spec))
     ll = LogDensityProblems.logdensity(ld, θ_u)
@@ -549,7 +554,7 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Smoothed variance should be <= predicted variance (smoothing uses more info)
-    for t in 1:30
+    for t = 1:30
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
@@ -582,7 +587,7 @@ end
 
     # The last smoothed value should match D&K closely (t=100: 798.4)
     # since by then the initialization effect has dissipated
-    @test isapprox(alpha_smooth[1, 100], 798.4, rtol=0.01)
+    @test isapprox(alpha_smooth[1, 100], 798.4, rtol = 0.01)
 
     # Smoothed states should be positively correlated with observations
     @test cor(vec(alpha_smooth), vec(y)) > 0.7
@@ -591,7 +596,7 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Variance should be smaller than predicted variance (smoothing uses more info)
-    for t in 1:size(y, 2)
+    for t = 1:size(y, 2)
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
@@ -668,8 +673,14 @@ end
     result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
 
     # Run scalar smoother
-    alpha_smooth, V_smooth = kalman_smoother_scalar(Z, T, result_scalar.at, result_scalar.Pt,
-                                                     result_scalar.vt, result_scalar.Ft)
+    alpha_smooth, V_smooth = kalman_smoother_scalar(
+        Z,
+        T,
+        result_scalar.at,
+        result_scalar.Pt,
+        result_scalar.vt,
+        result_scalar.Ft,
+    )
 
     @test length(alpha_smooth) == 30
     @test length(V_smooth) == 30
@@ -691,8 +702,8 @@ end
     alpha_smooth_m = smooth_m.alpha
     V_smooth_m = smooth_m.V
 
-    @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol=1e-10)
-    @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol=1e-10)
+    @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol = 1e-10)
+    @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol = 1e-10)
 end
 
 # ============================================

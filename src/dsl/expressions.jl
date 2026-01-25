@@ -25,21 +25,20 @@ A matrix element that is a function of parameters and external data.
 elem = ParamExpr(:λ, (τ=τ,), (λ, τ) -> (1 - exp(-τ*λ)) / (τ*λ))
 ```
 """
-struct ParamExpr{F<:Function}
+struct ParamExpr
     params::Tuple{Vararg{Symbol}}
     data::NamedTuple
-    expr::F
+    expr::Function
 end
 
 # Convenience constructors
-ParamExpr(param::Symbol, data::NamedTuple, expr::F) where {F<:Function} =
-    ParamExpr{F}((param,), data, expr)
+ParamExpr(param::Symbol, data::NamedTuple, expr::Function) = ParamExpr((param,), data, expr)
 
-ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::F) where {F<:Function} =
-    ParamExpr(params, (val=data,), (args...) -> expr(args[1:length(params)]..., data))
+ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function) =
+    ParamExpr(params, (val = data,), (args...) -> expr(args[1:length(params)]..., data))
 
-ParamExpr(param::Symbol, data::Real, expr::F) where {F<:Function} =
-    ParamExpr((param,), (val=data,), (p, v) -> expr(p, data))
+ParamExpr(param::Symbol, data::Real, expr::Function) =
+    ParamExpr((param,), (val = data,), (p, v) -> expr(p, data))
 
 """
     MatrixExpr(params, data, builder)
@@ -75,21 +74,21 @@ Z = MatrixExpr(
 )
 ```
 """
-struct MatrixExpr{F<:Function}
+struct MatrixExpr
     params::Vector{SSMParameter{Float64}}
     data::NamedTuple
-    builder::F
+    builder::Function
     dims::Tuple{Int,Int}  # Expected output dimensions
 end
 
-function MatrixExpr(params, data::NamedTuple, builder::F; dims=nothing) where {F<:Function}
+function MatrixExpr(params, data::NamedTuple, builder::Function; dims = nothing)
     # If dims not provided, try to infer by calling builder with dummy values
     if dims === nothing
         θ_dummy = Dict(p.name => p.init for p in params)
         test_mat = builder(θ_dummy, data)
         dims = size(test_mat)
     end
-    MatrixExpr{F}(params, data, builder, dims)
+    MatrixExpr(params, data, builder, dims)
 end
 
 # ============================================
@@ -147,8 +146,12 @@ spec = custom_ssm(
 )
 ```
 """
-function build_dns_loadings(maturities::AbstractVector{<:Real};
-                            λ_init=0.0609, λ_lower=0.001, λ_upper=1.0)
+function build_dns_loadings(
+    maturities::AbstractVector{<:Real};
+    λ_init = 0.0609,
+    λ_lower = 0.001,
+    λ_upper = 1.0,
+)
     p = length(maturities)
 
     function builder(θ, data)
@@ -162,9 +165,9 @@ function build_dns_loadings(maturities::AbstractVector{<:Real};
         Z
     end
 
-    params = [SSMParameter(:λ; init=λ_init, lower=λ_lower, upper=λ_upper)]
+    params = [SSMParameter(:λ; init = λ_init, lower = λ_lower, upper = λ_upper)]
 
-    MatrixExpr(params, (maturities=collect(Float64, maturities),), builder; dims=(p, 3))
+    MatrixExpr(params, (maturities = collect(Float64, maturities),), builder; dims = (p, 3))
 end
 
 """
@@ -174,9 +177,15 @@ Create a MatrixExpr for Svensson (4-factor) yield curve loadings.
 
 Adds a second curvature factor with separate decay rate λ2.
 """
-function build_svensson_loadings(maturities::AbstractVector{<:Real};
-                                  λ1_init=0.0609, λ1_lower=0.001, λ1_upper=1.0,
-                                  λ2_init=0.03, λ2_lower=0.001, λ2_upper=1.0)
+function build_svensson_loadings(
+    maturities::AbstractVector{<:Real};
+    λ1_init = 0.0609,
+    λ1_lower = 0.001,
+    λ1_upper = 1.0,
+    λ2_init = 0.03,
+    λ2_lower = 0.001,
+    λ2_upper = 1.0,
+)
     p = length(maturities)
 
     function builder(θ, data)
@@ -192,9 +201,9 @@ function build_svensson_loadings(maturities::AbstractVector{<:Real};
     end
 
     params = [
-        SSMParameter(:λ1; init=λ1_init, lower=λ1_lower, upper=λ1_upper),
-        SSMParameter(:λ2; init=λ2_init, lower=λ2_lower, upper=λ2_upper)
+        SSMParameter(:λ1; init = λ1_init, lower = λ1_lower, upper = λ1_upper),
+        SSMParameter(:λ2; init = λ2_init, lower = λ2_lower, upper = λ2_upper),
     ]
 
-    MatrixExpr(params, (maturities=collect(Float64, maturities),), builder; dims=(p, 4))
+    MatrixExpr(params, (maturities = collect(Float64, maturities),), builder; dims = (p, 4))
 end

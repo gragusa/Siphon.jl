@@ -76,14 +76,18 @@ function print_recommendations(results)
     # Scalar case
     scalar_speedups = [s[3] for s in speedups if s[1] == 1]
     avg_scalar = sum(scalar_speedups) / length(scalar_speedups)
-    println("• Scalar models: In-place $(avg_scalar > 1.0 ? "faster" : "slower") by $(round(abs(avg_scalar - 1)*100, digits=1))%")
+    println(
+        "• Scalar models: In-place $(avg_scalar > 1.0 ? "faster" : "slower") by $(round(abs(avg_scalar - 1)*100, digits=1))%",
+    )
     println("  → Recommendation: Use pure implementation (simpler code)")
     println()
 
     # Small matrix
     small_speedups = [s[3] for s in speedups if s[1] == 3]
     avg_small = sum(small_speedups) / length(small_speedups)
-    println("• Small matrices (m=3): In-place $(avg_small > 1.0 ? "faster" : "slower") by $(round(abs(avg_small - 1)*100, digits=1))%")
+    println(
+        "• Small matrices (m=3): In-place $(avg_small > 1.0 ? "faster" : "slower") by $(round(abs(avg_small - 1)*100, digits=1))%",
+    )
     if avg_small < 1.2
         println("  → Recommendation: Use pure implementation")
     else
@@ -94,7 +98,9 @@ function print_recommendations(results)
     # Medium matrix
     medium_speedups = [s[3] for s in speedups if s[1] == 10]
     avg_medium = sum(medium_speedups) / length(medium_speedups)
-    println("• Medium matrices (m=10): In-place $(avg_medium > 1.0 ? "faster" : "slower") by $(round(abs(avg_medium - 1)*100, digits=1))%")
+    println(
+        "• Medium matrices (m=10): In-place $(avg_medium > 1.0 ? "faster" : "slower") by $(round(abs(avg_medium - 1)*100, digits=1))%",
+    )
     if avg_medium > 1.5
         println("  → Recommendation: Implement in-place variant for m >= 10")
     else
@@ -108,7 +114,7 @@ function print_recommendations(results)
     println("  • In-place: Consider for m >= 10 AND n >= 1000")
 end
 
-function main(args=ARGS)
+function main(args = ARGS)
     print_header()
 
     quick = "--quick" in args
@@ -127,7 +133,7 @@ function main(args=ARGS)
 
     results = nothing
     if run_full
-        results = benchmark_comparison_table(; lengths=lengths)
+        results = benchmark_comparison_table(; lengths = lengths)
     end
 
     if results !== nothing

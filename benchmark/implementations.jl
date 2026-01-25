@@ -38,7 +38,7 @@ end
 """
 Create a FilterCache with appropriate dimensions.
 """
-function FilterCache(m::Int, p::Int, r::Int, ::Type{T}=Float64) where T
+function FilterCache(m::Int, p::Int, r::Int, ::Type{T} = Float64) where {T}
     FilterCache{T}(
         Vector{T}(undef, p),      # v
         Vector{T}(undef, p),      # Za
@@ -66,10 +66,16 @@ end
 Pure functional Kalman filter step.
 Returns new state and covariance without modifying inputs.
 """
-function filterstep_pure(a::AbstractVector, P::AbstractMatrix,
-                         Z::AbstractMatrix, H::AbstractMatrix,
-                         T::AbstractMatrix, R::AbstractMatrix,
-                         Q::AbstractMatrix, y::AbstractVector)
+function filterstep_pure(
+    a::AbstractVector,
+    P::AbstractMatrix,
+    Z::AbstractMatrix,
+    H::AbstractMatrix,
+    T::AbstractMatrix,
+    R::AbstractMatrix,
+    Q::AbstractMatrix,
+    y::AbstractVector,
+)
     v = y - Z * a
     F = Z * P * Z' + H
     Finv = inv(F)
@@ -88,18 +94,25 @@ end
 In-place Kalman filter step using preallocated cache.
 Modifies a_out and P_out in place.
 """
-function filterstep_inplace!(a_out::AbstractVector, P_out::AbstractMatrix,
-                             a::AbstractVector, P::AbstractMatrix,
-                             Z::AbstractMatrix, H::AbstractMatrix,
-                             T::AbstractMatrix, R::AbstractMatrix,
-                             Q::AbstractMatrix, y::AbstractVector,
-                             cache::FilterCache)
+function filterstep_inplace!(
+    a_out::AbstractVector,
+    P_out::AbstractMatrix,
+    a::AbstractVector,
+    P::AbstractMatrix,
+    Z::AbstractMatrix,
+    H::AbstractMatrix,
+    T::AbstractMatrix,
+    R::AbstractMatrix,
+    Q::AbstractMatrix,
+    y::AbstractVector,
+    cache::FilterCache,
+)
     m = length(a)
     p = length(y)
 
     # v = y - Z*a
     mul!(cache.Za, Z, a)
-    @inbounds @simd for i in 1:p
+    @inbounds @simd for i = 1:p
         cache.v[i] = y[i] - cache.Za[i]
     end
 
@@ -130,7 +143,7 @@ function filterstep_inplace!(a_out::AbstractVector, P_out::AbstractMatrix,
     # a_out = T*a + K*v
     mul!(cache.Ta, T, a)
     mul!(cache.Kv, cache.K, cache.v)
-    @inbounds @simd for i in 1:m
+    @inbounds @simd for i = 1:m
         a_out[i] = cache.Ta[i] + cache.Kv[i]
     end
 
@@ -167,7 +180,7 @@ function filter_pure(y::AbstractMatrix, Z, H, T, R, Q, a1, P1)
 
     loglik = 0.0
 
-    for t in 1:n
+    for t = 1:n
         a, P, v, F, Finv = filterstep_pure(a_filt[t], P_filt[t], Z, H, T, R, Q, y[:, t])
         a_filt[t+1] = a
         P_filt[t+1] = P
@@ -207,9 +220,20 @@ function filter_inplace(y::AbstractMatrix, Z, H, T, R, Q, a1, P1)
 
     loglik = 0.0
 
-    for t in 1:n
-        v, F, Finv = filterstep_inplace!(a_next, P_next, a_curr, P_curr,
-                                          Z, H, T, R, Q, view(y, :, t), cache)
+    for t = 1:n
+        v, F, Finv = filterstep_inplace!(
+            a_next,
+            P_next,
+            a_curr,
+            P_curr,
+            Z,
+            H,
+            T,
+            R,
+            Q,
+            view(y, :, t),
+            cache,
+        )
         a_filt[:, t+1] = a_next
         P_filt[:, :, t+1] = P_next
 
@@ -230,10 +254,16 @@ end
 """
 Pure scalar filter step.
 """
-function filterstep_scalar_pure(a::Float64, P::Float64,
-                                Z::Float64, H::Float64,
-                                T::Float64, R::Float64,
-                                Q::Float64, y::Float64)
+function filterstep_scalar_pure(
+    a::Float64,
+    P::Float64,
+    Z::Float64,
+    H::Float64,
+    T::Float64,
+    R::Float64,
+    Q::Float64,
+    y::Float64,
+)
     v = y - Z * a
     F = Z * P * Z + H
     Finv = 1.0 / F
@@ -258,7 +288,7 @@ function filter_scalar_pure(y::AbstractVector, Z, H, T, R, Q, a1, P1)
 
     loglik = 0.0
 
-    for t in 1:n
+    for t = 1:n
         a, P, v, F, Finv = filterstep_scalar_pure(a_filt[t], P_filt[t], Z, H, T, R, Q, y[t])
         a_filt[t+1] = a
         P_filt[t+1] = P
@@ -285,7 +315,7 @@ function filter_scalar_inplace(y::AbstractVector, Z, H, T, R, Q, a1, P1)
 
     loglik = 0.0
 
-    @inbounds for t in 1:n
+    @inbounds for t = 1:n
         v = y[t] - Z * a_curr
         F = Z * P_curr * Z + H
         Finv = 1.0 / F

@@ -18,7 +18,7 @@ using RCall
 # Data Generation (in R for exact MARSS compatibility)
 # ============================================
 
-function generate_data_in_R(; n_obs=200, seed=54321)
+function generate_data_in_R(; n_obs = 200, seed = 54321)
     R"""
     set.seed($seed)
 
@@ -61,7 +61,7 @@ end
 # MARSS EM (R)
 # ============================================
 
-function run_marss_em(y_r; maxiter=100, tol=1e-8, silent=true)
+function run_marss_em(y_r; maxiter = 100, tol = 1e-8, silent = true)
     # Note: MARSS may not converge with very tight tolerances in few iterations
     # We set allow.degen=FALSE to avoid degenerate solutions
     R"""
@@ -119,7 +119,7 @@ end
 # Julia EM
 # ============================================
 
-function run_julia_em(y::Matrix{Float64}; maxiter=100, tol_ll=1e-8, tol_param=1e-6)
+function run_julia_em(y::Matrix{Float64}; maxiter = 100, tol_ll = 1e-8, tol_param = 1e-6)
     p, n = size(y)
     m, r = 2, 2
 
@@ -142,11 +142,24 @@ function run_julia_em(y::Matrix{Float64}; maxiter=100, tol_ll=1e-8, tol_param=1e
     H_free = trues(p)
     Q_free = trues(r)
 
-    result = _em_general_ssm(Z_init, T_init, R_mat, H_init, Q_init, y, a1, P1;
-                              Z_free=Z_free, T_free=T_free,
-                              H_free=H_free, Q_free=Q_free,
-                              maxiter=maxiter, tol_ll=tol_ll, tol_param=tol_param,
-                              verbose=false)
+    result = _em_general_ssm(
+        Z_init,
+        T_init,
+        R_mat,
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free,
+        Q_free = Q_free,
+        maxiter = maxiter,
+        tol_ll = tol_ll,
+        tol_param = tol_param,
+        verbose = false,
+    )
 
     return result
 end
@@ -155,17 +168,18 @@ end
 # Benchmark Functions
 # ============================================
 
-function benchmark_single(y_jl, y_r; maxiter=100, n_runs=5)
+function benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
     # Warmup
-    run_julia_em(y_jl; maxiter=10)
-    run_marss_em(y_r; maxiter=10, tol=0.1)
+    run_julia_em(y_jl; maxiter = 10)
+    run_marss_em(y_r; maxiter = 10, tol = 0.1)
 
     # Julia timing - use loose tolerance so it runs exactly maxiter iterations
     julia_times = Float64[]
     julia_result = nothing
-    for _ in 1:n_runs
+    for _ = 1:n_runs
         t = @elapsed begin
-            julia_result = run_julia_em(y_jl; maxiter=maxiter, tol_ll=1e-15, tol_param=1e-15)
+            julia_result =
+                run_julia_em(y_jl; maxiter = maxiter, tol_ll = 1e-15, tol_param = 1e-15)
         end
         push!(julia_times, t * 1000)  # Convert to ms
     end
@@ -173,28 +187,33 @@ function benchmark_single(y_jl, y_r; maxiter=100, n_runs=5)
     # MARSS timing - use loose tolerance so it runs exactly maxiter iterations
     marss_times = Float64[]
     marss_result = nothing
-    for _ in 1:n_runs
+    for _ = 1:n_runs
         t = @elapsed begin
-            marss_result = run_marss_em(y_r; maxiter=maxiter, tol=1e-15)
+            marss_result = run_marss_em(y_r; maxiter = maxiter, tol = 1e-15)
         end
         push!(marss_times, t * 1000)
     end
 
-    return (julia_times=julia_times, julia_result=julia_result,
-            marss_times=marss_times, marss_result=marss_result)
+    return (
+        julia_times = julia_times,
+        julia_result = julia_result,
+        marss_times = marss_times,
+        marss_result = marss_result,
+    )
 end
 
-function benchmark_convergence(y_jl, y_r; n_runs=3)
+function benchmark_convergence(y_jl, y_r; n_runs = 3)
     # Warmup
-    run_julia_em(y_jl; maxiter=10)
-    run_marss_em(y_r; maxiter=10, tol=0.1)
+    run_julia_em(y_jl; maxiter = 10)
+    run_marss_em(y_r; maxiter = 10, tol = 0.1)
 
     # Julia to convergence
     julia_times = Float64[]
     julia_result = nothing
-    for _ in 1:n_runs
+    for _ = 1:n_runs
         t = @elapsed begin
-            julia_result = run_julia_em(y_jl; maxiter=5000, tol_ll=1e-8, tol_param=1e-6)
+            julia_result =
+                run_julia_em(y_jl; maxiter = 5000, tol_ll = 1e-8, tol_param = 1e-6)
         end
         push!(julia_times, t * 1000)
     end
@@ -202,15 +221,19 @@ function benchmark_convergence(y_jl, y_r; n_runs=3)
     # MARSS to convergence
     marss_times = Float64[]
     marss_result = nothing
-    for _ in 1:n_runs
+    for _ = 1:n_runs
         t = @elapsed begin
-            marss_result = run_marss_em(y_r; maxiter=5000, tol=1e-8)
+            marss_result = run_marss_em(y_r; maxiter = 5000, tol = 1e-8)
         end
         push!(marss_times, t * 1000)
     end
 
-    return (julia_times=julia_times, julia_result=julia_result,
-            marss_times=marss_times, marss_result=marss_result)
+    return (
+        julia_times = julia_times,
+        julia_result = julia_result,
+        marss_times = marss_times,
+        marss_result = marss_result,
+    )
 end
 
 # ============================================
@@ -225,7 +248,7 @@ function main()
 
     # Generate data in R
     println("Generating data in R...")
-    data = generate_data_in_R(n_obs=200, seed=54321)
+    data = generate_data_in_R(n_obs = 200, seed = 54321)
 
     # Extract data for both Julia and R
     y_r = rcopy(R"$data$y")
@@ -243,16 +266,22 @@ function main()
     println("Benchmark: 100 EM iterations (fixed)")
     println("-" ^ 70)
 
-    results_100 = benchmark_single(y_jl, y_r; maxiter=100, n_runs=5)
+    results_100 = benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
 
     julia_med = median(results_100.julia_times)
     marss_med = median(results_100.marss_times)
     speedup = marss_med / julia_med
 
-    @printf("Julia:  %8.1f ms (median), %8.1f ms (min)\n",
-            julia_med, minimum(results_100.julia_times))
-    @printf("MARSS:  %8.1f ms (median), %8.1f ms (min)\n",
-            marss_med, minimum(results_100.marss_times))
+    @printf(
+        "Julia:  %8.1f ms (median), %8.1f ms (min)\n",
+        julia_med,
+        minimum(results_100.julia_times)
+    )
+    @printf(
+        "MARSS:  %8.1f ms (median), %8.1f ms (min)\n",
+        marss_med,
+        minimum(results_100.marss_times)
+    )
     @printf("Speedup: %.1fx\n", speedup)
     println()
 
@@ -261,7 +290,7 @@ function main()
     println("Benchmark: To convergence (tol=1e-8)")
     println("-" ^ 70)
 
-    results_conv = benchmark_convergence(y_jl, y_r; n_runs=3)
+    results_conv = benchmark_convergence(y_jl, y_r; n_runs = 3)
 
     julia_med_conv = median(results_conv.julia_times)
     marss_med_conv = median(results_conv.marss_times)
@@ -272,7 +301,11 @@ function main()
 
     @printf("Julia:  %8.1f ms, %d iterations\n", julia_med_conv, julia_iters)
     @printf("MARSS:  %8.1f ms, %d iterations\n", marss_med_conv, marss_iters)
-    @printf("Speedup: %.1fx (%.1fx fewer iterations)\n", speedup_conv, marss_iters/julia_iters)
+    @printf(
+        "Speedup: %.1fx (%.1fx fewer iterations)\n",
+        speedup_conv,
+        marss_iters/julia_iters
+    )
     println()
 
     # Compare final estimates
@@ -294,26 +327,38 @@ function main()
     println("\nTransition matrix T (true B[1,1]=0.8, B[2,2]=0.7):")
     T_julia = results_conv.julia_result.T
     T_marss = rcopy(R"$(results_conv.marss_result)$B")
-    @printf("  Julia: [%.4f, %.4f; %.4f, %.4f]\n", T_julia[1,1], T_julia[1,2], T_julia[2,1], T_julia[2,2])
-    @printf("  MARSS: [%.4f, %.4f; %.4f, %.4f]\n", T_marss[1,1], T_marss[1,2], T_marss[2,1], T_marss[2,2])
+    @printf(
+        "  Julia: [%.4f, %.4f; %.4f, %.4f]\n",
+        T_julia[1, 1],
+        T_julia[1, 2],
+        T_julia[2, 1],
+        T_julia[2, 2]
+    )
+    @printf(
+        "  MARSS: [%.4f, %.4f; %.4f, %.4f]\n",
+        T_marss[1, 1],
+        T_marss[1, 2],
+        T_marss[2, 1],
+        T_marss[2, 2]
+    )
 
     println("\nObservation matrix Z[3,:] (true: [0.6, 0.4]):")
     Z_julia = results_conv.julia_result.Z
     Z_marss = rcopy(R"$(results_conv.marss_result)$Z")
-    @printf("  Julia: [%.4f, %.4f]\n", Z_julia[3,1], Z_julia[3,2])
-    @printf("  MARSS: [%.4f, %.4f]\n", Z_marss[3,1], Z_marss[3,2])
+    @printf("  Julia: [%.4f, %.4f]\n", Z_julia[3, 1], Z_julia[3, 2])
+    @printf("  MARSS: [%.4f, %.4f]\n", Z_marss[3, 1], Z_marss[3, 2])
 
     println("\nState variances Q (true: [0.5, 0.8]):")
     Q_julia = results_conv.julia_result.Q_diag
     Q_marss = rcopy(R"$(results_conv.marss_result)$Q")
     @printf("  Julia: [%.4f, %.4f]\n", Q_julia[1], Q_julia[2])
-    @printf("  MARSS: [%.4f, %.4f]\n", Q_marss[1,1], Q_marss[2,2])
+    @printf("  MARSS: [%.4f, %.4f]\n", Q_marss[1, 1], Q_marss[2, 2])
 
     println("\nObservation variances H (true: [0.3, 0.4, 0.5]):")
     H_julia = results_conv.julia_result.H_diag
     H_marss = rcopy(R"$(results_conv.marss_result)$R")
     @printf("  Julia: [%.4f, %.4f, %.4f]\n", H_julia[1], H_julia[2], H_julia[3])
-    @printf("  MARSS: [%.4f, %.4f, %.4f]\n", H_marss[1,1], H_marss[2,2], H_marss[3,3])
+    @printf("  MARSS: [%.4f, %.4f, %.4f]\n", H_marss[1, 1], H_marss[2, 2], H_marss[3, 3])
 
     println()
     println("=" ^ 70)
@@ -321,8 +366,11 @@ function main()
     println("=" ^ 70)
     @printf("Per-iteration speedup:     %.1fx\n", speedup)
     @printf("Total speedup (converge):  %.1fx\n", speedup_conv)
-    @printf("Julia iterations:          %d (%.1fx fewer than MARSS)\n",
-            julia_iters, marss_iters/julia_iters)
+    @printf(
+        "Julia iterations:          %d (%.1fx fewer than MARSS)\n",
+        julia_iters,
+        marss_iters/julia_iters
+    )
     println()
 end
 

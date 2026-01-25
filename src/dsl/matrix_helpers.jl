@@ -34,8 +34,7 @@ H = diag_free([:var_obs], init=100.0)
 H = scalar_free(:var_obs, init=100.0)
 ```
 """
-function diag_free(names::AbstractVector{Symbol};
-                   init=1.0, lower=0.0, upper=Inf)
+function diag_free(names::AbstractVector{Symbol}; init = 1.0, lower = 0.0, upper = Inf)
     n = length(names)
 
     # Broadcast scalar arguments to vectors
@@ -46,22 +45,21 @@ function diag_free(names::AbstractVector{Symbol};
     # Build matrix
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
-    for i in 1:n
-        mat[i, i] = FreeParam(names[i], init=inits[i], lower=lowers[i],
-                               upper=uppers[i])
+    for i = 1:n
+        mat[i, i] =
+            FreeParam(names[i], init = inits[i], lower = lowers[i], upper = uppers[i])
     end
     mat
 end
 
-function diag_free(n::Int, prefix::Symbol;
-                   init=1.0, lower=0.0, upper=Inf)
-    names = [Symbol("$(prefix)_$i") for i in 1:n]
-    diag_free(names; init=init, lower=lower, upper=upper)
+function diag_free(n::Int, prefix::Symbol; init = 1.0, lower = 0.0, upper = Inf)
+    names = [Symbol("$(prefix)_$i") for i = 1:n]
+    diag_free(names; init = init, lower = lower, upper = upper)
 end
 
 # Single parameter case
-function diag_free(name::Symbol; init=1.0, lower=0.0, upper=Inf)
-    diag_free([name]; init=init, lower=lower, upper=upper)
+function diag_free(name::Symbol; init = 1.0, lower = 0.0, upper = Inf)
+    diag_free([name]; init = init, lower = lower, upper = upper)
 end
 
 """
@@ -75,8 +73,8 @@ H = scalar_free(:var_obs, init=225.0)
 # Equivalent to: H = [FreeParam(:var_obs, init=225.0, lower=0.0)]
 ```
 """
-function scalar_free(name::Symbol; init=1.0, lower=0.0, upper=Inf)
-    [FreeParam(name, init=init, lower=lower, upper=upper)]
+function scalar_free(name::Symbol; init = 1.0, lower = 0.0, upper = Inf)
+    [FreeParam(name, init = init, lower = lower, upper = upper)]
 end
 
 """
@@ -96,14 +94,14 @@ identity_mat(n::Int) = Matrix{Float64}(LinearAlgebra.I, n, n)
 
 Create an m×n zero matrix.
 """
-zeros_mat(m::Int, n::Int=m) = zeros(Float64, m, n)
+zeros_mat(m::Int, n::Int = m) = zeros(Float64, m, n)
 
 """
     ones_mat(m, n=m)
 
 Create an m×n matrix of ones.
 """
-ones_mat(m::Int, n::Int=m) = ones(Float64, m, n)
+ones_mat(m::Int, n::Int = m) = ones(Float64, m, n)
 
 """
     diag_fixed(values)
@@ -118,7 +116,7 @@ Q = diag_fixed([0.1, 0.01, 0.001])  # Fixed 3×3 diagonal
 function diag_fixed(values::AbstractVector{<:Real})
     n = length(values)
     mat = zeros(Float64, n, n)
-    for i in 1:n
+    for i = 1:n
         mat[i, i] = values[i]
     end
     mat
@@ -141,15 +139,20 @@ L = lower_triangular_free(2, :L)
 # [FreeParam(:L_2_1)  FreeParam(:L_2_2)]
 ```
 """
-function lower_triangular_free(n::Int, prefix::Symbol;
-                                init=0.0, lower=-Inf, upper=Inf)
+function lower_triangular_free(
+    n::Int,
+    prefix::Symbol;
+    init = 0.0,
+    lower = -Inf,
+    upper = Inf,
+)
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
 
-    for j in 1:n
-        for i in j:n
+    for j = 1:n
+        for i = j:n
             name = Symbol("$(prefix)_$(i)_$(j)")
-            mat[i, j] = FreeParam(name, init=init, lower=lower, upper=upper)
+            mat[i, j] = FreeParam(name, init = init, lower = lower, upper = upper)
         end
     end
     mat
@@ -170,25 +173,35 @@ Diagonal and off-diagonal elements can have different settings.
 # Creates a symmetric matrix where Σ[1,2] = Σ[2,1] (same parameter)
 ```
 """
-function symmetric_free(n::Int, prefix::Symbol;
-                        init_diag=1.0, init_offdiag=0.0,
-                        lower_diag=0.0, lower_offdiag=-Inf,
-                        upper_diag=Inf, upper_offdiag=Inf)
+function symmetric_free(
+    n::Int,
+    prefix::Symbol;
+    init_diag = 1.0,
+    init_offdiag = 0.0,
+    lower_diag = 0.0,
+    lower_offdiag = -Inf,
+    upper_diag = Inf,
+    upper_offdiag = Inf,
+)
     mat = Matrix{Any}(undef, n, n)
 
     # Diagonal elements
-    for i in 1:n
+    for i = 1:n
         name = Symbol("$(prefix)_$(i)_$(i)")
-        mat[i, i] = FreeParam(name, init=init_diag, lower=lower_diag,
-                               upper=upper_diag)
+        mat[i, i] =
+            FreeParam(name, init = init_diag, lower = lower_diag, upper = upper_diag)
     end
 
     # Off-diagonal (lower triangle, upper references same params)
-    for j in 1:n
-        for i in (j+1):n
+    for j = 1:n
+        for i = (j+1):n
             name = Symbol("$(prefix)_$(i)_$(j)")
-            param = FreeParam(name, init=init_offdiag, lower=lower_offdiag,
-                              upper=upper_offdiag)
+            param = FreeParam(
+                name,
+                init = init_offdiag,
+                lower = lower_offdiag,
+                upper = upper_offdiag,
+            )
             mat[i, j] = param
             mat[j, i] = param  # Symmetric - same parameter reference
         end
@@ -215,7 +228,7 @@ R = selection_mat(3, 2)
 """
 function selection_mat(m::Int, r::Int)
     R = zeros(Float64, m, r)
-    for i in 1:min(m, r)
+    for i = 1:min(m, r)
         R[i, i] = 1.0
     end
     R
@@ -234,18 +247,18 @@ T = companion_mat(2, :φ)  # AR(2) transition
 # [FreeParam(:φ_2)  0.0]
 ```
 """
-function companion_mat(n::Int, prefix::Symbol; init=0.5, lower=-Inf, upper=Inf)
+function companion_mat(n::Int, prefix::Symbol; init = 0.5, lower = -Inf, upper = Inf)
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
 
     # First column: AR coefficients
-    for i in 1:n
+    for i = 1:n
         name = Symbol("$(prefix)_$i")
-        mat[i, 1] = FreeParam(name, init=init/i, lower=lower, upper=upper)
+        mat[i, 1] = FreeParam(name, init = init/i, lower = lower, upper = upper)
     end
 
     # Superdiagonal: 1s
-    for i in 1:(n-1)
+    for i = 1:(n-1)
         mat[i, i+1] = 1.0
     end
     mat
@@ -283,4 +296,4 @@ Q = cov_free(3, :Q, init_σ=0.5)
 # See also
 - [`diag_free`](@ref): For diagonal covariance matrices (no correlation)
 """
-cov_free(n::Int, prefix::Symbol; init_σ::Float64=1.0) = CovFree(n, prefix, init_σ)
+cov_free(n::Int, prefix::Symbol; init_σ::Float64 = 1.0) = CovFree(n, prefix, init_σ)
