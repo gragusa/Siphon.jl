@@ -310,6 +310,6 @@ Choose based on your model structure and computational requirements.
 
 ## Next Steps
 
-- See **[Custom Models](custom_models.md)** for building your own specifications
-- See **[Dynamic Factor Models](dynamic_factor.md)** for large-panel factor analysis
-- See **[Parameter Transformations](transformations.md)** for understanding constraints
+- See [Custom Models](custom_models.md) for building your own specifications
+- See [Dynamic Factor Models](dynamic_factor.md) for large-panel factor analysis
+- See [Parameter Transformations](transformations.md) for understanding constraints

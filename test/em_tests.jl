@@ -479,3 +479,163 @@ end
     @test size(Z_new) == (p, m)
     @test size(T_new) == (m, m)
 end
+
+# ============================================
+# DynamicFactorModel Identification Tests
+# ============================================
+
+@testset "DynamicFactorModel identification validation" begin
+    # n_obs < n_factors should error for identified models
+    @test_throws ArgumentError DynamicFactorModel(2, 5, 100; identification=:named_factor)
+    @test_throws ArgumentError DynamicFactorModel(2, 5, 100; identification=:lower_triangular)
+
+    # But :none should work (no identification constraints)
+    @test_nowarn DynamicFactorModel(2, 5, 100; identification=:none)
+
+    # Invalid identification scheme
+    @test_throws ArgumentError DynamicFactorModel(10, 2, 100; identification=:invalid)
+
+    # Valid configurations
+    @test_nowarn DynamicFactorModel(10, 2, 100; identification=:named_factor)
+    @test_nowarn DynamicFactorModel(10, 2, 100; identification=:lower_triangular)
+    @test_nowarn DynamicFactorModel(10, 2, 100; identification=:none)
+end
+
+@testset "DynamicFactorModel identification initialization" begin
+    # Test named_factor identification initialization
+    model_nf = DynamicFactorModel(10, 3, 100; identification=:named_factor)
+    Z = model_nf.kf_ws.Z
+
+    # Check identity block in first k rows
+    @test Z[1, 1] ≈ 1.0
+    @test Z[1, 2] ≈ 0.0
+    @test Z[1, 3] ≈ 0.0
+    @test Z[2, 2] ≈ 1.0
+    @test Z[2, 3] ≈ 0.0
+    @test Z[3, 3] ≈ 1.0
+
+    # Check Z_free mask
+    Z_free = model_nf.em_ws.Z_free
+    @test Z_free[1, 1] == false  # diagonal fixed
+    @test Z_free[1, 2] == false  # upper triangle fixed
+    @test Z_free[2, 1] == true   # lower triangle free
+    @test Z_free[2, 2] == false  # diagonal fixed
+    @test Z_free[3, 1] == true   # lower triangle free
+    @test Z_free[3, 2] == true   # lower triangle free
+    @test Z_free[3, 3] == false  # diagonal fixed
+    @test Z_free[4, 1] == true   # row > k, all free
+    @test Z_free[4, 2] == true
+    @test Z_free[4, 3] == true
+
+    # Test lower_triangular identification initialization (Harvey 1989)
+    model_lt = DynamicFactorModel(10, 3, 100; identification=:lower_triangular)
+    Z_lt = model_lt.kf_ws.Z
+    Z_free_lt = model_lt.em_ws.Z_free
+    Q_lt = model_lt.kf_ws.Q
+    Q_free_lt = model_lt.em_ws.Q_free
+
+    # Upper triangle = 0 (fixed)
+    @test Z_lt[1, 2] ≈ 0.0
+    @test Z_lt[1, 3] ≈ 0.0
+    @test Z_lt[2, 3] ≈ 0.0
+
+    # Diagonal is FREE (not fixed to 1)
+    @test Z_free_lt[1, 1] == true   # diagonal free
+    @test Z_free_lt[2, 2] == true   # diagonal free
+    @test Z_free_lt[3, 3] == true   # diagonal free
+    @test Z_free_lt[1, 2] == false  # upper triangle fixed
+    @test Z_free_lt[1, 3] == false  # upper triangle fixed
+    @test Z_free_lt[2, 3] == false  # upper triangle fixed
+    @test Z_free_lt[2, 1] == true   # lower triangle free
+
+    # Q factor block = I (fixed)
+    k = 3
+    @test Q_lt[1, 1] ≈ 1.0
+    @test Q_lt[2, 2] ≈ 1.0
+    @test Q_lt[3, 3] ≈ 1.0
+    @test Q_free_lt[1, 1] == false  # Q factor block is fixed
+    @test Q_free_lt[2, 2] == false
+    @test Q_free_lt[3, 3] == false
+
+    # Test :none identification (all free)
+    model_none = DynamicFactorModel(10, 3, 100; identification=:none)
+    Z_free_none = model_none.em_ws.Z_free
+
+    # All factor loadings should be free
+    @test all(Z_free_none[1:10, 1:3])
+end
+
+@testset "DynamicFactorModel identification constraints preserved" begin
+    Random.seed!(42)
+
+    # Generate simple factor model data
+    N, k, n_time = 10, 2, 100
+    true_factors = randn(k, n_time)
+    true_loadings = randn(N, k)
+    noise = randn(N, n_time) * 0.5
+    y = true_loadings * true_factors + noise
+
+    # Fit with named_factor identification
+    model = DynamicFactorModel(N, k, n_time; identification=:named_factor)
+    fit!(EM(), model, y; maxiter=50, verbose=false)
+
+    # Check constraints are preserved after fitting
+    Λ = loadings(model)
+    Λ₀ = Λ[1]  # Contemporaneous loadings
+
+    @test Λ₀[1, 1] ≈ 1.0 atol=1e-10
+    @test Λ₀[1, 2] ≈ 0.0 atol=1e-10
+    @test Λ₀[2, 2] ≈ 1.0 atol=1e-10
+
+    # Lower triangle should be estimated (not necessarily 0)
+    # Just check they exist and are finite
+    @test isfinite(Λ₀[2, 1])
+    @test isfinite(Λ₀[3, 1])
+    @test isfinite(Λ₀[3, 2])
+
+    # Fit with lower_triangular identification (Harvey 1989)
+    model_lt = DynamicFactorModel(N, k, n_time; identification=:lower_triangular)
+    fit!(EM(), model_lt, y; maxiter=50, verbose=false)
+
+    Λ_lt = loadings(model_lt)[1]
+    # Upper triangle should be 0 (fixed)
+    @test Λ_lt[1, 2] ≈ 0.0 atol=1e-10
+
+    # Diagonal is FREE, so should be estimated (not necessarily 1)
+    @test isfinite(Λ_lt[1, 1])
+    @test isfinite(Λ_lt[2, 2])
+
+    # Q should remain at identity
+    Q_lt = model_lt.kf_ws.Q
+    @test Q_lt[1, 1] ≈ 1.0 atol=1e-10
+    @test Q_lt[2, 2] ≈ 1.0 atol=1e-10
+end
+
+@testset "DynamicFactorModel identification schemes differ" begin
+    Random.seed!(123)
+
+    # Generate data
+    N, k, n_time = 10, 2, 100
+    true_factors = randn(k, n_time)
+    true_loadings = randn(N, k)
+    noise = randn(N, n_time) * 0.5
+    y = true_loadings * true_factors + noise
+
+    # Fit with different identification schemes
+    model_nf = DynamicFactorModel(N, k, n_time; identification=:named_factor)
+    model_none = DynamicFactorModel(N, k, n_time; identification=:none)
+
+    fit!(EM(), model_nf, y; maxiter=50, verbose=false)
+    fit!(EM(), model_none, y; maxiter=50, verbose=false)
+
+    # Loadings should differ (up to rotation for :none)
+    Λ_nf = loadings(model_nf)[1]
+    Λ_none = loadings(model_none)[1]
+
+    # The identified model should have the identity block
+    @test Λ_nf[1, 1] ≈ 1.0 atol=1e-10
+    @test Λ_nf[1, 2] ≈ 0.0 atol=1e-10
+
+    # The unidentified model likely does not
+    @test !(Λ_none[1, 1] ≈ 1.0 && Λ_none[1, 2] ≈ 0.0)
+end

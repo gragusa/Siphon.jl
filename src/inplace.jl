@@ -638,7 +638,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where T
             # F = L * L' (Cholesky), so F^{-1} = L'^{-1} * L^{-1}
             # K_t * F^{-1} = K_t * L'^{-1} * L^{-1}
             # rdiv!(K, L) solves K * L = X, giving K := K * L^{-1}
-            L_lower = LowerTriangular(chol.factors)
+            L_lower = LowerTriangular(chol.L)
             rdiv!(K_t, L_lower')  # K_t := K_t * L'^{-1}
             rdiv!(K_t, L_lower)   # K_t := K_t * L^{-1} = T*P*Z'*F^{-1}
 
@@ -1708,8 +1708,18 @@ end
 """
     compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix)
 
-Compute sufficient statistics from smoothed states for M-step.
-Assumes kalman_smoother!(kf_ws; crosscov=true) has been called.
+Compute sufficient statistics from smoothed states for EM M-step.
+
+Requires `kalman_smoother!(kf_ws; crosscov=true)` to have been called first.
+Computes and stores the following in `em_ws`:
+- `S_00`: Σₜ E[αₜ αₜ' | Y] (state outer product sum for t=1:n)
+- `S_11`: Σₜ E[αₜ₋₁ αₜ₋₁' | Y] (lagged state outer product for t=2:n)
+- `S_10`: Σₜ E[αₜ αₜ₋₁' | Y] (cross-lag product for t=2:n)
+- `S_yα`: Σₜ yₜ E[αₜ' | Y] (observation-state cross product)
+- `S_yy`: Σₜ yₜ yₜ' (observation outer product)
+- `S_αα`: same as S_00 (alias)
+
+These sufficient statistics are used by `update_T!`, `update_Q!`, `update_Z!`, `update_H!`.
 """
 function compute_sufficient_stats!(em_ws::EMWorkspace{T},
                                    kf_ws::KalmanWorkspace{T},
@@ -2420,6 +2430,73 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real}=Float64)
     )
 end
 
+"""
+    StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:Real}=Float64)
+    StateSpaceModel(spec::SSMSpec, θ::AbstractVector, n_times::Int; T::Type{<:Real}=Float64)
+
+Construct a StateSpaceModel with known parameters (no fitting required).
+
+This constructor is useful when you have parameters from external estimation,
+simulation, or prior knowledge. The model is marked as fitted and ready for
+filtering/smoothing.
+
+# Arguments
+- `spec::SSMSpec`: Model specification from DSL (local_level, ar1, custom_ssm, etc.)
+- `θ`: Parameters as NamedTuple (e.g., `(var_obs=100.0, var_level=50.0)`) or Vector
+- `n_times::Int`: Number of time periods
+
+# Keyword Arguments
+- `T::Type{<:Real}`: Element type (default: Float64)
+
+# Returns
+A StateSpaceModel with `fitted=true` and parameters stored. Use `kalman_filter!(model, y)`
+to run the filter, then `kalman_smoother!(model)` to compute smoothed states.
+
+# Example
+```julia
+spec = local_level()
+θ = (var_obs=100.0, var_level=50.0)
+model = StateSpaceModel(spec, θ, 100)
+
+# Run filter and smoother
+y = randn(1, 100)
+kalman_filter!(model, y)
+kalman_smoother!(model)
+
+# Access results
+filtered_states(model)
+smoothed_states(model)
+loglikelihood(model)
+```
+
+See also: [`StateSpaceModel(spec, n)`](@ref) for creating unfitted models,
+[`fit!`](@ref) for parameter estimation.
+"""
+function StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:Real}=Float64)
+    # Create the base model with preallocated storage
+    model = StateSpaceModel(spec, n_times; T=T)
+
+    # Store the provided parameters
+    _ssm_store_theta!(model, θ)
+
+    # Mark as fitted with known parameters
+    model.fitted = true
+    model.theta_fitted = true
+    model.converged = true  # No optimization needed
+    model.iterations = 0
+    model.backend = :external
+
+    return model
+end
+
+function StateSpaceModel(spec::SSMSpec, θ::AbstractVector, n_times::Int; T::Type{<:Real}=Float64)
+    # Convert vector to NamedTuple
+    names = Tuple(prm.name for prm in spec.params)
+    @assert length(θ) == length(names) "Parameter vector length $(length(θ)) != number of parameters $(length(names))"
+    θ_nt = NamedTuple{names}(Tuple(θ))
+    return StateSpaceModel(spec, θ_nt, n_times; T=T)
+end
+
 # ============================================
 # StateSpaceModel Helper Functions
 # ============================================
@@ -2596,6 +2673,165 @@ function smoothed_states_cov(model::StateSpaceModel)
 end
 
 # ============================================
+# StateSpaceModel Unified Filter/Smoother API
+# ============================================
+
+"""
+    _build_kfparms_from_model(model::StateSpaceModel)
+
+Build KFParms and initial state from model's current parameters.
+
+Returns `(kfparms, a1, P1)` tuple suitable for Kalman filter operations.
+"""
+function _build_kfparms_from_model(model::StateSpaceModel)
+    model.theta_fitted || throw(ArgumentError("Parameters not set. Either fit the model or use StateSpaceModel(spec, θ, n)."))
+    theta_nt = _ssm_get_theta_namedtuple(model)
+    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
+    a1, P1 = Siphon.build_initial_state(model.spec, theta_nt)
+    return (kfparms, a1, P1)
+end
+
+"""
+    kalman_loglik(model::StateSpaceModel, y::AbstractMatrix) -> Real
+
+Compute log-likelihood using the model's current parameters.
+
+This is a convenience method that builds system matrices from stored parameters
+and computes the log-likelihood without modifying the model's internal state.
+
+# Arguments
+- `model`: StateSpaceModel with fitted parameters
+- `y`: Observations (p × n matrix), missing values as NaN
+
+# Returns
+Log-likelihood value (Real)
+
+# Example
+```julia
+spec = local_level()
+θ = (var_obs=100.0, var_level=50.0)
+model = StateSpaceModel(spec, θ, 100)
+
+y = randn(1, 100)
+ll = kalman_loglik(model, y)
+```
+
+See also: [`kalman_filter!`](@ref), [`loglikelihood`](@ref)
+"""
+function kalman_loglik(model::StateSpaceModel, y::AbstractMatrix)
+    p_obs, n = size(y)
+    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
+    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+
+    kfparms, a1, P1 = _build_kfparms_from_model(model)
+
+    # Use StaticArrays for small models
+    use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
+    if use_static
+        p_static = KFParms_static(kfparms.Z, kfparms.H, kfparms.T, kfparms.R, kfparms.Q)
+        a1_static = to_static_if_small(a1)
+        P1_static = to_static_if_small(P1)
+        return Siphon.kalman_loglik(p_static, y, a1_static, P1_static)
+    else
+        return Siphon.kalman_loglik(kfparms, y, a1, P1)
+    end
+end
+
+"""
+    kalman_filter!(model::StateSpaceModel, y::AbstractMatrix) -> Real
+
+Run Kalman filter and store results in model. Returns log-likelihood.
+
+After calling this function:
+- `filtered_states(model)` returns E[αₜ|y₁:ₜ]
+- `predicted_states(model)` returns E[αₜ|y₁:ₜ₋₁]
+- `loglikelihood(model)` returns the log-likelihood
+- Model is ready for `kalman_smoother!(model)`
+
+# Arguments
+- `model`: StateSpaceModel with fitted parameters (mutated in-place)
+- `y`: Observations (p × n matrix), missing values as NaN
+
+# Returns
+Log-likelihood value (Real)
+
+# Example
+```julia
+spec = local_level()
+θ = (var_obs=100.0, var_level=50.0)
+model = StateSpaceModel(spec, θ, 100)
+
+y = randn(1, 100)
+ll = kalman_filter!(model, y)
+filtered_states(model)  # Access filtered states
+```
+
+See also: [`kalman_smoother!`](@ref), [`kalman_loglik`](@ref)
+"""
+function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where T
+    p_obs, n = size(y)
+    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
+    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+
+    kfparms, a1, P1 = _build_kfparms_from_model(model)
+
+    # Use StaticArrays for small models
+    use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
+    if use_static
+        p_static = KFParms_static(kfparms.Z, kfparms.H, kfparms.T, kfparms.R, kfparms.Q)
+        a1_static = to_static_if_small(a1)
+        P1_static = to_static_if_small(P1)
+        filt = Siphon.kalman_filter(p_static, y, a1_static, P1_static)
+    else
+        filt = Siphon.kalman_filter(kfparms, y, a1, P1)
+    end
+
+    # Store filter results
+    _ssm_store_filter_results!(model, filt)
+
+    # Update model state
+    model.loglik = T(filt.loglik)
+    model.filter_valid = true
+    model.smoother_computed = false  # Invalidate smoother cache
+
+    return filt.loglik
+end
+
+"""
+    kalman_smoother!(model::StateSpaceModel) -> Nothing
+
+Run Kalman smoother using stored filter results.
+
+Requires `kalman_filter!(model, y)` to have been called first.
+After calling this function, `smoothed_states(model)` returns E[αₜ|y₁:ₙ].
+
+# Arguments
+- `model`: StateSpaceModel with valid filter results (mutated in-place)
+
+# Example
+```julia
+spec = local_level()
+θ = (var_obs=100.0, var_level=50.0)
+model = StateSpaceModel(spec, θ, 100)
+
+y = randn(1, 100)
+kalman_filter!(model, y)
+kalman_smoother!(model)
+smoothed_states(model)  # Access smoothed states
+```
+
+See also: [`kalman_filter!`](@ref), [`smoothed_states`](@ref)
+"""
+function kalman_smoother!(model::StateSpaceModel)
+    model.filter_valid || throw(ArgumentError("Filter not run. Call kalman_filter!(model, y) first."))
+
+    # Compute smoother using internal helper
+    _ssm_compute_smoother!(model)
+
+    return nothing
+end
+
+# ============================================
 # StateSpaceModel Matrix Accessors
 # ============================================
 
@@ -2745,7 +2981,7 @@ function fit!(::MLE, model::StateSpaceModel{T}, y::AbstractMatrix;
 
     # Run full filter to get filter results
     theta_nt = _ssm_get_theta_namedtuple(model)
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static=use_static)
+    ss = Siphon.DSL._build_linear_state_space_impl(model.spec, theta_nt, y; use_static=use_static)
     filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
 
     # Copy filter results to model storage
@@ -3370,7 +3606,7 @@ function _ssm_fit_em_static!(model::StateSpaceModel{T}, y::AbstractMatrix;
         theta_nt = NamedTuple{names}(Tuple(theta_curr))
 
         # Build state-space model from current parameters
-        ss = Siphon.build_linear_state_space(spec, theta_nt, y; use_static=true)
+        ss = Siphon.DSL._build_linear_state_space_impl(spec, theta_nt, y; use_static=true)
 
         # E-step: Run Kalman filter
         filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
@@ -3422,7 +3658,7 @@ function _ssm_fit_em_static!(model::StateSpaceModel{T}, y::AbstractMatrix;
     _ssm_store_theta!(model, theta_nt)
 
     # Run final filter to populate filter results
-    ss = Siphon.build_linear_state_space(spec, theta_nt, y; use_static=true)
+    ss = Siphon.DSL._build_linear_state_space_impl(spec, theta_nt, y; use_static=true)
     filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
     _ssm_store_filter_results!(model, filt)
 
@@ -3555,6 +3791,34 @@ struct DynamicFactorModelSpec
     loading_lags::Int    # p: lags in λ(L), p=0 means static loadings
     factor_lags::Int     # q: lags in factor VAR Ψ(L)
     error_lags::Int      # r: lags in AR errors δ(L), r=0 means white noise
+    identification::Symbol  # :named_factor, :lower_triangular, or :none
+end
+
+"""
+    DynamicFactorModelSpec(n_obs, n_factors; loading_lags=0, factor_lags=1, error_lags=0, identification=:named_factor)
+
+Construct a DynamicFactorModelSpec with validation.
+
+# Identification schemes (k² restrictions required for k factors)
+- `:named_factor` (default): First k rows of Λ₀ form identity block (diagonal=1, upper triangle=0).
+  Provides k² restrictions. Factor covariance Q is freely estimated. (Stock & Watson 2011)
+- `:lower_triangular`: Upper triangle of Λ₀ = 0 (diagonal FREE) + Q = Iₖ (identity).
+  Provides k(k-1)/2 + k(k+1)/2 = k² restrictions. (Harvey 1989)
+- `:none`: All loadings and Q free (for forecasting only, factors not uniquely identified)
+"""
+function DynamicFactorModelSpec(n_obs::Int, n_factors::Int;
+                                 loading_lags::Int=0,
+                                 factor_lags::Int=1,
+                                 error_lags::Int=0,
+                                 identification::Symbol=:named_factor)
+    identification in (:named_factor, :lower_triangular, :none) ||
+        throw(ArgumentError("identification must be :named_factor, :lower_triangular, or :none"))
+
+    if identification != :none && n_obs < n_factors
+        throw(ArgumentError("n_obs must be >= n_factors for identification scheme $identification"))
+    end
+
+    return DynamicFactorModelSpec(n_obs, n_factors, loading_lags, factor_lags, error_lags, identification)
 end
 
 """
@@ -3606,6 +3870,55 @@ mutable struct DynamicFactorModelWorkspace{T<:Real}
 end
 
 """
+    _apply_identification!(Z, Z_free, spec)
+
+Apply identification restrictions to loading matrix Z and update Z_free mask.
+
+# Identification schemes
+- `:named_factor`: First k rows of Λ₀ form identity block with diagonal=1, upper triangle=0 (Stock & Watson 2011)
+- `:lower_triangular`: Upper triangle=0 (diagonal FREE), paired with Q=I constraint (Harvey 1989)
+- `:none`: All loadings free
+"""
+function _apply_identification!(Z::Matrix{T}, Z_free::BitMatrix,
+                                 spec::DynamicFactorModelSpec) where T
+    k = spec.n_factors
+    N = spec.n_obs
+
+    if spec.identification == :named_factor
+        # First k rows of Λ₀ form identity block
+        for i in 1:min(k, N)
+            for j in 1:k
+                if i == j
+                    Z[i, j] = one(T)       # Diagonal = 1
+                    Z_free[i, j] = false   # Fixed
+                elseif j > i
+                    Z[i, j] = zero(T)      # Upper triangle = 0
+                    Z_free[i, j] = false   # Fixed
+                end
+                # Lower triangle (j < i) remains free
+            end
+        end
+
+    elseif spec.identification == :lower_triangular
+        # Harvey (1989): Upper triangle = 0, diagonal is FREE
+        # (Q = I constraint is applied separately in _setup_dfm)
+        for i in 1:min(k, N)
+            for j in 1:k
+                if j > i
+                    Z[i, j] = zero(T)      # Upper triangle = 0
+                    Z_free[i, j] = false   # Fixed
+                end
+                # Diagonal and lower triangle remain free
+            end
+        end
+
+    # :none - all loadings remain free (no action needed)
+    end
+
+    return nothing
+end
+
+"""
     _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float64)
 
 Create workspaces for full dynamic factor model estimation.
@@ -3615,7 +3928,7 @@ Returns (kf_ws, em_ws, dfm_ws) where:
 - em_ws: EMWorkspace for basic EM sufficient statistics
 - dfm_ws: DynamicFactorModelWorkspace for DFM-specific parameters and updates
 """
-function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float64) where T
+function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float64; tinitx::Int=0, V0::Real=100.0) where T
     N = spec.n_obs
     k = spec.n_factors
     p = spec.loading_lags
@@ -3746,9 +4059,21 @@ function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float6
         Q[k + i, k + i] = one(T)
     end
 
-    # Initial state
+    # Initial state based on tinitx convention
     a1 = zeros(T, m)
-    P1 = Matrix{T}(I, m, m) * T(10.0)
+    V0_mat = T(V0) * Matrix{T}(I, m, m)
+    if tinitx == 0
+        # tinitx=0: V0 is covariance at t=0, compute P1 at t=1
+        # P1 = T * V0 * T' + R * Q * R'
+        P1 = Tmat * V0_mat * Tmat' + R * Q * R'
+    elseif tinitx == 1
+        # tinitx=1: V0 is covariance at t=1, use directly
+        P1 = V0_mat
+    else
+        throw(ArgumentError("tinitx must be 0 or 1, got $tinitx"))
+    end
+    # Ensure P1 is symmetric and PSD
+    P1 = T(0.5) * (P1 + P1')
 
     # ========================================
     # Create workspaces
@@ -3767,6 +4092,10 @@ function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float6
         end
     end
 
+    # Apply identification restrictions to Z and Z_free
+    # Note: kf_ws.Z is a copy, so we must modify it directly
+    _apply_identification!(kf_ws.Z, em_ws.Z_free, spec)
+
     # H: depends on whether errors are in state
     em_ws.H_diag_only = true
 
@@ -3782,10 +4111,19 @@ function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float6
         end
     end
 
-    # Q: factor covariance is free, idiosyncratic variances handled separately
+    # Q: factor covariance handling depends on identification scheme
     fill!(em_ws.Q_free, false)
-    for j in 1:k, i in 1:k
-        em_ws.Q_free[i, j] = true
+    if spec.identification == :lower_triangular
+        # Harvey (1989): Q_factor = I (fixed), provides k(k+1)/2 restrictions
+        for i in 1:k
+            kf_ws.Q[i, i] = one(T)
+        end
+        # Q_free[1:k, 1:k] stays false (factor covariance fixed to I)
+    else
+        # :named_factor and :none: factor covariance is free
+        for j in 1:k, i in 1:k
+            em_ws.Q_free[i, j] = true
+        end
     end
 
     # ========================================
@@ -3794,10 +4132,10 @@ function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float6
 
     # Initialize parameter arrays
     Λ = [zeros(T, N, k) for _ in 0:p]
-    # Copy initial loadings from Z
+    # Copy initial loadings from kf_ws.Z (which has identification restrictions applied)
     for lag in 0:p
         col_start = lag * k + 1
-        Λ[lag+1] .= Z[:, col_start:col_start+k-1]
+        Λ[lag+1] .= kf_ws.Z[:, col_start:col_start+k-1]
     end
 
     Φ = [zeros(T, k, k) for _ in 1:q]
@@ -3806,7 +4144,14 @@ function _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float6
         Φ[lag] .= Tmat[1:k, col_start:col_start+k-1]
     end
 
-    Σ_η = Matrix{T}(I, k, k) * T(0.1)
+    # Factor innovation covariance
+    if spec.identification == :lower_triangular
+        # Harvey (1989): Σ_η = I (fixed)
+        Σ_η = Matrix{T}(I, k, k)
+    else
+        # Initialize with small values for free estimation
+        Σ_η = Matrix{T}(I, k, k) * T(0.1)
+    end
 
     δ_vec = zeros(T, max(r, 1))
     if r > 0
@@ -4215,6 +4560,8 @@ end
 """
     DynamicFactorModel(n_obs::Int, n_factors::Int, n_times::Int;
                        loading_lags::Int=0, factor_lags::Int=1, error_lags::Int=0,
+                       identification::Symbol=:named_factor,
+                       V0::Real=100.0,
                        T::Type{<:Real}=Float64)
 
 Construct a dynamic factor model with pre-allocated workspaces.
@@ -4228,6 +4575,14 @@ Construct a dynamic factor model with pre-allocated workspaces.
 - `loading_lags`: Lags in λ(L), p=0 means static loadings (default: 0)
 - `factor_lags`: Lags in factor VAR Ψ(L) (default: 1)
 - `error_lags`: Lags in AR errors δ(L), r=0 means white noise (default: 0)
+- `identification`: Identification scheme (default: `:named_factor`)
+  - `:named_factor`: First k rows of Λ₀ form identity block (diagonal=1, upper=0), Q free (Stock & Watson 2011)
+  - `:lower_triangular`: Upper triangle of Λ₀ = 0 (diagonal free), Q = I fixed (Harvey 1989)
+  - `:none`: All loadings and Q free (for forecasting only)
+- `tinitx`: Initial state timing convention (default: 0):
+  - `tinitx=0`: V0 is covariance at t=0. P1 is computed as `T * V0 * T' + R * Q * R'`.
+  - `tinitx=1`: V0 is covariance at t=1. P1 = V0 directly (no transformation).
+- `V0`: Initial state covariance (default: 100.0). Interpretation depends on `tinitx`.
 - `T`: Element type for matrices (default: Float64)
 
 # Returns
@@ -4237,13 +4592,26 @@ Construct a dynamic factor model with pre-allocated workspaces.
 ```julia
 # 100 observables, 6 factors, 200 time periods, VAR(3) dynamics
 model = DynamicFactorModel(100, 6, 200; factor_lags=3)
+
+# With lower triangular identification
+model = DynamicFactorModel(100, 6, 200; identification=:lower_triangular)
+
+# No identification (for forecasting only)
+model = DynamicFactorModel(100, 6, 200; identification=:none)
 ```
 """
 function DynamicFactorModel(n_obs::Int, n_factors::Int, n_times::Int;
                             loading_lags::Int=0, factor_lags::Int=1, error_lags::Int=0,
+                            identification::Symbol=:named_factor,
+                            tinitx::Int=0,
+                            V0::Real=100.0,
                             T::Type{<:Real}=Float64)
-    spec = DynamicFactorModelSpec(n_obs, n_factors, loading_lags, factor_lags, error_lags)
-    kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T)
+    spec = DynamicFactorModelSpec(n_obs, n_factors;
+                                   loading_lags=loading_lags,
+                                   factor_lags=factor_lags,
+                                   error_lags=error_lags,
+                                   identification=identification)
+    kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T; tinitx=tinitx, V0=V0)
 
     return DynamicFactorModel{T}(
         spec,
@@ -4304,9 +4672,19 @@ end
 # ============================================
 
 """
-    factors(model::DynamicFactorModel)
+    factors(model::DynamicFactorModel) -> Matrix
 
-Extract smoothed factors (k × n) from fitted model.
+Extract smoothed factors E[fₜ | y₁:ₙ] from fitted model.
+
+Returns a k × n matrix where k is the number of factors and n is the number
+of time periods. Must call `fit!(EM(), model, y)` before use.
+
+# Example
+```julia
+model = DynamicFactorModel(100, 3, 200)
+fit!(EM(), model, y)
+f = factors(model)  # 3 × 200 matrix
+```
 """
 function factors(model::DynamicFactorModel)
     model.fitted || throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
@@ -4352,9 +4730,20 @@ end
 # ============================================
 
 """
-    loadings(model::DynamicFactorModel)
+    loadings(model::DynamicFactorModel) -> Vector{Matrix}
 
 Return factor loadings [Λ₀, Λ₁, ..., Λₚ] from fitted model.
+
+Returns a vector of N × k matrices where N is the number of observables,
+k is the number of factors, and p is the number of loading lags.
+The observation equation is: yₜ = Λ₀ fₜ + Λ₁ fₜ₋₁ + ... + Λₚ fₜ₋ₚ + eₜ.
+
+# Example
+```julia
+model = DynamicFactorModel(100, 3, 200; loading_lags=1)
+fit!(EM(), model, y)
+Λ = loadings(model)  # [Λ₀, Λ₁], each 100 × 3
+```
 """
 function loadings(model::DynamicFactorModel)
     model.fitted || throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))

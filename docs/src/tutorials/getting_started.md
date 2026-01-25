@@ -59,85 +59,121 @@ y = nile'  # Convert to 1×n matrix (p × T format)
 println("Number of observations: ", size(y, 2))
 ```
 
-## Computing the Log-Likelihood
+## The Unified StateSpaceModel API
 
-Given a model specification and parameters, we can compute the log-likelihood:
+Siphon.jl provides a unified API centered around `StateSpaceModel`. There are two main ways to create a model:
+
+### Option 1: Create Model with Known Parameters
+
+If you already have parameter values (from prior knowledge, simulation, or external estimation):
 
 ```julia
-# Get initial parameter values
-θ = initial_values(spec)
+# Define known parameters
+θ = (var_obs=15099.0, var_level=1469.0)
 
-# Build the state space components
-ss = build_linear_state_space(spec, θ, y)
+# Create model with these parameters
+model = StateSpaceModel(spec, θ, size(y, 2))
 
-# Compute log-likelihood
-ll = kalman_loglik(ss.p, y, ss.a1, ss.P1)
-println("Log-likelihood at initial values: ", ll)
+# Run filter and smoother
+ll = kalman_filter!(model, y)
+kalman_smoother!(model)
+
+# Access results
+println("Log-likelihood: ", ll)
+println("Filtered states: ", filtered_states(model))
+println("Smoothed states: ", smoothed_states(model))
 ```
 
-The `build_linear_state_space` function returns a named tuple with:
-- `p`: A `KFParms` struct containing the system matrices (Z, H, T, R, Q)
-- `a1`: Initial state mean vector
-- `P1`: Initial state covariance matrix
+### Option 2: Estimate Parameters
+
+If you want to estimate parameters from data:
+
+```julia
+# Create an unfitted model
+model = StateSpaceModel(spec, size(y, 2))
+
+# Estimate via MLE
+fit!(MLE(), model, y)
+
+# Or estimate via EM
+# fit!(EM(), model, y; maxiter=200)
+
+# Access results
+println("Log-likelihood: ", loglikelihood(model))
+println("Parameters: ", parameters(model))
+println("Converged: ", isconverged(model))
+```
+
+## Computing the Log-Likelihood
+
+With the unified API, computing the log-likelihood is straightforward:
+
+```julia
+# With known parameters
+θ = (var_obs=15099.0, var_level=1469.0)
+model = StateSpaceModel(spec, θ, size(y, 2))
+
+# Method 1: kalman_loglik (doesn't store filter results)
+ll = kalman_loglik(model, y)
+println("Log-likelihood: ", ll)
+
+# Method 2: kalman_filter! (stores filter results for later use)
+ll = kalman_filter!(model, y)
+println("Log-likelihood: ", ll)
+```
 
 ## Kalman Filter
 
-The Kalman filter computes the sequence of filtered state estimates and their covariances:
+The Kalman filter computes the sequence of filtered state estimates:
 
 ```julia
-# Run the full Kalman filter
-filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
+θ = (var_obs=15099.0, var_level=1469.0)
+model = StateSpaceModel(spec, θ, size(y, 2))
 
-# Access results
-at = filt.at       # Predicted state means E[α_t|y_{1:t-1}] (m × n)
-Pt = filt.Pt       # Predicted state covariances (m × m × n)
-att = filt.att     # Filtered state means E[α_t|y_{1:t}] (m × n)
-Ptt = filt.Ptt     # Filtered state covariances (m × m × n)
-vt = filt.vt       # Prediction errors (p × n)
-Ft = filt.Ft       # Prediction error variances (p × p × n)
-Kt = filt.Kt       # Kalman gains (m × p × n)
-ll = filt.loglik   # Log-likelihood
+# Run the filter
+kalman_filter!(model, y)
+
+# Access filter results
+att = filtered_states(model)           # E[α_t|y_{1:t}] (m × n)
+Ptt = filtered_states_cov(model)       # Var[α_t|y_{1:t}] (m × m × n)
+at = predicted_states(model)           # E[α_t|y_{1:t-1}] (m × n)
+Pt = predicted_states_cov(model)       # Var[α_t|y_{1:t-1}] (m × m × n)
+vt = prediction_errors(model)          # y_t - E[y_t|y_{1:t-1}] (p × n)
+Ft = prediction_errors_cov(model)      # Var[y_t|y_{1:t-1}] (p × p × n)
 
 println("Final filtered state: ", att[:, end])
-println("Log-likelihood: ", ll)
+println("Log-likelihood: ", loglikelihood(model))
 ```
 
 ### Filter Output Structure
 
-The `KalmanFilterResult` contains:
-- `at[:, t]`: State estimate at time `t` given observations up to `t-1` (i.e., ``a_{t|t-1}``)
-- `att[:, t]`: State estimate at time `t` given observations up to `t` (i.e., ``a_{t|t}``)
-- `Pt[:, :, t]`, `Ptt[:, :, t]`: Corresponding covariance matrices
-- `vt[:, t]`: Innovation (prediction error) at time `t`
-- `Ft[:, :, t]`: Innovation covariance at time `t`
-- `Kt[:, :, t]`: Kalman gain at time `t`
+- `filtered_states(model)`: State estimate at time `t` given observations up to `t` (i.e., ``a_{t|t}``)
+- `predicted_states(model)`: State estimate at time `t` given observations up to `t-1` (i.e., ``a_{t|t-1}``)
+- `prediction_errors(model)`: Innovation (prediction error) at time `t`
+- All covariance accessors provide the corresponding variance/covariance matrices
 
 ## Kalman Smoother
 
 The Kalman smoother computes smoothed state estimates using all available observations:
 
 ```julia
-# Run the Kalman smoother (uses filter output)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+θ = (var_obs=15099.0, var_level=1469.0)
+model = StateSpaceModel(spec, θ, size(y, 2))
+
+# Run filter first
+kalman_filter!(model, y)
+
+# Then run smoother
+kalman_smoother!(model)
 
 # Access results
-alpha = smooth.alpha  # Smoothed state means E[α_t|y_{1:n}] (m × n)
-V = smooth.V          # Smoothed state covariances (m × m × n)
+alpha = smoothed_states(model)      # E[α_t|y_{1:n}] (m × n)
+V = smoothed_states_cov(model)      # Var[α_t|y_{1:n}] (m × m × n)
 
 println("Smoothed state at t=50: ", alpha[:, 50])
 ```
 
-### With Cross-Lag Covariances
-
-For EM algorithm applications, you may need cross-lag covariances:
-
-```julia
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                          compute_crosscov=true)
-
-# Additional output
-P_crosslag = smooth.P_crosslag  # Cov[α_{t+1}, α_t|y_{1:n}] (m × m × n-1)
-```
+Note: The smoother results are cached, so `smoothed_states(model)` will compute the smoother on first call and return cached results thereafter.
 
 ## Parameter Estimation
 
@@ -152,8 +188,8 @@ fit!(MLE(), model, y)
 
 # Access results
 println("Log-likelihood: ", loglikelihood(model))
-println("Parameters: ", model.theta_values)
-println("Converged: ", model.converged)
+println("Parameters: ", parameters(model))
+println("Converged: ", isconverged(model))
 ```
 
 ### EM Algorithm
@@ -165,9 +201,9 @@ For models with only variance parameters, the EM algorithm can be faster:
 model = StateSpaceModel(spec, size(y, 2))
 fit!(EM(), model, y; maxiter=200, verbose=true)
 
-println("Converged: ", model.converged)
-println("Iterations: ", model.iterations)
-println("Parameters: ", model.theta_values)
+println("Converged: ", isconverged(model))
+println("Iterations: ", niterations(model))
+println("Parameters: ", parameters(model))
 ```
 
 ### Alternative: Direct Optimization
@@ -187,26 +223,43 @@ println("Estimated var_level: ", θ_mle.var_level)
 
 ## Filter and Smooth with Estimated Parameters
 
-After fitting, you can run the filter/smoother with the fitted model:
+After fitting, you can access filter and smoother results directly:
 
 ```julia
-# Using the fit! API, filter results are stored in the model
+# Fit the model
 model = StateSpaceModel(spec, size(y, 2))
 fit!(MLE(), model, y)
 
-# Access filtered states directly from model
-println("Filtered state std: ", std(model.att[1, :]))
+# Filter results are automatically computed during fitting
+println("Filtered state std: ", std(filtered_states(model)[1, :]))
 
-# Or use optimize_ssm and build state space manually
-result = optimize_ssm(spec, y)
-ss_mle = build_linear_state_space(spec, result.θ, y)
-filt = kalman_filter(ss_mle.p, y, ss_mle.a1, ss_mle.P1)
-smooth = kalman_smoother(ss_mle.p.Z, ss_mle.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
-
-println("Smoothed state std: ", std(smooth.alpha[1, :]))
+# Smoothed states computed on demand
+println("Smoothed state std: ", std(smoothed_states(model)[1, :]))
 ```
 
 The smoothed estimates are generally more accurate than filtered estimates because they use information from the entire sample.
+
+## Accessing System Matrices
+
+After fitting (or with known parameters), you can access the system matrices:
+
+```julia
+model = StateSpaceModel(spec, size(y, 2))
+fit!(MLE(), model, y)
+
+# Get all matrices at once
+mats = system_matrices(model)
+println("Z = ", mats.Z)
+println("H = ", mats.H)
+println("T = ", mats.T)
+println("Q = ", mats.Q)
+
+# Or individual matrices
+Z = obs_matrix(model)
+H = obs_cov(model)
+T = transition_matrix(model)
+Q = state_cov(model)
+```
 
 ## Other Pre-Built Templates
 
@@ -376,17 +429,20 @@ Siphon.jl handles missing observations automatically using NaN:
 y_missing = copy(y)
 y_missing[1, 20:25] .= NaN  # Mark as missing
 
-# Filter and smooth work normally
-filt = kalman_filter(ss.p, y_missing, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft;
-                          missing_mask=filt.missing_mask)
+# Use the unified API
+θ = (var_obs=15099.0, var_level=1469.0)
+model = StateSpaceModel(spec, θ, size(y_missing, 2))
+
+kalman_filter!(model, y_missing)
+kalman_smoother!(model)
 
 # The smoother will interpolate through missing periods
+println("Smoothed states through missing period: ", smoothed_states(model)[1, 18:27])
 ```
 
 ## Next Steps
 
-- Learn how to specify **[Custom Models](custom_models.md)** using the DSL
-- Understand **[Parameter Transformations](transformations.md)** for constrained optimization
-- Explore **[Dynamic Factor Models](dynamic_factor.md)** for multivariate analysis
-- See the **[Core Functions](../api/core.md)** and **[DSL & Templates](../api/dsl.md)** for complete API documentation
+- Learn how to specify [Custom Models](custom_models.md) using the DSL
+- Understand [Parameter Transformations](transformations.md) for constrained optimization
+- Explore [Dynamic Factor Models](dynamic_factor.md) for multivariate analysis
+- See the [Core Functions](../api/core.md) and [DSL & Templates](../api/dsl.md) for complete API documentation

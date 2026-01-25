@@ -87,8 +87,8 @@ function kalman_loglik(p::KFParms, y::AbstractMatrix,
                      eltype(p.R), eltype(p.Q), eltype(a1), eltype(P1))
 
     # Initialize state
-    a = convert(Vector{T}, copy(a1))
-    P = convert(Matrix{T}, copy(P1))
+    a = Vector{T}(a1)
+    P = Matrix{T}(P1)
 
     # Initialize log-likelihood (without constant term)
     loglik = zero(T)
@@ -443,8 +443,8 @@ function kalman_filter(p::KFParms, y::AbstractMatrix,
     missing_mask = BitVector(undef, n)
 
     # Initialize: at[1] = a1, Pt[1] = P1 (initial state is prediction for t=1)
-    a_pred = convert(Vector{ET}, copy(a1))
-    P_pred = convert(Matrix{ET}, copy(P1))
+    a_pred = Vector{ET}(a1)
+    P_pred = Matrix{ET}(P1)
 
     loglik = zero(ET)
     n_obs = 0
@@ -480,7 +480,7 @@ function kalman_filter(p::KFParms, y::AbstractMatrix,
 
             if obs_dim == 1
                 F_val = F[1, 1]
-                Finv = reshape([one(ET) / F_val], 1, 1)
+                Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
             else
@@ -887,9 +887,9 @@ function kalman_loglik_diffuse(p::KFParms, y::AbstractMatrix,
                       eltype(P1_star), eltype(P1_inf))
 
     # Initialize state
-    a = convert(Vector{ET}, copy(a1))
-    Pstar = convert(Matrix{ET}, copy(P1_star))
-    Pinf = convert(Matrix{ET}, copy(P1_inf))
+    a = Vector{ET}(a1)
+    Pstar = Matrix{ET}(P1_star)
+    Pinf = Matrix{ET}(P1_inf)
 
     # Precompute RQR'
     RQR = p.R * p.Q * p.R'
@@ -1091,9 +1091,9 @@ function kalman_filter_diffuse(p::KFParms, y::AbstractMatrix,
     flag_list = Vector{Int}()
 
     # Initialize state
-    a = convert(Vector{ET}, copy(a1))
-    Pstar = convert(Matrix{ET}, copy(P1_star))
-    Pinf = convert(Matrix{ET}, copy(P1_inf))
+    a = Vector{ET}(a1)
+    Pstar = Matrix{ET}(P1_star)
+    Pinf = Matrix{ET}(P1_inf)
 
     # Precompute RQR'
     RQR = p.R * p.Q * p.R'
@@ -1150,7 +1150,7 @@ function kalman_filter_diffuse(p::KFParms, y::AbstractMatrix,
 
             if obs_dim == 1
                 F_val = F[1, 1]
-                Finv = reshape([one(ET) / F_val], 1, 1)
+                Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
             else
@@ -1220,7 +1220,7 @@ function kalman_filter_diffuse(p::KFParms, y::AbstractMatrix,
 
                 if obs_dim == 1
                     Fstar_val = Fstar[1, 1]
-                    Fstar_inv = reshape([one(ET) / Fstar_val], 1, 1)
+                    Fstar_inv = fill(one(ET) / Fstar_val, 1, 1)
                     logdetFstar = log(Fstar_val)
                     quad_form = v[1]^2 / Fstar_val
                 else

@@ -361,6 +361,6 @@ display(round.(mats.T, digits=4))
 
 ## Next Steps
 
-- Learn about **[Custom Models](custom_models.md)** for more complex specifications
-- See **[Parameter Transformations](transformations.md)** for constrained optimization
-- Explore **[Dynamic Factor Models](dynamic_factor.md)** for multivariate time series
+- Learn about [Custom Models](custom_models.md) for more complex specifications
+- See [Parameter Transformations](transformations.md) for constrained optimization
+- Explore [Dynamic Factor Models](dynamic_factor.md) for multivariate time series

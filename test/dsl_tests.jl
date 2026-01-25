@@ -694,3 +694,170 @@ end
     @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol=1e-10)
     @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol=1e-10)
 end
+
+# ============================================
+# Unified StateSpaceModel API Tests
+# ============================================
+
+@testset "StateSpaceModel with known parameters (NamedTuple)" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+
+    model = StateSpaceModel(spec, θ, n)
+
+    @test model.fitted == true
+    @test model.theta_fitted == true
+    @test model.converged == true
+    @test model.backend == :external
+    @test parameters(model) == θ
+end
+
+@testset "StateSpaceModel with known parameters (Vector)" begin
+    spec = local_level()
+    θ_vec = [100.0, 50.0]  # [var_obs, var_level]
+    n = 100
+
+    model = StateSpaceModel(spec, θ_vec, n)
+
+    @test model.fitted == true
+    @test model.theta_fitted == true
+    @test parameters(model).var_obs == 100.0
+    @test parameters(model).var_level == 50.0
+end
+
+@testset "kalman_loglik(model, y)" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # New unified API
+    ll_new = kalman_loglik(model, y)
+    @test isfinite(ll_new)
+
+    # Compare with old API (should match)
+    ss = build_linear_state_space(spec, initial_values(spec), y)
+    # Replace initial values with θ
+    θ_vec = [θ.var_obs, θ.var_level]
+    ss_θ = build_linear_state_space(spec, θ_vec, y)
+    ll_old = kalman_loglik(ss_θ.p, y, ss_θ.a1, ss_θ.P1)
+
+    @test ll_new ≈ ll_old rtol=1e-10
+end
+
+@testset "kalman_filter!(model, y)" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Filter should not be valid before calling kalman_filter!
+    @test model.filter_valid == false
+
+    ll = kalman_filter!(model, y)
+
+    @test isfinite(ll)
+    @test model.filter_valid == true
+    @test loglikelihood(model) ≈ ll
+
+    # Access filtered states
+    att = filtered_states(model)
+    @test size(att) == (1, n)
+
+    # Predicted states should also be available
+    at = predicted_states(model)
+    @test size(at) == (1, n)
+end
+
+@testset "kalman_smoother!(model)" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Smoother should fail before filter
+    @test_throws ArgumentError kalman_smoother!(model)
+
+    # Run filter first
+    kalman_filter!(model, y)
+    @test model.smoother_computed == false
+
+    # Now run smoother
+    kalman_smoother!(model)
+    @test model.smoother_computed == true
+
+    # Access smoothed states
+    alpha = smoothed_states(model)
+    @test size(alpha) == (1, n)
+
+    V = smoothed_states_cov(model)
+    @test size(V) == (1, 1, n)
+end
+
+@testset "Unified API equivalence with old API" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+    y = randn(1, n)
+
+    # New unified way
+    model = StateSpaceModel(spec, θ, n)
+    ll_new = kalman_filter!(model, y)
+    kalman_smoother!(model)
+    alpha_new = smoothed_states(model)
+
+    # Old way with build_linear_state_space
+    θ_vec = [θ.var_obs, θ.var_level]
+    ss = build_linear_state_space(spec, θ_vec, y)
+    filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
+    smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+
+    @test ll_new ≈ filt.loglik rtol=1e-10
+    @test alpha_new ≈ smooth.alpha rtol=1e-10
+end
+
+@testset "StateSpaceModel with local_linear_trend" begin
+    spec = local_linear_trend()
+    θ = (var_obs=100.0, var_level=50.0, var_slope=10.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+    ll = kalman_filter!(model, y)
+    kalman_smoother!(model)
+
+    @test isfinite(ll)
+    @test size(smoothed_states(model)) == (2, n)
+end
+
+@testset "StateSpaceModel dimension validation" begin
+    spec = local_level()
+    θ = (var_obs=100.0, var_level=50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Wrong observation dimension
+    y_wrong = randn(2, n)
+    @test_throws AssertionError kalman_filter!(model, y_wrong)
+
+    # Wrong time dimension
+    y_wrong_t = randn(1, 50)
+    @test_throws AssertionError kalman_filter!(model, y_wrong_t)
+end
+
+@testset "StateSpaceModel parameter vector length validation" begin
+    spec = local_level()
+    θ_wrong = [100.0]  # Too few parameters
+    n = 100
+
+    @test_throws AssertionError StateSpaceModel(spec, θ_wrong, n)
+end

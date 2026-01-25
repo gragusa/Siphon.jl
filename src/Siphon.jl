@@ -98,6 +98,8 @@ export MLE, EM  # Estimation method markers
 
 # High-level StateSpaceModel API
 export StateSpaceModel, fit!, system_matrices
+export smoothed_states_cov, predicted_states_cov, filtered_states_cov
+export prediction_errors_cov, isfitted
 
 # Dynamic Factor Model
 export DynamicFactorModel, DynamicFactorModelSpec

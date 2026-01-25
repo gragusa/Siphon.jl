@@ -148,7 +148,7 @@ The comparison shows filtered states as dashed blue lines and smoothed states as
 
 ## Plotting Observable Predictions
 
-Plot one-step-ahead predictions of observables (ŷₜ = Z * aₜ):
+Plot one-step-ahead predictions of observables (y_hat_t = Z * a_t):
 
 ```julia
 result = kalman_filter(p, y, a1, P1)
@@ -248,27 +248,27 @@ The default color scheme uses consistent colors across plot types:
 
 ### Core Types
 
-- [`KalmanWorkspace`](@ref): In-place filter/smoother workspace (recommended)
-- [`KalmanFilterResult`](@ref): Functional API filter output
-- [`SmootherResult`](@ref): Wrapper for smoother output
-- [`ForecastResult`](@ref): Wrapper for forecast output
-- [`ObservablePlot`](@ref): Marker type for observable prediction plots
+- `KalmanWorkspace`: In-place filter/smoother workspace (recommended)
+- `KalmanFilterResult`: Functional API filter output
+- `SmootherResult`: Wrapper for smoother output
+- `ForecastResult`: Wrapper for forecast output
+- `ObservablePlot`: Marker type for observable prediction plots
 
 ### In-place Functions
 
-- [`kalman_filter!`](@ref): Run filter in-place
-- [`kalman_smoother!`](@ref): Run smoother in-place
-- [`filter_and_smooth!`](@ref): Run both in-place
+- `kalman_filter!`: Run filter in-place
+- `kalman_smoother!`: Run smoother in-place
+- `filter_and_smooth!`: Run both in-place
 
 ### Accessor Functions
 
-- [`smoothed_states`](@ref): Get smoothed state means
-- [`filtered_states`](@ref): Get filtered state means
-- [`predicted_states`](@ref): Get predicted state means
-- [`variances_smoothed_states`](@ref): Get smoothed state covariances
-- [`loglikelihood`](@ref): Get log-likelihood
+- `smoothed_states`: Get smoothed state means
+- `filtered_states`: Get filtered state means
+- `predicted_states`: Get predicted state means
+- `variances_smoothed_states`: Get smoothed state covariances
+- `loglikelihood`: Get log-likelihood
 
 ### Helper Functions
 
-- [`confidence_bands`](@ref): Compute confidence interval bounds
-- [`select_vars`](@ref): Parse variable selection keywords
+- `confidence_bands`: Compute confidence interval bounds
+- `select_vars`: Parse variable selection keywords

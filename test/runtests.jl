@@ -5,7 +5,7 @@ using DelimitedFiles
 using ForwardDiff
 
 # Load Nile data
-nile = readdlm("Nile.csv", ',', Float64)
+nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
 y = reshape(nile[:, 1], 1, :)  # 1 x 100 matrix
 
 # MLE estimates from Durbin & Koopman (2012)

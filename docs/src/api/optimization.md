@@ -2,28 +2,55 @@
 
 This page documents functions for parameter estimation and Bayesian inference.
 
-## High-Level Estimation API
+## High-Level Unified API
 
-The recommended API for parameter estimation uses `fit!` with method markers:
+Siphon.jl provides a unified API centered around `StateSpaceModel`. There are two ways to create a model:
+
+### Option 1: Create Model with Known Parameters
+
+If you already have parameter values (from prior knowledge, simulation, or external estimation):
 
 ```julia
 using Siphon
 
-# Create model from specification
+spec = local_level()
+θ = (var_obs=15099.0, var_level=1469.0)
+
+# Create model with known parameters
+model = StateSpaceModel(spec, θ, n_obs)
+
+# Run filter and smoother
+ll = kalman_filter!(model, y)
+kalman_smoother!(model)
+
+# Access results
+loglikelihood(model)        # Log-likelihood
+filtered_states(model)      # E[αₜ|y₁:ₜ]
+smoothed_states(model)      # E[αₜ|y₁:ₙ]
+parameters(model)           # Parameter NamedTuple
+```
+
+### Option 2: Estimate Parameters
+
+If you want to estimate parameters from data:
+
+```julia
+using Siphon
+
 spec = local_level()
 model = StateSpaceModel(spec, n_obs)
 
 # Maximum likelihood estimation
 fit!(MLE(), model, y)
 
-# EM algorithm estimation
+# Or EM algorithm estimation
 fit!(EM(), model, y; maxiter=200, tol=1e-6, verbose=true)
 
 # Access results
 loglikelihood(model)        # Log-likelihood at optimum
 parameters(model)           # Fitted parameters as NamedTuple
-model.theta_values          # Fitted parameter vector (internal)
-model.converged             # Whether estimation converged
+isconverged(model)          # Whether estimation converged
+niterations(model)          # Number of iterations (EM only)
 
 # Access system matrices at fitted parameters
 mats = system_matrices(model)  # All matrices as NamedTuple
@@ -46,11 +73,39 @@ smoothed_states(model)     # E[αₜ|y₁:ₙ] (computed on demand)
 prediction_errors(model)   # yₜ - E[yₜ|y₁:ₜ₋₁]
 ```
 
+## StateSpaceModel Constructors
+
+```@docs
+Siphon.StateSpaceModel
+```
+
+## Estimation Methods
+
 ```@docs
 Siphon.MLE
 Siphon.EM
-Siphon.StateSpaceModel
 Siphon.fit!
+```
+
+## Unified Filter/Smoother Methods
+
+These methods work directly on `StateSpaceModel` objects:
+
+```julia
+# Log-likelihood (doesn't modify model state)
+ll = kalman_loglik(model, y)
+
+# Filter (stores results in model)
+ll = kalman_filter!(model, y)
+
+# Smoother (uses stored filter results)
+kalman_smoother!(model)
+```
+
+```@docs
+Siphon.kalman_loglik(::Siphon.StateSpaceModel, ::AbstractMatrix)
+Siphon.kalman_filter!(::Siphon.StateSpaceModel, ::AbstractMatrix)
+Siphon.kalman_smoother!(::Siphon.StateSpaceModel)
 ```
 
 ## Model Accessors
@@ -101,6 +156,94 @@ For Dynamic Nelson-Siegel models with nonlinear λ parameter:
 Siphon.DSL.profile_em_ssm
 Siphon.DSL.ProfileEMResult
 ```
+
+## Initial State Conventions and MARSS Compatibility
+
+Siphon.jl internally uses the `tinitx=1` convention where `(a₁, P₁)` represents the initial state distribution at time t=1. Both `profile_em_ssm` and `DynamicFactorModel` support the `tinitx` parameter to control how the initial state covariance is computed.
+
+For a comprehensive explanation of initial state conventions, see the [Initial State Tutorial](../tutorials/initial_state.md).
+
+### The `tinitx` Parameter
+
+The `tinitx` parameter controls when the initial state covariance `V0` is defined:
+
+| Setting | V0 Interpretation | P1 Computation |
+|---------|------------------|----------------|
+| `tinitx=0` (default) | Covariance at t=0 | `P1 = T × V0 × T' + R × Q × R'` |
+| `tinitx=1` | Covariance at t=1 | `P1 = V0` (no transformation) |
+
+With `tinitx=0`, the initial covariance incorporates one step of state dynamics, matching MARSS's default behavior.
+
+### The `V0` Parameter
+
+The `V0` parameter specifies the initial state covariance value:
+
+- **Scalar:** `V0=100.0` creates `V0 × I` (identity scaled by V0)
+- **Matrix:** Can also pass a full covariance matrix (for `profile_em_ssm`)
+
+**Default:** `V0=100.0` (MARSS default)
+
+### Usage Examples
+
+```julia
+# DNS models via profile_em_ssm
+result = profile_em_ssm(spec, y; tinitx=0, V0=100.0)  # Default: MARSS-style
+result = profile_em_ssm(spec, y; tinitx=1, V0=1e7)    # Diffuse prior at t=1
+
+# Dynamic Factor Models
+model = DynamicFactorModel(N, k, n; tinitx=0, V0=100.0)  # Default: MARSS-style
+model = DynamicFactorModel(N, k, n; tinitx=1, V0=1e7)    # Diffuse prior at t=1
+```
+
+### Choosing `tinitx` and `V0`
+
+| Use Case | Recommended Setting |
+|----------|---------------------|
+| Match MARSS default | `tinitx=0, V0=100.0` |
+| Diffuse prior (large uncertainty) | `tinitx=1, V0=1e7` |
+| Informative prior at t=1 | `tinitx=1, V0=<your value>` |
+| Short time series | `tinitx=0` (accounts for dynamics) |
+
+**Note:** With `tinitx=0`, very large `V0` values (e.g., 1e7) may cause numerical instability because the transformation `T × V0 × T'` amplifies values. Use `tinitx=1` with large `V0` for diffuse priors.
+
+### Initial State Updating in EM (`update_initial_state`)
+
+By default, `(a₁, P₁)` remains **fixed** throughout EM iterations. Set `update_initial_state=true` to update them at each M-step using smoothed state estimates:
+
+```julia
+# For profile EM (DNS models)
+result = profile_em_ssm(spec, y; update_initial_state=true)
+
+# For high-level API
+fit!(EM(), model, y; update_initial_state=true)
+```
+
+**How it works:**
+
+| EM Iteration | With `update_initial_state=false` (default) | With `update_initial_state=true` |
+|--------------|---------------------------------------------|----------------------------------|
+| 0 (start)    | `a1`, `P1` from `tinitx`/`V0` | `a1`, `P1` from `tinitx`/`V0` |
+| 1            | Same `a1`, `P1` | Updated from smoother |
+| 2            | Same `a1`, `P1` | Updated from smoother |
+| ...          | Same `a1`, `P1` | Updated from smoother |
+
+When `update_initial_state=true`, after each E-step:
+```
+a₁_new = E[α₁ | y₁:n]      (smoothed state mean at t=1)
+P₁_new = Var[α₁ | y₁:n]    (smoothed state covariance at t=1)
+```
+
+**When to use `update_initial_state=true`:**
+- Short time series where t=1 significantly affects the likelihood
+- Comparing results with MARSS R package
+- Estimating the unconditional mean/variance of the state process
+
+**When to keep fixed (default):**
+- Using a diffuse prior
+- Long time series where initial state has negligible effect
+- Numerical stability concerns
+
+The final initial state estimates are returned in `EMResult.a1` and `EMResult.P1`.
 
 ## Parameter Transformations
 

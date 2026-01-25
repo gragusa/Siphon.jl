@@ -376,10 +376,10 @@ println("\nSmoothed state at t=100: ", smooth.alpha[:, 100])
 
 5. **Diffuse initialization**: Use large values in P1 (e.g., 1e7) for diffuse priors on initial states.
 
-6. **Dimension checks**: `custom_ssm` validates dimensions automatically—let it catch errors early.
+6. **Dimension checks**: `custom_ssm` validates dimensions automatically--let it catch errors early.
 
 ## Next Steps
 
-- Learn about **[Parameter Transformations](transformations.md)** for understanding how bounds are handled
-- Learn about **[Dynamic Factor Models](dynamic_factor.md)** for multivariate factor analysis
-- See the **[Core Functions](../api/core.md)** and **[DSL & Templates](../api/dsl.md)** for complete API documentation
+- Learn about [Parameter Transformations](transformations.md) for understanding how bounds are handled
+- Learn about [Dynamic Factor Models](dynamic_factor.md) for multivariate factor analysis
+- See the [Core Functions](../api/core.md) and [DSL & Templates](../api/dsl.md) for complete API documentation

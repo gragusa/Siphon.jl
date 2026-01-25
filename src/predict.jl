@@ -10,7 +10,7 @@ Provides:
 """
 
 using LinearAlgebra
-using .DSL: SSMSpec, build_linear_state_space
+using .DSL: SSMSpec, __build_linear_state_space_impl_impl
 
 # ============================================
 # Missing Data Utilities
@@ -118,16 +118,40 @@ plot!(vec(pred.yhat), label="predicted")
 ```
 """
 function predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; use_static::Bool=true)
-    ss = build_linear_state_space(spec, θ, y; use_static=use_static)
+    ss = _build_linear_state_space_impl(spec, θ, y; use_static=use_static)
     predict(ss.p, y, ss.a1, ss.P1)
 end
 
 """
     predict(p::KFParms, y, a1, P1) -> NamedTuple
 
-Low-level prediction using KFParms directly.
+Compute in-sample one-step-ahead predictions using KFParms directly.
 
-Returns predicted states (at = a_{t|t-1}) and related quantities.
+# Arguments
+- `p::KFParms`: State space parameters (Z, H, T, R, Q)
+- `y::AbstractMatrix`: Observations (obs_dim × n)
+- `a1::AbstractVector`: Initial state mean (state_dim)
+- `P1::AbstractMatrix`: Initial state covariance (state_dim × state_dim)
+
+# Returns
+Named tuple with:
+- `yhat`: One-step-ahead predictions ŷₜ|ₜ₋₁ = Z * aₜ (obs_dim × n)
+- `at`: Predicted states E[αₜ | y₁:ₜ₋₁] (state_dim × n)
+- `Pt`: Predicted state covariances (state_dim × state_dim × n)
+- `att`: Filtered states E[αₜ | y₁:ₜ] (state_dim × n)
+- `Ptt`: Filtered state covariances (state_dim × state_dim × n)
+- `vt`: Innovations vₜ = yₜ - ŷₜ|ₜ₋₁ (obs_dim × n)
+- `Ft`: Innovation covariances (obs_dim × obs_dim × n)
+- `loglik`: Log-likelihood
+- `missing_mask`: BitVector indicating missing observations
+
+# Example
+```julia
+p = KFParms(Z, H, T, R, Q)
+pred = predict(p, y, a1, P1)
+plot(vec(y), label="observed")
+plot!(vec(pred.yhat), label="predicted")
+```
 """
 function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::AbstractMatrix)
     filt = kalman_filter(p, y, a1, P1)
@@ -185,7 +209,7 @@ println("Forecast std: ", sqrt.(fc.F[1,1,:]))
 ```
 """
 function forecast(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, h::Int; use_static::Bool=true)
-    ss = build_linear_state_space(spec, θ, y; use_static=use_static)
+    ss = _build_linear_state_space_impl(spec, θ, y; use_static=use_static)
     forecast(ss.p, y, ss.a1, ss.P1, h)
 end
 
@@ -254,7 +278,7 @@ quantiles = [quantile(paths[1, j, :], [0.1, 0.5, 0.9]) for j in 1:12]
 """
 function forecast_paths(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, h::Int, n_paths::Int;
                         use_static::Bool=true)
-    ss = build_linear_state_space(spec, θ, y; use_static=use_static)
+    ss = _build_linear_state_space_impl(spec, θ, y; use_static=use_static)
     forecast_paths(ss.p, y, ss.a1, ss.P1, h, n_paths)
 end
 

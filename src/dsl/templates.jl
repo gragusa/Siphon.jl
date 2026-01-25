@@ -746,8 +746,10 @@ spec = dns_model(maturities; T_structure=:full, Q_structure=:full)
 result = profile_em_ssm(spec, yields; λ_grid=0.01:0.01:0.2)
 
 # Extract factors
-ss = build_linear_state_space(spec, result.θ, yields)
-smooth = kalman_smoother(ss.p, yields, ss.a1, ss.P1)
+model = StateSpaceModel(spec, result.θ, size(yields, 2))
+kalman_filter!(model, yields)
+kalman_smoother!(model)
+smooth = smoothed_states(model)
 ```
 
 # Parameters Created

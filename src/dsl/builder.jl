@@ -60,25 +60,26 @@ end
 const MatrixInput = Union{Real, FreeParam}
 
 """
-    custom_ssm(; Z, H, T, R, Q, a1, P1, name=:CustomSSM)
+    custom_ssm(; Z, H, T, R, Q, a1, P1, name=:CustomSSM) -> SSMSpec
 
 Create a state-space model specification from explicit matrices.
 
-Use `FreeParam(...)` to mark elements that should be estimated.
+Use `FreeParam(:name, init=val, lower=lb, upper=ub)` to mark elements for estimation.
 Use regular numbers for fixed values.
 
 # Arguments
-- `Z`: Observation matrix (p × m) - relates states to observations
+- `Z`: Observation matrix (p × m)
 - `H`: Observation covariance (p × p)
-- `T`: Transition matrix (m × m) - state dynamics
-- `R`: Selection matrix (m × r) - maps shocks to states
+- `T`: Transition matrix (m × m)
+- `R`: Selection matrix (m × r)
 - `Q`: State covariance (r × r)
 - `a1`: Initial state mean (m-vector)
 - `P1`: Initial state covariance (m × m)
 - `name`: Model name (default: :CustomSSM)
 
-# Example: Local Level Model
+# Example
 ```julia
+# Local level model
 spec = custom_ssm(
     Z = [1.0],
     H = [FreeParam(:var_obs, init=225.0, lower=0.0)],
@@ -88,40 +89,10 @@ spec = custom_ssm(
     a1 = [0.0],
     P1 = [1e7]
 )
-
-# Check parameters
 param_names(spec)  # [:var_obs, :var_level]
 ```
 
-# Example: Local Linear Trend
-```julia
-using LinearAlgebra
-
-spec = custom_ssm(
-    Z = [1.0 0.0],
-    H = [FreeParam(:var_obs, init=1.0, lower=0.0)],
-    T = [1.0 1.0;
-         0.0 1.0],
-    R = Matrix(1.0I, 2, 2),
-    Q = [FreeParam(:var_level, init=0.01, lower=0.0)  0.0;
-         0.0  FreeParam(:var_slope, init=0.0001, lower=0.0)],
-    a1 = [0.0, 0.0],
-    P1 = 1e7 * Matrix(1.0I, 2, 2)
-)
-```
-
-# Example: AR(1) with fixed ρ
-```julia
-spec = custom_ssm(
-    Z = [1.0],
-    H = [FreeParam(:var_obs, init=1.0, lower=0.0)],
-    T = [0.9],  # Fixed AR coefficient
-    R = [1.0],
-    Q = [FreeParam(:var_state, init=1.0, lower=0.0)],
-    a1 = [0.0],
-    P1 = [1e4]
-)
-```
+See also: `local_level`, `ar1`, `arma`, `dynamic_factor` for pre-built templates.
 """
 function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol=:CustomSSM)
     # Collect parameters and MatrixExpr objects

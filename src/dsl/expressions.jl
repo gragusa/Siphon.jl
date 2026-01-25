@@ -25,20 +25,20 @@ A matrix element that is a function of parameters and external data.
 elem = ParamExpr(:λ, (τ=τ,), (λ, τ) -> (1 - exp(-τ*λ)) / (τ*λ))
 ```
 """
-struct ParamExpr
+struct ParamExpr{F<:Function}
     params::Tuple{Vararg{Symbol}}
     data::NamedTuple
-    expr::Function
+    expr::F
 end
 
 # Convenience constructors
-ParamExpr(param::Symbol, data::NamedTuple, expr::Function) =
-    ParamExpr((param,), data, expr)
+ParamExpr(param::Symbol, data::NamedTuple, expr::F) where {F<:Function} =
+    ParamExpr{F}((param,), data, expr)
 
-ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function) =
+ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::F) where {F<:Function} =
     ParamExpr(params, (val=data,), (args...) -> expr(args[1:length(params)]..., data))
 
-ParamExpr(param::Symbol, data::Real, expr::Function) =
+ParamExpr(param::Symbol, data::Real, expr::F) where {F<:Function} =
     ParamExpr((param,), (val=data,), (p, v) -> expr(p, data))
 
 """
@@ -75,21 +75,21 @@ Z = MatrixExpr(
 )
 ```
 """
-struct MatrixExpr
+struct MatrixExpr{F<:Function}
     params::Vector{SSMParameter{Float64}}
     data::NamedTuple
-    builder::Function
+    builder::F
     dims::Tuple{Int,Int}  # Expected output dimensions
 end
 
-function MatrixExpr(params, data::NamedTuple, builder::Function; dims=nothing)
+function MatrixExpr(params, data::NamedTuple, builder::F; dims=nothing) where {F<:Function}
     # If dims not provided, try to infer by calling builder with dummy values
     if dims === nothing
         θ_dummy = Dict(p.name => p.init for p in params)
         test_mat = builder(θ_dummy, data)
         dims = size(test_mat)
     end
-    MatrixExpr(params, data, builder, dims)
+    MatrixExpr{F}(params, data, builder, dims)
 end
 
 # ============================================

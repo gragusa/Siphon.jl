@@ -49,7 +49,7 @@ module DSL
 using LinearAlgebra
 using TransformVariables
 using ..Siphon: KFParms, KFParms_static, kalman_loglik
-using ..Siphon: kalman_filter, kalman_smoother
+using ..Siphon: kalman_filter, kalman_smoother, ismissing_obs
 using ..Siphon: to_static_if_small, STATIC_THRESHOLD
 
 include("types.jl")
@@ -96,5 +96,6 @@ export optimize_ssm, optimize_ssm_with_stderr
 
 # EM algorithm - main API is fit!(EM(), model, y)
 export EMResult, profile_em_ssm, ProfileEMResult
+export _mstep_Z, _mstep_T, _mstep_H_diag, _mstep_Q_diag, _mstep_H_full, _mstep_Q_full
 
 end # module DSL

@@ -428,6 +428,18 @@ end
 """
     build_linear_state_space(spec::SSMSpec, θ, y; use_static=true)
 
+!!! warning "Deprecated"
+    This function is deprecated. Use `StateSpaceModel(spec, θ, n)` instead for a unified API:
+    ```julia
+    # Old way (deprecated)
+    ss = build_linear_state_space(spec, θ, y)
+    ll = kalman_loglik(ss.p, y, ss.a1, ss.P1)
+
+    # New way (recommended)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+    ll = kalman_loglik(model, y)
+    ```
+
 Build state-space model components from specification.
 
 Accepts either a Vector or NamedTuple of parameters.
@@ -446,6 +458,21 @@ Returns a NamedTuple with:
 """
 function build_linear_state_space(spec::SSMSpec, θ::Union{AbstractVector, NamedTuple}, y;
                                    use_static::Bool=true)
+    Base.depwarn(
+        "`build_linear_state_space` is deprecated. Use `StateSpaceModel(spec, θ, n)` instead for a unified API.",
+        :build_linear_state_space
+    )
+    return _build_linear_state_space_impl(spec, θ, y; use_static=use_static)
+end
+
+"""
+    _build_linear_state_space_impl(spec, θ, y; use_static=true)
+
+Internal implementation of build_linear_state_space without deprecation warning.
+Used by internal code that still needs this functionality.
+"""
+function _build_linear_state_space_impl(spec::SSMSpec, θ::Union{AbstractVector, NamedTuple}, y;
+                                        use_static::Bool=true)
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
 
@@ -469,12 +496,24 @@ Returns a callable that computes -loglik for a given parameter vector theta.
 Uses the AD-compatible kalman_loglik function.
 """
 function objective_function(spec::SSMSpec, y)
-    function negloglik(theta)
-        kfparms = build_kfparms(spec, theta)
-        a1, P1 = build_initial_state(spec, theta)
+    # Pre-compile the builder function to avoid runtime eval and iteration
+    builder = compile_specification(spec)
+    
+    # Pre-compute param names for vector conversion
+    p_names = Tuple(p.name for p in spec.params)
+    
+    function negloglik(theta::NamedTuple)
+        kfparms, a1, P1 = builder(theta)
         ll = kalman_loglik(kfparms, y, a1, P1)
         return -ll
     end
+
+    function negloglik(theta::AbstractVector)
+        # Convert to NamedTuple assuming order matches spec.params
+        theta_nt = NamedTuple{p_names}(Tuple(theta))
+        return negloglik(theta_nt)
+    end
+
     return negloglik
 end
 
@@ -486,6 +525,8 @@ Compute log-likelihood directly from spec and NamedTuple parameters.
 This is the recommended high-level API for likelihood evaluation.
 """
 function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
+    # We use the interpreted builder here for simplicity, as this is typically
+    # called once (not in a loop). For loops, use objective_function.
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
     kalman_loglik(kfparms, y, a1, P1)
@@ -493,3 +534,181 @@ end
 
 # Alias for consistency
 const kalman_loglik_spec = ssm_loglik
+
+# ============================================
+# Compilation (Pre-generated Code)
+# ============================================
+
+"""
+    compile_specification(spec::SSMSpec)
+
+Compile an SSMSpec into a fast, type-stable function that takes parameters `θ`
+and returns `(KFParms, a1, P1)`.
+
+This eliminates runtime `eval` calls and unrolls matrix construction loops,
+providing a significant performance boost during optimization.
+
+Returns a function `θ -> (KFParms, a1, P1)`.
+"""
+function compile_specification(spec::SSMSpec)
+    # We build an expression that constructs the matrices directly
+    # and then evaluate it into a function.
+    
+    # 1. Generate code for each matrix
+    Z_code = _compile_matrix_or_expr(:Z, spec)
+    H_code = _compile_matrix_or_expr(:H, spec)
+    T_code = _compile_matrix_or_expr(:T, spec)
+    R_code = _compile_matrix_or_expr(:R, spec)
+    Q_code = _compile_matrix_or_expr(:Q, spec)
+    
+    # 2. Generate code for initial state
+    a1_code = _compile_vector(spec.a1)
+    P1_code = _compile_matrix(spec.P1)
+    
+    # 3. Build the full function expression
+    func_expr = quote
+        function model_builder(θ::NamedTuple)
+            T_el = _eltype(θ)
+            
+            # System matrices
+            Z = $Z_code
+            H = $H_code
+            Tr = $T_code
+            R = $R_code
+            Q = $Q_code
+            
+            # Initial state
+            a1 = $a1_code
+            P1 = $P1_code
+            
+            kfparms = KFParms(Z, H, Tr, R, Q)
+            return (kfparms, a1, P1)
+        end
+    end
+    
+    # 4. Compile and return
+    return eval(func_expr)
+end
+
+function _compile_matrix_or_expr(name::Symbol, spec::SSMSpec)
+    if haskey(spec.matrix_exprs, name)
+        expr = spec.matrix_exprs[name]
+        return _compile_from_expr(expr)
+    else
+        mat_spec = getfield(spec, name)
+        return _compile_matrix(mat_spec)
+    end
+end
+
+function _compile_matrix(spec::SSMMatrixSpec)
+    m, n = spec.dims
+    
+    # Start with a fill of the default value
+    default_val = spec.default
+    
+    # If default is 0.0, we can use zeros
+    if default_val isa FixedValue && default_val.value == 0.0
+        init_code = :(zeros(T_el, $m, $n))
+    else
+        def_code = _compile_element(default_val)
+        init_code = :(fill($def_code, $m, $n))
+    end
+    
+    # Create the block of assignments
+    assignments = Expr(:block)
+    for ((i, j), elem) in spec.elements
+        val_code = _compile_element(elem)
+        push!(assignments.args, :(M[$i, $j] = $val_code))
+    end
+    
+    # Combine into a let block to scope M
+    return quote
+        let
+            M = $init_code
+            $assignments
+            M
+        end
+    end
+end
+
+function _compile_vector(vec::Vector{MatrixElement})
+    n = length(vec)
+    elements = [_compile_element(elem) for elem in vec]
+    return :(T_el[$(elements...)])
+end
+
+function _compile_element(elem::FixedValue)
+    return elem.value
+end
+
+function _compile_element(elem::ParameterRef)
+    return :(θ.$(elem.name))
+end
+
+function _compile_element(elem::Expr)
+    # Replace symbols in the expression with θ.symbol
+    return _transform_expr(elem)
+end
+
+function _transform_expr(ex::Expr)
+    if ex.head == :call
+        # Recursively transform arguments
+        new_args = [_transform_expr(a) for a in ex.args[2:end]]
+        return Expr(:call, ex.args[1], new_args...)
+    elseif ex.head == :ref
+        error("Array indexing not supported in parameter expressions")
+    else
+        return ex
+    end
+end
+
+function _transform_expr(sym::Symbol)
+    # If it's a known math function, leave it. Otherwise assume it's a parameter.
+    # This is a heuristic. Ideally we'd know the valid params.
+    # But for now, we assume any symbol that isn't a function is a param.
+    if isdefined(Base, sym) || isdefined(Main, sym)
+        return sym
+    else
+        return :(θ.$sym)
+    end
+end
+
+function _transform_expr(val::Number)
+    return val
+end
+
+function _compile_from_expr(expr::CovMatrixExpr)
+    n = expr.n
+    σ_names = expr.σ_param_names
+    corr_names = expr.corr_param_names
+    
+    return quote
+        # Build D from σ parameters
+        σ = T_el[$([:(θ.$name) for name in σ_names]...)]
+        D = Diagonal(σ)
+
+        # Build Corr from correlation parameters
+        if $n > 1
+            corr_vec = T_el[$([:(θ.$name) for name in corr_names]...)]
+            t_corr = corr_cholesky_factor($n)
+            L = TransformVariables.transform(t_corr, corr_vec)
+            Corr = L' * L
+        else
+            Corr = ones(T_el, 1, 1)
+        end
+
+        # Compute covariance and symmetrize
+        Σ = D * Corr * D
+        (Σ + Σ') / 2
+    end
+end
+
+# Fallback for generic builder functions
+function _compile_from_expr(expr)
+    # This case is harder because it uses a custom builder function.
+    # We can't easily inline the builder function code.
+    # We'll just call the existing logic but wrapped in the closure.
+    return quote
+        build_from_expr($expr, θ)
+    end
+end

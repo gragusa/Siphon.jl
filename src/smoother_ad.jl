@@ -108,19 +108,31 @@ function kalman_smoother(Z::AbstractMatrix, T::AbstractMatrix,
             F_t = view(Ft, :, :, t)
 
             # F_t^{-1}
-            F_inv = inv(F_t)
+            if size(F_t, 1) == 1
+                F_inv = one(ET) / F_t[1, 1]
+                F_inv_mat = fill(F_inv, 1, 1)
+            else
+                # Multivariate: use Cholesky
+                F_sym = Symmetric((F_t + F_t') / 2)
+                chol_F = cholesky(F_sym; check=false)
+                if issuccess(chol_F)
+                    F_inv_mat = inv(chol_F)
+                else
+                    F_inv_mat = inv(F_t) # Fallback
+                end
+            end
 
             # Kalman gain: K_t = T * P_t * Z' * F_t^{-1}
-            K_t = T * P_t * Z' * F_inv
+            K_t = T * P_t * Z' * F_inv_mat
 
             # L_t = T - K_t * Z
             L_t = T - K_t * Z
 
             # Compute r_{t-1} = Z' * F_t^{-1} * v_t + L_t' * r_t
-            r_new = Z' * F_inv * v_t + L_t' * r_vec
+            r_new = Z' * F_inv_mat * v_t + L_t' * r_vec
 
             # Compute N_{t-1} = Z' * F_t^{-1} * Z + L_t' * N_t * L_t
-            N_new = Z' * F_inv * Z + L_t' * N_mat * L_t
+            N_new = Z' * F_inv_mat * Z + L_t' * N_mat * L_t
 
             # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
             alpha_smooth[:, t] = a_t + P_t * r_new
@@ -167,7 +179,13 @@ function kalman_smoother(Z::AbstractMatrix, T::AbstractMatrix,
             else
                 # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Z' * inv(F_t) * Z * P_{t|t-1}
                 F_t = view(Ft, :, :, t)
-                F_inv = inv(F_t)
+                if size(F_t, 1) == 1
+                    F_inv_val = one(ET) / F_t[1,1]
+                    F_inv = fill(F_inv_val, 1, 1)
+                else
+                    chol_F = cholesky(Symmetric(F_t); check=false)
+                    F_inv = issuccess(chol_F) ? inv(chol_F) : inv(F_t)
+                end
                 P_upd_t = P_pred_t - P_pred_t * Z' * F_inv * Z * P_pred_t
             end
 
@@ -178,7 +196,15 @@ function kalman_smoother(Z::AbstractMatrix, T::AbstractMatrix,
             for i in 1:state_dim
                 P_pred_tp1_reg[i, i] += eps_reg
             end
-            J_t = P_upd_t * T' * inv(Symmetric(P_pred_tp1_reg))
+            
+            # Use Cholesky for inversion
+            P_sym = Symmetric(P_pred_tp1_reg)
+            chol_P = cholesky(P_sym; check=false)
+            if issuccess(chol_P)
+                J_t = P_upd_t * T' / chol_P
+            else
+                J_t = P_upd_t * T' * inv(P_sym)
+            end
 
             # V_{t+1} is the smoothed covariance at t+1
             V_tp1 = view(V_smooth, :, :, t+1)
@@ -295,11 +321,30 @@ function kalman_filter_and_smooth(p::KFParms, y::AbstractMatrix,
 end
 
 """
-    kalman_smoother_scalar(Z, T, at, Pt, vt, Ft; missing_mask=nothing)
+    kalman_smoother_scalar(Z, T, at, Pt, vt, Ft; missing_mask=nothing) -> (alpha, V)
 
 Scalar version of RTS smoother for univariate state-space models.
 
-Handles missing observations (NaN in vt or indicated by missing_mask).
+# Arguments
+- `Z::Real`: Observation coefficient
+- `T::Real`: State transition coefficient
+- `at::AbstractVector`: Predicted states from filter (length n)
+- `Pt::AbstractVector`: Predicted variances from filter (length n)
+- `vt::AbstractVector`: Innovations from filter (length n), NaN for missing
+- `Ft::AbstractVector`: Innovation variances from filter (length n)
+- `missing_mask`: Optional BitVector indicating missing observations
+
+# Returns
+- `alpha::Vector`: Smoothed states E[αₜ | y₁:ₙ] (length n)
+- `V::Vector`: Smoothed variances Var[αₜ | y₁:ₙ] (length n)
+
+# Example
+```julia
+# Scalar local level: α_{t+1} = α_t + η_t, y_t = α_t + ε_t
+Z, T = 1.0, 1.0
+filt = kalman_filter_scalar(Z, 100.0, T, 1.0, 10.0, 0.0, 1e7, y)
+alpha, V = kalman_smoother_scalar(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft)
+```
 """
 function kalman_smoother_scalar(Z::Real, T::Real,
                                 at::AbstractVector, Pt::AbstractVector,

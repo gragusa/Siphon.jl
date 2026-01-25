@@ -2,6 +2,15 @@
 
 *A Julia package for Linear State Space Models with Kalman filtering and smoothing.*
 
+## Installation
+
+```julia
+using Pkg
+Pkg.add("Siphon")
+```
+
+
+
 ## Overview
 
 Siphon.jl provides a comprehensive toolkit for working with linear Gaussian state space models. It combines high-performance Kalman filtering algorithms with an ergonomic domain-specific language (DSL) for model specification.
@@ -36,13 +45,6 @@ where:
 - ``T`` is the ``m \times m`` transition matrix
 - ``R`` is the ``m \times r`` selection matrix
 - ``Q`` is the ``r \times r`` state innovation covariance
-
-## Installation
-
-```julia
-using Pkg
-Pkg.add("Siphon")
-```
 
 ## Quick Start
 
