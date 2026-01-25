@@ -15,9 +15,9 @@ using DelimitedFiles
 
 # Helper function to load MARSS results CSV
 function load_marss_results(filename)
-    data = readdlm(joinpath(@__DIR__, filename), ','; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, filename), ','; header = true)[1]
     result = Dict{String,Float64}()
-    for i in 1:size(data, 1)
+    for i = 1:size(data, 1)
         param_name = String(data[i, 1])
         param_value = Float64(data[i, 2])
         result[param_name] = param_value
@@ -65,7 +65,7 @@ end
 
     @testset "Z matrix matches MARSS" begin
         # Load MARSS Z matrix
-        z_data = readdlm(joinpath(@__DIR__, "marss_dns_Z.csv"), ','; header=true)[1]
+        z_data = readdlm(joinpath(@__DIR__, "marss_dns_Z.csv"), ','; header = true)[1]
         maturities = Int.(z_data[:, 1])
         Z_marss = z_data[:, 2:4]
 
@@ -74,7 +74,7 @@ end
 
         # Build Z matrix using Siphon
         Z_siphon = ones(p, 3)
-        for i in 1:p
+        for i = 1:p
             Z_siphon[i, 2] = Siphon.dns_loading1(λ, maturities[i])
             Z_siphon[i, 3] = Siphon.dns_loading2(λ, maturities[i])
         end
@@ -90,7 +90,7 @@ end
 
 @testset "DNS Log-likelihood - MARSS Validation" begin
     # Load reference data and results
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')  # Convert to p × n
 
     p, n = size(y)
@@ -102,7 +102,7 @@ end
 
     # Build Z matrix at MARSS lambda
     Z = ones(p, m)
-    for i in 1:p
+    for i = 1:p
         Z[i, 2] = Siphon.dns_loading1(λ, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ, maturities[i])
     end
@@ -115,12 +115,17 @@ end
 
     # Build H matrix from MARSS estimates (diagonal)
     # Note: MARSS R_i corresponds to our H_ii
-    H = diagm([results_diag["R_1"], results_diag["R_2"], results_diag["R_3"],
-               results_diag["R_4"], results_diag["R_5"]])
+    H = diagm([
+        results_diag["R_1"],
+        results_diag["R_2"],
+        results_diag["R_3"],
+        results_diag["R_4"],
+        results_diag["R_5"],
+    ])
 
     # Handle zero variance (MARSS sometimes estimates exactly 0)
     # Replace with small positive value to avoid numerical issues
-    for i in 1:p
+    for i = 1:p
         if H[i, i] < 1e-10
             H[i, i] = 1e-10
         end
@@ -151,7 +156,7 @@ end
     # 1. Initial state convention differences
     # 2. Numerical precision
     # 3. H diagonal elements set to 1e-10 instead of 0
-    @test isapprox(ll_siphon, ll_marss, rtol=0.01)
+    @test isapprox(ll_siphon, ll_marss, rtol = 0.01)
 end
 
 # ============================================
@@ -160,7 +165,7 @@ end
 
 @testset "DNS EM - Diagonal Structure - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     p, n = size(y)
@@ -172,7 +177,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i in 1:p
+    for i = 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -182,7 +187,7 @@ end
     R = Matrix(1.0I, m, m)
 
     # Initialize H closer to MARSS (avoid zeros by using small positive values)
-    H_diag = [max(results["R_$i"], 1e-6) for i in 1:p]
+    H_diag = [max(results["R_$i"], 1e-6) for i = 1:p]
     H_init = diagm(H_diag)
 
     # Initialize Q closer to MARSS
@@ -194,17 +199,22 @@ end
 
     # Run general EM (with diagonal constraints via free masks)
     em_result = Siphon.DSL._em_general_ssm_full_cov(
-        Float64.(Z), T_init, Float64.(R),
-        H_init, Q_init,
-        y, a1, P1;
-        Z_free=falses(p, m),      # Z is fixed
-        T_free=Matrix(I(m)) .== 1, # Only diagonal T elements
-        H_free=Matrix(I(p)) .== 1, # Only diagonal H elements
-        Q_free=Matrix(I(m)) .== 1, # Only diagonal Q elements
-        maxiter=2000,
-        tol_ll=1e-8,
-        tol_param=1e-6,
-        verbose=false
+        Float64.(Z),
+        T_init,
+        Float64.(R),
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = falses(p, m),      # Z is fixed
+        T_free = Matrix(I(m)) .== 1, # Only diagonal T elements
+        H_free = Matrix(I(p)) .== 1, # Only diagonal H elements
+        Q_free = Matrix(I(m)) .== 1, # Only diagonal Q elements
+        maxiter = 2000,
+        tol_ll = 1e-8,
+        tol_param = 1e-6,
+        verbose = false,
     )
 
     println("\nJulia DNS EM Results (Diagonal):")
@@ -215,7 +225,7 @@ end
     println("Q_L = $(em_result.Q[1,1]) (MARSS: $(results["Q_L"]))")
     println("Q_S = $(em_result.Q[2,2]) (MARSS: $(results["Q_S"]))")
     println("Q_C = $(em_result.Q[3,3]) (MARSS: $(results["Q_C"]))")
-    for i in 1:p
+    for i = 1:p
         println("H_$i = $(em_result.H[i,i]) (MARSS: $(results["R_$i"]))")
     end
     println("loglik = $(em_result.loglik) (MARSS: $(results["loglik"]))")
@@ -223,17 +233,17 @@ end
     println("converged = $(em_result.converged)")
 
     # Test transition matrix (T) estimates
-    @test isapprox(em_result.T[1,1], results["B_L"], rtol=0.05)
-    @test isapprox(em_result.T[2,2], results["B_S"], rtol=0.05)
-    @test isapprox(em_result.T[3,3], results["B_C"], rtol=0.05)
+    @test isapprox(em_result.T[1, 1], results["B_L"], rtol = 0.05)
+    @test isapprox(em_result.T[2, 2], results["B_S"], rtol = 0.05)
+    @test isapprox(em_result.T[3, 3], results["B_C"], rtol = 0.05)
 
     # Test state covariance (Q) estimates
-    @test isapprox(em_result.Q[1,1], results["Q_L"], rtol=0.10)  # Looser for Q
-    @test isapprox(em_result.Q[2,2], results["Q_S"], rtol=0.10)
-    @test isapprox(em_result.Q[3,3], results["Q_C"], rtol=0.10)
+    @test isapprox(em_result.Q[1, 1], results["Q_L"], rtol = 0.10)  # Looser for Q
+    @test isapprox(em_result.Q[2, 2], results["Q_S"], rtol = 0.10)
+    @test isapprox(em_result.Q[3, 3], results["Q_C"], rtol = 0.10)
 
     # Test log-likelihood
-    @test isapprox(em_result.loglik, results["loglik"], rtol=0.001)
+    @test isapprox(em_result.loglik, results["loglik"], rtol = 0.001)
 
     # Siphon should achieve at least as good log-likelihood as MARSS
     @test em_result.loglik >= results["loglik"] - 1.0  # Allow some tolerance for numerical issues
@@ -245,7 +255,7 @@ end
 
 @testset "DNS EM - Full Structure - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     p, n = size(y)
@@ -257,7 +267,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i in 1:p
+    for i = 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -274,51 +284,60 @@ end
 
     # Run general EM with full T and Q
     em_result = Siphon.DSL._em_general_ssm_full_cov(
-        Float64.(Z), T_init, Float64.(R),
-        H_init, Q_init,
-        y, a1, P1;
-        Z_free=falses(p, m),      # Z is fixed
-        T_free=trues(m, m),       # Full T
-        H_free=Matrix(I(p)) .== 1, # Diagonal H (as in MARSS)
-        Q_free=trues(m, m),       # Full Q
-        maxiter=2000,
-        tol_ll=1e-8,
-        tol_param=1e-6,
-        verbose=false
+        Float64.(Z),
+        T_init,
+        Float64.(R),
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = falses(p, m),      # Z is fixed
+        T_free = trues(m, m),       # Full T
+        H_free = Matrix(I(p)) .== 1, # Diagonal H (as in MARSS)
+        Q_free = trues(m, m),       # Full Q
+        maxiter = 2000,
+        tol_ll = 1e-8,
+        tol_param = 1e-6,
+        verbose = false,
     )
 
     # Extract MARSS T matrix estimates
-    T_marss = [results["B_1_1"] results["B_1_2"] results["B_1_3"];
-               results["B_2_1"] results["B_2_2"] results["B_2_3"];
-               results["B_3_1"] results["B_3_2"] results["B_3_3"]]
+    T_marss = [
+        results["B_1_1"] results["B_1_2"] results["B_1_3"];
+        results["B_2_1"] results["B_2_2"] results["B_2_3"];
+        results["B_3_1"] results["B_3_2"] results["B_3_3"]
+    ]
 
     # Extract MARSS Q matrix estimates
-    Q_marss = [results["Q_1_1"] results["Q_1_2"] results["Q_1_3"];
-               results["Q_2_1"] results["Q_2_2"] results["Q_2_3"];
-               results["Q_3_1"] results["Q_3_2"] results["Q_3_3"]]
+    Q_marss = [
+        results["Q_1_1"] results["Q_1_2"] results["Q_1_3"];
+        results["Q_2_1"] results["Q_2_2"] results["Q_2_3"];
+        results["Q_3_1"] results["Q_3_2"] results["Q_3_3"]
+    ]
 
     println("\nJulia DNS EM Results (Full):")
     println("============================")
     println("T matrix:")
-    display(round.(em_result.T, digits=4))
+    display(round.(em_result.T, digits = 4))
     println("\nMARSS T matrix:")
-    display(round.(T_marss, digits=4))
+    display(round.(T_marss, digits = 4))
     println("\nQ matrix:")
-    display(round.(em_result.Q, digits=4))
+    display(round.(em_result.Q, digits = 4))
     println("\nMARSS Q matrix:")
-    display(round.(Q_marss, digits=4))
+    display(round.(Q_marss, digits = 4))
     println("\nloglik = $(em_result.loglik) (MARSS: $(results["loglik"]))")
     println("iterations = $(em_result.iterations)")
     println("converged = $(em_result.converged)")
 
     # Test T matrix (looser tolerance for full matrix)
-    @test isapprox(em_result.T, T_marss, rtol=0.10)
+    @test isapprox(em_result.T, T_marss, rtol = 0.10)
 
     # Test Q matrix
-    @test isapprox(em_result.Q, Q_marss, rtol=0.15)  # Covariances harder to estimate
+    @test isapprox(em_result.Q, Q_marss, rtol = 0.15)  # Covariances harder to estimate
 
     # Test log-likelihood (primary metric)
-    @test isapprox(em_result.loglik, results["loglik"], rtol=0.005)
+    @test isapprox(em_result.loglik, results["loglik"], rtol = 0.005)
 
     # Siphon should achieve comparable log-likelihood
     @test em_result.loglik >= results["loglik"] - 5.0
@@ -330,7 +349,7 @@ end
 
 @testset "DNS EM - Scalar H - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     p, n = size(y)
@@ -342,7 +361,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i in 1:p
+    for i = 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -372,7 +391,7 @@ end
     println("  Diff:   $(ll_siphon - ll_marss)")
 
     # Log-likelihood should match at MARSS parameters
-    @test isapprox(ll_siphon, ll_marss, rtol=0.001)
+    @test isapprox(ll_siphon, ll_marss, rtol = 0.001)
 
     # Also verify the scalar H model makes sense: MARSS parameters
     println("\nMARSS Scalar H parameters:")
@@ -387,24 +406,24 @@ end
 
 @testset "DNS Profile EM - Grid Search" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header=true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     maturities = [3, 12, 24, 60, 120]
 
     # Create DNS spec
-    spec = dns_model(maturities;
-        T_structure=:diagonal,
-        H_structure=:diagonal,
-        Q_structure=:diagonal,
-        λ_init=0.06,
-        diffuse=false)
+    spec = dns_model(
+        maturities;
+        T_structure = :diagonal,
+        H_structure = :diagonal,
+        Q_structure = :diagonal,
+        λ_init = 0.06,
+        diffuse = false,
+    )
 
     # Run profile EM with grid search over lambda
-    result = profile_em_ssm(spec, y;
-        λ_grid=0.04:0.01:0.10,
-        verbose=false,
-        maxiter=200)
+    result =
+        profile_em_ssm(spec, y; λ_grid = 0.04:0.01:0.10, verbose = false, maxiter = 200)
 
     println("\nProfile EM Results:")
     println("==================")

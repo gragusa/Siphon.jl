@@ -53,11 +53,15 @@ Named tuple with:
 - `f_true`: r × T true factor matrix
 - `Lambda_true`: N × r true loading matrix
 """
-function simulate_dfm(N::Int, T::Int, r::Int;
-                      phi::Float64=0.7,
-                      sigma_f::Float64=1.0,
-                      sigma_e::Float64=0.5,
-                      rng::AbstractRNG=Random.default_rng())
+function simulate_dfm(
+    N::Int,
+    T::Int,
+    r::Int;
+    phi::Float64 = 0.7,
+    sigma_f::Float64 = 1.0,
+    sigma_e::Float64 = 0.5,
+    rng::AbstractRNG = Random.default_rng(),
+)
     # Generate loadings: Lambda ~ N(0, 1)
     Lambda = randn(rng, N, r)
 
@@ -73,7 +77,7 @@ function simulate_dfm(N::Int, T::Int, r::Int;
     end
 
     # Simulate AR(1) process
-    for t in 2:T
+    for t = 2:T
         f[:, t] = phi * f[:, t-1] + sigma_f * randn(rng, r)
     end
 
@@ -81,7 +85,7 @@ function simulate_dfm(N::Int, T::Int, r::Int;
     e = sigma_e * randn(rng, N, T)
     y = Lambda * f + e
 
-    return (y=y, f_true=f, Lambda_true=Lambda)
+    return (y = y, f_true = f, Lambda_true = Lambda)
 end
 
 # ============================================================================
@@ -110,23 +114,30 @@ Named tuple with:
 - `loglik`: Final log-likelihood
 - `time`: Computation time in seconds
 """
-function extract_kfs(y::Matrix{Float64}, r::Int;
-                     factor_lags::Int=1,
-                     maxiter::Int=200,
-                     tol::Float64=1e-6,
-                     verbose::Bool=false)
+function extract_kfs(
+    y::Matrix{Float64},
+    r::Int;
+    factor_lags::Int = 1,
+    maxiter::Int = 200,
+    tol::Float64 = 1e-6,
+    verbose::Bool = false,
+)
     N, T = size(y)
 
     # Create model (static loadings, white noise errors - matching simulation DGP)
-    model = DynamicFactorModel(N, r, T;
-                               loading_lags=0,
-                               factor_lags=factor_lags,
-                               error_lags=0,
-                               identification=:named_factor)
+    model = DynamicFactorModel(
+        N,
+        r,
+        T;
+        loading_lags = 0,
+        factor_lags = factor_lags,
+        error_lags = 0,
+        identification = :named_factor,
+    )
 
     # Fit with EM algorithm
     t_start = time()
-    fit!(EM(), model, y; maxiter=maxiter, tol=tol, verbose=verbose)
+    fit!(EM(), model, y; maxiter = maxiter, tol = tol, verbose = verbose)
     t_elapsed = time() - t_start
 
     # Extract smoothed factors (r × T)
@@ -135,12 +146,14 @@ function extract_kfs(y::Matrix{Float64}, r::Int;
     # Extract contemporaneous loadings (first element)
     Lambda = Siphon.loadings(model)[1]
 
-    return (factors=F,
-            loadings=Lambda,
-            model=model,
-            converged=isconverged(model),
-            loglik=loglikelihood(model),
-            time=t_elapsed)
+    return (
+        factors = F,
+        loadings = Lambda,
+        model = model,
+        converged = isconverged(model),
+        loglik = loglikelihood(model),
+        time = t_elapsed,
+    )
 end
 
 """
@@ -161,16 +174,14 @@ Named tuple with:
 - `fm`: FactorModel object
 - `time`: Computation time in seconds
 """
-function extract_pca(y::Matrix{Float64}, r::Int;
-                     demean::Bool=true,
-                     scale::Bool=false)
+function extract_pca(y::Matrix{Float64}, r::Int; demean::Bool = true, scale::Bool = false)
     N, T = size(y)
 
     # Factotum expects T × N, so transpose
     y_transposed = permutedims(y)
 
     t_start = time()
-    fm = FactorModel(y_transposed, r; demean=demean, scale=scale)
+    fm = FactorModel(y_transposed, r; demean = demean, scale = scale)
     t_elapsed = time() - t_start
 
     # Factotum returns T × r factors, we want r × T
@@ -179,10 +190,7 @@ function extract_pca(y::Matrix{Float64}, r::Int;
     # Loadings are N × r in Factotum (same as we want)
     Lambda = Factotum.loadings(fm)
 
-    return (factors=F,
-            loadings=Lambda,
-            fm=fm,
-            time=t_elapsed)
+    return (factors = F, loadings = Lambda, fm = fm, time = t_elapsed)
 end
 
 # ============================================================================
@@ -213,8 +221,8 @@ function procrustes_align(F_est::Matrix{Float64}, F_true::Matrix{Float64})
     @assert size(F_true) == (r, T) "Dimensions must match"
 
     # Standardize both (important for numerical stability)
-    F_est_centered = F_est .- mean(F_est, dims=2)
-    F_true_centered = F_true .- mean(F_true, dims=2)
+    F_est_centered = F_est .- mean(F_est, dims = 2)
+    F_true_centered = F_true .- mean(F_true, dims = 2)
 
     # Compute cross-covariance: C = F_est * F_true' (r × r)
     C = F_est_centered * F_true_centered' / T
@@ -236,9 +244,9 @@ function procrustes_align(F_est::Matrix{Float64}, F_true::Matrix{Float64})
     F_aligned = R * F_est
 
     # Compute total MSE after alignment (this is meaningful for any r)
-    procrustes_mse = mean((F_aligned .- F_true).^2)
+    procrustes_mse = mean((F_aligned .- F_true) .^ 2)
 
-    return (F_aligned=F_aligned, R=R, procrustes_mse=procrustes_mse)
+    return (F_aligned = F_aligned, R = R, procrustes_mse = procrustes_mse)
 end
 
 """
@@ -264,8 +272,8 @@ function canonical_correlations(F_est::Matrix{Float64}, F_true::Matrix{Float64})
     @assert size(F_true) == (r, T) "Dimensions must match"
 
     # Center the factors
-    F_est_c = F_est .- mean(F_est, dims=2)
-    F_true_c = F_true .- mean(F_true, dims=2)
+    F_est_c = F_est .- mean(F_est, dims = 2)
+    F_true_c = F_true .- mean(F_true, dims = 2)
 
     # Compute covariance matrices (r × r)
     Σ_ee = F_est_c * F_est_c' / T      # Var(F_est)
@@ -298,12 +306,12 @@ function canonical_correlations(F_est::Matrix{Float64}, F_true::Matrix{Float64})
     canon_corrs = clamp.(canon_corrs, 0.0, 1.0)
 
     # Sort descending
-    sort!(canon_corrs, rev=true)
+    sort!(canon_corrs, rev = true)
 
     return (
         correlations = canon_corrs,
         avg_correlation = mean(canon_corrs),
-        min_correlation = minimum(canon_corrs)
+        min_correlation = minimum(canon_corrs),
     )
 end
 
@@ -327,8 +335,12 @@ Named tuple with:
 - `space_r2`: Factor space R² (rotation-invariant)
 - `mse_loadings`: MSE of loadings (after rotation alignment)
 """
-function compute_metrics(F_est::Matrix{Float64}, F_true::Matrix{Float64},
-                        Lambda_est::Matrix{Float64}, Lambda_true::Matrix{Float64})
+function compute_metrics(
+    F_est::Matrix{Float64},
+    F_true::Matrix{Float64},
+    Lambda_est::Matrix{Float64},
+    Lambda_true::Matrix{Float64},
+)
     r, T = size(F_est)
     N, _ = size(Lambda_est)
 
@@ -358,7 +370,7 @@ function compute_metrics(F_est::Matrix{Float64}, F_true::Matrix{Float64},
 
     # 4. Loadings comparison (rotate loadings consistently with Procrustes)
     Lambda_rotated = Lambda_est * R'
-    mse_loadings = mean((Lambda_rotated .- Lambda_true).^2)
+    mse_loadings = mean((Lambda_rotated .- Lambda_true) .^ 2)
 
     return (
         mse_factors = mse_factors,
@@ -366,7 +378,7 @@ function compute_metrics(F_est::Matrix{Float64}, F_true::Matrix{Float64},
         avg_canonical_corr = cc.avg_correlation,
         min_canonical_corr = cc.min_correlation,
         space_r2 = space_r2,
-        mse_loadings = mse_loadings
+        mse_loadings = mse_loadings,
     )
 end
 
@@ -394,13 +406,14 @@ Following simulation design from Poncela et al. (2021) Section 3.
 Vector of named tuples with results for each (N, method, replication)
 """
 function run_monte_carlo(;
-        N_values::Vector{Int} = [5, 50, 150],
-        T::Int = 200,
-        r::Int = 1,
-        phi::Float64 = 0.7,
-        n_reps::Int = 20,
-        seed::Int = 42,
-        verbose::Bool = true)
+    N_values::Vector{Int} = [5, 50, 150],
+    T::Int = 200,
+    r::Int = 1,
+    phi::Float64 = 0.7,
+    n_reps::Int = 20,
+    seed::Int = 42,
+    verbose::Bool = true,
+)
 
     rng = MersenneTwister(seed)
 
@@ -414,40 +427,64 @@ function run_monte_carlo(;
             println("=" ^ 60)
         end
 
-        for rep in 1:n_reps
+        for rep = 1:n_reps
             # Generate data
-            data = simulate_dfm(N, T, r; phi=phi, rng=rng)
+            data = simulate_dfm(N, T, r; phi = phi, rng = rng)
             y, f_true, Lambda_true = data.y, data.f_true, data.Lambda_true
 
             # KFS extraction
-            kfs_result = extract_kfs(y, r; factor_lags=1, verbose=false)
-            kfs_metrics = compute_metrics(kfs_result.factors, f_true,
-                                         kfs_result.loadings, Lambda_true)
+            kfs_result = extract_kfs(y, r; factor_lags = 1, verbose = false)
+            kfs_metrics = compute_metrics(
+                kfs_result.factors,
+                f_true,
+                kfs_result.loadings,
+                Lambda_true,
+            )
 
-            push!(results, (
-                N=N, T=T, r=r, phi=phi, rep=rep, method="KFS",
-                mse_factors=kfs_metrics.mse_factors,
-                avg_canonical_corr=kfs_metrics.avg_canonical_corr,
-                min_canonical_corr=kfs_metrics.min_canonical_corr,
-                space_r2=kfs_metrics.space_r2,
-                time=kfs_result.time,
-                converged=kfs_result.converged
-            ))
+            push!(
+                results,
+                (
+                    N = N,
+                    T = T,
+                    r = r,
+                    phi = phi,
+                    rep = rep,
+                    method = "KFS",
+                    mse_factors = kfs_metrics.mse_factors,
+                    avg_canonical_corr = kfs_metrics.avg_canonical_corr,
+                    min_canonical_corr = kfs_metrics.min_canonical_corr,
+                    space_r2 = kfs_metrics.space_r2,
+                    time = kfs_result.time,
+                    converged = kfs_result.converged,
+                ),
+            )
 
             # PCA extraction
             pca_result = extract_pca(y, r)
-            pca_metrics = compute_metrics(pca_result.factors, f_true,
-                                         pca_result.loadings, Lambda_true)
+            pca_metrics = compute_metrics(
+                pca_result.factors,
+                f_true,
+                pca_result.loadings,
+                Lambda_true,
+            )
 
-            push!(results, (
-                N=N, T=T, r=r, phi=phi, rep=rep, method="PCA",
-                mse_factors=pca_metrics.mse_factors,
-                avg_canonical_corr=pca_metrics.avg_canonical_corr,
-                min_canonical_corr=pca_metrics.min_canonical_corr,
-                space_r2=pca_metrics.space_r2,
-                time=pca_result.time,
-                converged=true
-            ))
+            push!(
+                results,
+                (
+                    N = N,
+                    T = T,
+                    r = r,
+                    phi = phi,
+                    rep = rep,
+                    method = "PCA",
+                    mse_factors = pca_metrics.mse_factors,
+                    avg_canonical_corr = pca_metrics.avg_canonical_corr,
+                    min_canonical_corr = pca_metrics.min_canonical_corr,
+                    space_r2 = pca_metrics.space_r2,
+                    time = pca_result.time,
+                    converged = true,
+                ),
+            )
 
             if verbose && rep % 5 == 0
                 println("  Completed $rep / $n_reps replications")
@@ -467,7 +504,7 @@ Print summary statistics from Monte Carlo simulation.
 - `results`: Vector of result named tuples from run_monte_carlo
 - `r`: Number of factors (for display purposes)
 """
-function summarize_results(results; r::Int=1)
+function summarize_results(results; r::Int = 1)
     println()
     println("=" ^ 70)
     println("MONTE CARLO RESULTS SUMMARY (r = $r factor$(r > 1 ? "s" : ""))")
@@ -476,13 +513,41 @@ function summarize_results(results; r::Int=1)
 
     # Header - adjust based on r
     if r == 1
-        @printf("| %-6s | %-6s | %-12s | %-12s | %-10s | %-10s |\n",
-                "N", "Method", "MSE", "Avg Corr", "Space R²", "Time (s)")
+        @printf(
+            "| %-6s | %-6s | %-12s | %-12s | %-10s | %-10s |\n",
+            "N",
+            "Method",
+            "MSE",
+            "Avg Corr",
+            "Space R²",
+            "Time (s)"
+        )
     else
-        @printf("| %-6s | %-6s | %-12s | %-12s | %-12s | %-10s |\n",
-                "N", "Method", "MSE", "Avg CC", "Min CC", "Space R²")
+        @printf(
+            "| %-6s | %-6s | %-12s | %-12s | %-12s | %-10s |\n",
+            "N",
+            "Method",
+            "MSE",
+            "Avg CC",
+            "Min CC",
+            "Space R²"
+        )
     end
-    println("|" * "-"^8 * "|" * "-"^8 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^12 * "|")
+    println(
+        "|" *
+        "-"^8 *
+        "|" *
+        "-"^8 *
+        "|" *
+        "-"^14 *
+        "|" *
+        "-"^14 *
+        "|" *
+        "-"^14 *
+        "|" *
+        "-"^12 *
+        "|",
+    )
 
     # Group by N and method
     for N in unique(res.N for res in results)
@@ -499,14 +564,47 @@ function summarize_results(results; r::Int=1)
             time_mean = mean(res.time for res in subset)
 
             if r == 1
-                @printf("| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f | %10.4f |\n",
-                       N, method, mse_mean, mse_std, avg_cc_mean, avg_cc_std, r2_mean, time_mean)
+                @printf(
+                    "| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f | %10.4f |\n",
+                    N,
+                    method,
+                    mse_mean,
+                    mse_std,
+                    avg_cc_mean,
+                    avg_cc_std,
+                    r2_mean,
+                    time_mean
+                )
             else
-                @printf("| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f |\n",
-                       N, method, mse_mean, mse_std, avg_cc_mean, avg_cc_std, min_cc_mean, min_cc_std, r2_mean)
+                @printf(
+                    "| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f |\n",
+                    N,
+                    method,
+                    mse_mean,
+                    mse_std,
+                    avg_cc_mean,
+                    avg_cc_std,
+                    min_cc_mean,
+                    min_cc_std,
+                    r2_mean
+                )
             end
         end
-        println("|" * "-"^8 * "|" * "-"^8 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^12 * "|")
+        println(
+            "|" *
+            "-"^8 *
+            "|" *
+            "-"^8 *
+            "|" *
+            "-"^14 *
+            "|" *
+            "-"^14 *
+            "|" *
+            "-"^14 *
+            "|" *
+            "-"^12 *
+            "|",
+        )
     end
 
     # Key observations
@@ -531,7 +629,7 @@ end
 
 Apply both factor extraction methods to real macroeconomic data.
 """
-function real_data_comparison(data_path::String; n_factors::Int=6)
+function real_data_comparison(data_path::String; n_factors::Int = 6)
     println()
     println("=" ^ 70)
     println("REAL DATA COMPARISON (FRED-QD)")
@@ -539,7 +637,7 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     println()
 
     # Load data (same preprocessing as dfm_full_estimation.jl)
-    raw_data = readdlm(data_path, ',', Any; header=true)
+    raw_data = readdlm(data_path, ',', Any; header = true)
     data_matrix = raw_data[1]
     header = raw_data[2]
 
@@ -551,7 +649,7 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     y_raw_t = permutedims(y_raw)
 
     # Handle missing values (keep variables with ≤10% missing)
-    missing_counts = [count(isnan, y_raw_t[i, :]) for i in 1:n_vars]
+    missing_counts = [count(isnan, y_raw_t[i, :]) for i = 1:n_vars]
     max_missing = div(T_obs, 10)
     valid_vars = findall(x -> x <= max_missing, missing_counts)
 
@@ -563,12 +661,12 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     println()
 
     # Standardize (handling NaN)
-    for i in 1:N
+    for i = 1:N
         valid_obs = filter(!isnan, y[i, :])
         μ = mean(valid_obs)
         σ = std(valid_obs)
         σ = σ < 1e-10 ? 1.0 : σ
-        for t in 1:n
+        for t = 1:n
             if !isnan(y[i, t])
                 y[i, t] = (y[i, t] - μ) / σ
             end
@@ -582,7 +680,7 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
 
     # KFS extraction (handles missing values natively)
     println("Running KFS (Siphon.jl)...")
-    kfs_result = extract_kfs(y, n_factors; factor_lags=2, maxiter=200, verbose=true)
+    kfs_result = extract_kfs(y, n_factors; factor_lags = 2, maxiter = 200, verbose = true)
     println()
 
     # PCA extraction (on cleaned data)
@@ -602,7 +700,7 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     # Canonical correlations between KFS and PCA factor spaces
     println("\nCanonical correlations between KFS and PCA factors:")
     cc = canonical_correlations(kfs_result.factors, pca_result.factors)
-    for i in 1:n_factors
+    for i = 1:n_factors
         @printf("  Canonical correlation %d: %.4f\n", i, cc.correlations[i])
     end
     @printf("  Average: %.4f, Minimum: %.4f\n", cc.avg_correlation, cc.min_correlation)
@@ -612,9 +710,9 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     fm = pca_result.fm
     # Compute eigenvalues from loadings
     Lambda = Factotum.loadings(fm)
-    eigvals_approx = vec(sum(Lambda.^2, dims=1))
+    eigvals_approx = vec(sum(Lambda .^ 2, dims = 1))
     total_var = sum(eigvals_approx)
-    for i in 1:n_factors
+    for i = 1:n_factors
         pct = eigvals_approx[i] / total_var * 100
         @printf("  Factor %d: %.1f%%\n", i, pct)
     end
@@ -625,7 +723,7 @@ function real_data_comparison(data_path::String; n_factors::Int=6)
     @printf("  Converged: %s\n", kfs_result.converged)
     @printf("  Log-likelihood: %.2f\n", kfs_result.loglik)
 
-    return (kfs=kfs_result, pca=pca_result, y=y, y_clean=y_clean)
+    return (kfs = kfs_result, pca = pca_result, y = y, y_clean = y_clean)
 end
 
 # ============================================================================
@@ -640,7 +738,7 @@ Demonstrate Factotum.jl's information criteria for determining number of factors
 Based on Bai & Ng (2002): "Determining the Number of Factors in
 Approximate Factor Models" Econometrica 70(1): 191-221.
 """
-function demonstrate_ic(y::Matrix{Float64}; kmax::Int=10)
+function demonstrate_ic(y::Matrix{Float64}; kmax::Int = 10)
     println()
     println("=" ^ 70)
     println("INFORMATION CRITERIA FOR FACTOR SELECTION")
@@ -679,13 +777,21 @@ function demonstrate_ic(y::Matrix{Float64}; kmax::Int=10)
     @printf("\n| %-3s | %-12s | %-12s | %-12s |\n", "k", "IC1", "IC2", "BIC3")
     println("|" * "-"^5 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^14 * "|")
 
-    for k in 1:kmax
+    for k = 1:kmax
         marker_ic1 = k == k_ic1 ? "*" : " "
         marker_ic2 = k == k_ic2 ? "*" : " "
         marker_bic3 = k == k_bic3 ? "*" : " "
 
-        @printf("| %3d | %11.4f%s | %11.4f%s | %11.4f%s |\n",
-               k, ic1_vals[k], marker_ic1, ic2_vals[k], marker_ic2, bic3_vals[k], marker_bic3)
+        @printf(
+            "| %3d | %11.4f%s | %11.4f%s | %11.4f%s |\n",
+            k,
+            ic1_vals[k],
+            marker_ic1,
+            ic2_vals[k],
+            marker_ic2,
+            bic3_vals[k],
+            marker_bic3
+        )
     end
 
     println()
@@ -697,8 +803,14 @@ function demonstrate_ic(y::Matrix{Float64}; kmax::Int=10)
     println("Note: * indicates minimum value for each criterion")
     println("These criteria follow Bai & Ng (2002) methodology.")
 
-    return (k_ic1=k_ic1, k_ic2=k_ic2, k_bic3=k_bic3,
-            ic1=ic1_vals, ic2=ic2_vals, bic3=bic3_vals)
+    return (
+        k_ic1 = k_ic1,
+        k_ic2 = k_ic2,
+        k_bic3 = k_bic3,
+        ic1 = ic1_vals,
+        ic2 = ic2_vals,
+        bic3 = bic3_vals,
+    )
 end
 
 # ============================================================================
@@ -737,10 +849,10 @@ function main()
         r = 1,
         phi = 0.7,
         n_reps = 20,
-        verbose = true
+        verbose = true,
     )
 
-    summarize_results(results_r1; r=1)
+    summarize_results(results_r1; r = 1)
 
     # ========================================
     # Part 1b: Monte Carlo Simulation (r=2)
@@ -767,10 +879,10 @@ function main()
         r = 2,
         phi = 0.7,
         n_reps = 20,
-        verbose = true
+        verbose = true,
     )
 
-    summarize_results(results_r2; r=2)
+    summarize_results(results_r2; r = 2)
 
     # ========================================
     # Part 2: Real Data Application
@@ -782,7 +894,7 @@ function main()
 
     data_path = joinpath(@__DIR__, "qt_factor_data.csv")
     if isfile(data_path)
-        real_results = real_data_comparison(data_path; n_factors=6)
+        real_results = real_data_comparison(data_path; n_factors = 6)
 
         # ========================================
         # Part 3: Information Criteria Demo
@@ -792,7 +904,7 @@ function main()
         println("PART 3: FACTOR SELECTION VIA INFORMATION CRITERIA")
         println("=" ^ 70)
 
-        ic_results = demonstrate_ic(real_results.y_clean; kmax=10)
+        ic_results = demonstrate_ic(real_results.y_clean; kmax = 10)
     else
         println()
         println("Data file not found: $data_path")
