@@ -316,562 +316,121 @@ function _make_theta_nt(names::Vector{Symbol}, values::AbstractVector)
 end
 
 # ============================================
-# Generalized EM for Diagonal Covariance Models
+# Convenience Wrapper for Diagonal Covariance EM
 # ============================================
 
 """
-    _em_diagonal_ssm(Z, T, R, H_diag_params, Q_diag_params, y, a1, P1; kwargs...)
+    em_ssm_diagonal(Z, T, R, H_diag_init, Q_diag_init, y, a1, P1; kwargs...)
 
-EM algorithm for state-space models with diagonal H and Q covariances.
+EM for diagonal H and Q covariances. Convenience wrapper around `_em_general_ssm_full_cov`.
 
-Model:
-    yₜ = Z αₜ + εₜ,    εₜ ~ N(0, H)  where H is diagonal
-    αₜ₊₁ = T αₜ + R ηₜ,  ηₜ ~ N(0, Q)  where Q is diagonal
+This function provides a simplified interface when only diagonal elements of H and Q
+are free. It converts diagonal vectors to full matrices, runs the general EM algorithm,
+and returns results with diagonal accessors for compatibility.
 
 # Arguments
-- `Z`: Fixed observation matrix (p × m)
-- `T`: Fixed transition matrix (m × m), typically identity for random walk
-- `R`: Fixed selection matrix (m × r)
-- `H_diag_params`: Vector of Symbols for diagonal H parameters (free ones only)
-- `Q_diag_params`: Vector of Symbols for diagonal Q parameters (free ones only)
-- `H_diag_fixed`: Vector of (index, value) for fixed H diagonal elements
-- `Q_diag_fixed`: Vector of (index, value) for fixed Q diagonal elements
+- `Z`: Observation matrix (p × m) - typically fixed
+- `T`: Transition matrix (m × m)
+- `R`: Selection matrix (m × r)
+- `H_diag_init`: Initial diagonal of H (p-vector)
+- `Q_diag_init`: Initial diagonal of Q (r-vector)
 - `y`: Observations (p × n)
 - `a1`: Initial state mean (m-vector)
 - `P1`: Initial state covariance (m × m)
-- `maxiter`: Maximum iterations
-- `tol_ll`: Log-likelihood convergence tolerance
-- `tol_param`: Parameter convergence tolerance
-- `verbose`: Print progress
+
+# Keyword Arguments
+- `Z_free`: BitMatrix for free Z elements (default: all fixed)
+- `T_free`: BitMatrix for free T elements (default: all fixed)
+- `H_free`: BitVector for free H diagonal elements (default: all free)
+- `Q_free`: BitVector for free Q diagonal elements (default: all free)
+- `maxiter`, `tol_ll`, `tol_param`, `verbose`: EM control parameters
+
+# Returns
+NamedTuple with fields: `Z`, `T`, `H_diag`, `Q_diag`, `loglik`, `loglik_history`,
+`converged`, `iterations`, `smoothed_states`, `smoothed_cov`
+
+# Example
+```julia
+result = em_ssm_diagonal(Z, T, R, [1.0, 1.0, 1.0], [1.0, 1.0], y, a1, P1;
+                         maxiter=200, verbose=true)
+println("H diagonal: ", result.H_diag)
+println("Q diagonal: ", result.Q_diag)
+```
 """
-function _em_diagonal_ssm(
+function em_ssm_diagonal(
     Z::AbstractMatrix,
     T::AbstractMatrix,
     R::AbstractMatrix,
-    H_diag_params::Vector{Symbol},
-    Q_diag_params::Vector{Symbol},
-    H_diag_fixed::Vector{Tuple{Int,Float64}},
-    Q_diag_fixed::Vector{Tuple{Int,Float64}},
+    H_diag_init::AbstractVector,
+    Q_diag_init::AbstractVector,
     y::AbstractMatrix,
     a1::AbstractVector,
     P1::AbstractMatrix;
-    H_init::Vector{Float64} = ones(size(y, 1)),
-    Q_init::Vector{Float64} = ones(size(R, 2)),
-    maxiter::Int = 100,
-    tol_ll::Real = 1e-6,
-    tol_param::Real = 1e-6,
-    verbose::Bool = false,
-)
-
-    p, n = size(y)      # p observations, n time points
-    m = size(T, 1)      # m states
-    r = size(R, 2)      # r shocks
-
-    # Current variance estimates (diagonal elements)
-    H_diag = copy(H_init)
-    Q_diag = copy(Q_init)
-
-    # Apply fixed values
-    for (idx, val) in H_diag_fixed
-        H_diag[idx] = val
-    end
-    for (idx, val) in Q_diag_fixed
-        Q_diag[idx] = val
-    end
-
-    # Track which indices are free
-    H_free_idx = Int[]
-    for (i, sym) in enumerate(H_diag_params)
-        if sym !== :_fixed_
-            push!(H_free_idx, i)
-        end
-    end
-    # Actually, H_diag_params contains only free param names, need different approach
-    # Let's track by position: all indices not in H_diag_fixed are free
-    H_fixed_idx = Set(idx for (idx, _) in H_diag_fixed)
-    Q_fixed_idx = Set(idx for (idx, _) in Q_diag_fixed)
-
-    # Iteration history
-    ll_history = Float64[]
-
-    # EM iterations
-    converged = false
-    iter = 0
-    ll_prev = -Inf
-
-    for iter_i = 1:maxiter
-        iter = iter_i
-
-        # Build current KFParms
-        H = Diagonal(H_diag)
-        Q = Diagonal(Q_diag)
-        kfp = KFParms(Z, Matrix(H), T, R, Matrix(Q))
-
-        # E-step: Kalman filter and smoother
-        filt = kalman_filter(kfp, y, a1, P1)
-        smooth_result = kalman_smoother(
-            Z,
-            T,
-            filt.at,
-            filt.Pt,
-            filt.vt,
-            filt.Ft;
-            compute_crosscov = true,
-        )
-
-        alpha_hat = smooth_result.alpha       # m × n
-        V_hat = smooth_result.V               # m × m × n
-        P_crosslag = smooth_result.P_crosslag # m × m × (n-1)
-
-        # Current log-likelihood
-        ll = filt.loglik
-        push!(ll_history, ll)
-
-        if verbose
-            println("EM iter $iter: loglik = $(round(ll, digits=4))")
-            println("  H_diag = ", round.(H_diag, digits = 4))
-            println("  Q_diag = ", round.(Q_diag, digits = 4))
-        end
-
-        # Check convergence
-        if iter > 1
-            ll_change = ll - ll_prev
-            if ll_change < -1e-8
-                @warn "Log-likelihood decreased at iteration $iter: $(round(ll_change, sigdigits=4))"
-            end
-            if abs(ll_change) < tol_ll
-                converged = true
-                if verbose
-                    println("Converged: log-likelihood change < $tol_ll")
-                end
-                break
-            end
-        end
-        ll_prev = ll
-
-        # M-step: Update diagonal variances
-        H_new, Q_new = _mstep_diagonal(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
-
-        # Apply updates only for free parameters, enforce positivity
-        param_change = 0.0
-        for i = 1:p
-            if !(i in H_fixed_idx)
-                H_new_i = max(H_new[i], 1e-10)
-                param_change += abs(H_new_i - H_diag[i])
-                H_diag[i] = H_new_i
-            end
-        end
-        for i = 1:r
-            if !(i in Q_fixed_idx)
-                Q_new_i = max(Q_new[i], 1e-10)
-                param_change += abs(Q_new_i - Q_diag[i])
-                Q_diag[i] = Q_new_i
-            end
-        end
-
-        # Check parameter convergence
-        if param_change < tol_param
-            converged = true
-            if verbose
-                println("Converged: parameter change < $tol_param")
-            end
-        end
-
-        if converged
-            break
-        end
-    end
-
-    # Build final result
-    # Collect all free parameter names and values
-    all_param_names = Symbol[]
-    all_param_values = Float64[]
-
-    # H parameters (observation variances)
-    h_param_idx = 1
-    for i = 1:p
-        if !(i in H_fixed_idx)
-            push!(all_param_names, H_diag_params[h_param_idx])
-            push!(all_param_values, H_diag[i])
-            h_param_idx += 1
-        end
-    end
-
-    # Q parameters (state variances)
-    q_param_idx = 1
-    for i = 1:r
-        if !(i in Q_fixed_idx)
-            push!(all_param_names, Q_diag_params[q_param_idx])
-            push!(all_param_values, Q_diag[i])
-            q_param_idx += 1
-        end
-    end
-
-    theta_nt = _make_theta_nt(all_param_names, all_param_values)
-
-    # Final smoother run
-    H_final = Diagonal(H_diag)
-    Q_final = Diagonal(Q_diag)
-    kfp_final = KFParms(Z, Matrix(H_final), T, R, Matrix(Q_final))
-    filt_final = kalman_filter(kfp_final, y, a1, P1)
-    smooth_final = kalman_smoother(
-        Z,
-        T,
-        filt_final.at,
-        filt_final.Pt,
-        filt_final.vt,
-        filt_final.Ft;
-        compute_crosscov = false,
-    )
-
-    EMResult(
-        theta_nt,
-        all_param_values,
-        filt_final.loglik,
-        ll_history,
-        converged,
-        iter,
-        smooth_final.alpha,
-        smooth_final.V,
-    )
-end
-
-"""
-    _mstep_diagonal(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
-
-M-step for diagonal covariance model. Returns updated (H_diag, Q_diag).
-
-Formulas for diagonal H (observation covariance):
-    H_ii = (1/n) Σₜ [(yᵢₜ - Zᵢ α̂ₜ)² + Zᵢ V̂ₜ Zᵢ']
-
-Formulas for diagonal Q (state covariance), with general T:
-    Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [E[(ηᵢₜ)² | Y]]
-
-where ηₜ = R⁻¹(αₜ - T αₜ₋₁) for R invertible (or use pseudo-inverse).
-
-For the case where R = I and T = I (random walk):
-    Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [(α̂ᵢₜ - α̂ᵢ,ₜ₋₁)² + V̂ᵢᵢₜ + V̂ᵢᵢ,ₜ₋₁ - 2P̂ₜ,ₜ₋₁,ᵢᵢ]
-"""
-function _mstep_diagonal(
-    Z::AbstractMatrix,
-    T::AbstractMatrix,
-    R::AbstractMatrix,
-    y::AbstractMatrix,
-    alpha_hat::AbstractMatrix,
-    V_hat::AbstractArray,
-    P_crosslag::AbstractArray,
-)
-    p, n = size(y)
-    m = size(alpha_hat, 1)
-    r = size(R, 2)
-
-    ET = eltype(alpha_hat)
-
-    # ============================================
-    # Update H (observation variances)
-    # ============================================
-    # H_ii = (1/n) Σₜ [(yᵢₜ - Zᵢ α̂ₜ)² + Zᵢ V̂ₜ Zᵢ']
-    H_diag = zeros(ET, p)
-
-    @inbounds for i = 1:p
-        Z_i = view(Z, i, :)  # 1 × m row
-        sum_i = zero(ET)
-        for t = 1:n
-            # Residual: y_it - Z_i * alpha_hat[:, t]
-            residual = y[i, t]
-            for k = 1:m
-                residual -= Z_i[k] * alpha_hat[k, t]
-            end
-            # Variance contribution: Z_i * V_t * Z_i'
-            var_contrib = zero(ET)
-            for k1 = 1:m
-                for k2 = 1:m
-                    var_contrib += Z_i[k1] * V_hat[k1, k2, t] * Z_i[k2]
-                end
-            end
-            sum_i += residual^2 + var_contrib
-        end
-        H_diag[i] = sum_i / n
-    end
-
-    # ============================================
-    # Update Q (state variances)
-    # ============================================
-    # For R = I, T = I case (random walk):
-    # Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [(α̂ᵢₜ - α̂ᵢ,ₜ₋₁)² + V̂ᵢᵢₜ + V̂ᵢᵢ,ₜ₋₁ - 2P̂ₜ,ₜ₋₁,ᵢᵢ]
-    #
-    # General case with T ≠ I:
-    # E[ηₜ ηₜ' | Y] = E[(αₜ - T αₜ₋₁)(αₜ - T αₜ₋₁)' | Y]
-    #              = (α̂ₜ - T α̂ₜ₋₁)(α̂ₜ - T α̂ₜ₋₁)' + V̂ₜ + T V̂ₜ₋₁ T' - P̂ₜ,ₜ₋₁ T' - T P̂ₜ₋₁,ₜ
-    #
-    # For now, assume T = I (random walk) which is common
-    # TODO: Generalize to arbitrary T
-
-    Q_diag = zeros(ET, r)
-
-    # Check if T is identity and R is identity
-    # (simplifies the formula significantly)
-    is_identity_T = (T ≈ I(m))
-    is_identity_R = (R ≈ I(m)) && (r == m)
-
-    if is_identity_T && is_identity_R
-        # Simple random walk case
-        @inbounds for i = 1:r
-            sum_i = zero(ET)
-            for t = 2:n
-                state_diff = alpha_hat[i, t] - alpha_hat[i, t-1]
-                cross_cov = P_crosslag[i, i, t-1]
-                sum_i += state_diff^2 + V_hat[i, i, t] + V_hat[i, i, t-1] - 2*cross_cov
-            end
-            Q_diag[i] = sum_i / (n - 1)
-        end
-    else
-        # General case: compute E[ηₜ ηₜ' | Y] for each t
-        # ηₜ = αₜ - T αₜ₋₁ (assuming R = I for simplicity)
-        # E[ηₜ ηₜ' | Y] = (α̂ₜ - T α̂ₜ₋₁)(α̂ₜ - T α̂ₜ₋₁)' + V̂ₜ + T V̂ₜ₋₁ T' - P̂ₜ,ₜ₋₁ T' - T P̂ₜ,ₜ₋₁'
-        @inbounds for i = 1:r
-            sum_i = zero(ET)
-            for t = 2:n
-                # α̂ₜ - T α̂ₜ₋₁ for component i
-                eta_hat_i = alpha_hat[i, t]
-                for k = 1:m
-                    eta_hat_i -= T[i, k] * alpha_hat[k, t-1]
-                end
-
-                # V̂ₜ[i,i] + (T V̂ₜ₋₁ T')[i,i] - 2*(P̂ₜ,ₜ₋₁ T')[i,i]
-                # = V̂ₜ[i,i] + Σⱼₖ T[i,j] V̂ₜ₋₁[j,k] T[i,k] - 2*Σⱼ P̂ₜ,ₜ₋₁[i,j] T[i,j]
-                V_ii = V_hat[i, i, t]
-
-                T_V_T_ii = zero(ET)
-                for j = 1:m
-                    for k = 1:m
-                        T_V_T_ii += T[i, j] * V_hat[j, k, t-1] * T[i, k]
-                    end
-                end
-
-                P_T_ii = zero(ET)
-                for j = 1:m
-                    P_T_ii += P_crosslag[i, j, t-1] * T[i, j]
-                end
-
-                sum_i += eta_hat_i^2 + V_ii + T_V_T_ii - 2*P_T_ii
-            end
-            Q_diag[i] = sum_i / (n - 1)
-        end
-    end
-
-    return (H_diag, Q_diag)
-end
-
-# ============================================
-# General EM for Full Parameter Estimation
-# ============================================
-
-"""
-    _em_general_ssm(Z_init, T_init, R, H_init, Q_init, y, a1, P1;
-                    Z_free, T_free, H_free, Q_free, kwargs...)
-
-EM algorithm for general state-space models where Z, T, H, Q can all be estimated.
-
-Model:
-    yₜ = Z αₜ + εₜ,    εₜ ~ N(0, H)
-    αₜ₊₁ = T αₜ + R ηₜ,  ηₜ ~ N(0, Q)
-
-# Arguments
-- `Z_init`: Initial observation matrix (p × m)
-- `T_init`: Initial transition matrix (m × m)
-- `R`: Fixed selection matrix (m × r)
-- `H_init`: Initial observation covariance (p × p), diagonal
-- `Q_init`: Initial state covariance (r × r), diagonal
-- `y`: Observations (p × n)
-- `a1`: Initial state mean (m-vector)
-- `P1`: Initial state covariance (m × m)
-- `Z_free`: BitMatrix indicating which Z elements are free (p × m)
-- `T_free`: BitMatrix indicating which T elements are free (m × m)
-- `H_free`: BitVector indicating which diagonal H elements are free (length p)
-- `Q_free`: BitVector indicating which diagonal Q elements are free (length r)
-
-# M-Step Formulas (Shumway & Stoffer)
-
-For observation matrix Z:
-    Z_new = (Σₜ yₜ α̂ₜ') * (Σₜ (α̂ₜα̂ₜ' + V̂ₜ))⁻¹
-
-For transition matrix T:
-    T_new = (Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁)) * (Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁))⁻¹
-
-For observation covariance H (diagonal):
-    H_ii = (1/n) Σₜ [(yᵢₜ - Zᵢα̂ₜ)² + Zᵢ V̂ₜ Zᵢ']
-
-For state covariance Q (diagonal):
-    Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [E[(ηᵢₜ)² | Y]]
-"""
-function _em_general_ssm(
-    Z_init::AbstractMatrix,
-    T_init::AbstractMatrix,
-    R::AbstractMatrix,
-    H_init::AbstractVector,
-    Q_init::AbstractVector,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix;
-    Z_free::AbstractMatrix{Bool} = trues(size(Z_init)),
-    T_free::AbstractMatrix{Bool} = trues(size(T_init)),
-    H_free::AbstractVector{Bool} = trues(length(H_init)),
-    Q_free::AbstractVector{Bool} = trues(length(Q_init)),
+    Z_free::AbstractMatrix{Bool} = falses(size(Z)),
+    T_free::AbstractMatrix{Bool} = falses(size(T)),
+    H_free::AbstractVector{Bool} = trues(length(H_diag_init)),
+    Q_free::AbstractVector{Bool} = trues(length(Q_diag_init)),
     maxiter::Int = 500,
     tol_ll::Real = 1e-6,
     tol_param::Real = 1e-6,
     verbose::Bool = false,
 )
+    p = length(H_diag_init)
+    r = length(Q_diag_init)
 
-    p, n = size(y)      # p observations, n time points
-    m = size(T_init, 1) # m states
-    r = size(R, 2)      # r shocks
+    # Convert diagonal vectors to full matrices
+    H_init = Matrix(Diagonal(H_diag_init))
+    Q_init = Matrix(Diagonal(Q_diag_init))
 
-    # Current parameter estimates
-    Z = copy(Z_init)
-    T = copy(T_init)
-    H_diag = copy(H_init)
-    Q_diag = copy(Q_init)
-
-    # Iteration history
-    ll_history = Float64[]
-
-    # EM iterations
-    converged = false
-    iter = 0
-    ll_prev = -Inf
-
-    for iter_i = 1:maxiter
-        iter = iter_i
-
-        # Build current KFParms
-        H = Diagonal(H_diag)
-        Q = Diagonal(Q_diag)
-        kfp = KFParms(Z, Matrix(H), T, R, Matrix(Q))
-
-        # E-step: Kalman filter and smoother
-        filt = kalman_filter(kfp, y, a1, P1)
-        smooth_result = kalman_smoother(
-            Z,
-            T,
-            filt.at,
-            filt.Pt,
-            filt.vt,
-            filt.Ft;
-            compute_crosscov = true,
-        )
-
-        alpha_hat = smooth_result.alpha       # m × n
-        V_hat = smooth_result.V               # m × m × n
-        P_crosslag = smooth_result.P_crosslag # m × m × (n-1)
-
-        # Current log-likelihood
-        ll = filt.loglik
-        push!(ll_history, ll)
-
-        if verbose
-            println("EM iter $iter: loglik = $(round(ll, digits=4))")
-        end
-
-        # Check convergence
-        if iter > 1
-            ll_change = ll - ll_prev
-            if ll_change < -1e-6
-                @warn "Log-likelihood decreased at iteration $iter: $(round(ll_change, sigdigits=4))"
-            end
-            if abs(ll_change) < tol_ll
-                converged = true
-                if verbose
-                    println("Converged: log-likelihood change < $tol_ll")
-                end
-                break
-            end
-        end
-        ll_prev = ll
-
-        # M-step: Update all parameters
-        Z_new, T_new, H_new, Q_new =
-            _mstep_general(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
-
-        # Apply updates only for free parameters, enforce constraints
-        param_change = 0.0
-
-        # Update Z (observation matrix)
-        for i = 1:p, j = 1:m
-            if Z_free[i, j]
-                param_change += abs(Z_new[i, j] - Z[i, j])
-                Z[i, j] = Z_new[i, j]
-            end
-        end
-
-        # Update T (transition matrix)
-        for i = 1:m, j = 1:m
-            if T_free[i, j]
-                param_change += abs(T_new[i, j] - T[i, j])
-                T[i, j] = T_new[i, j]
-            end
-        end
-
-        # Update H (observation variances)
-        for i = 1:p
-            if H_free[i]
-                H_new_i = max(H_new[i], 1e-10)
-                param_change += abs(H_new_i - H_diag[i])
-                H_diag[i] = H_new_i
-            end
-        end
-
-        # Update Q (state variances)
-        for i = 1:r
-            if Q_free[i]
-                Q_new_i = max(Q_new[i], 1e-10)
-                param_change += abs(Q_new_i - Q_diag[i])
-                Q_diag[i] = Q_new_i
-            end
-        end
-
-        # Check parameter convergence
-        if param_change < tol_param
-            converged = true
-            if verbose
-                println("Converged: parameter change < $tol_param")
-            end
-        end
-
-        if converged
-            break
-        end
+    # Build diagonal-only free masks from BitVectors
+    H_free_mat = falses(p, p)
+    for i = 1:p
+        H_free_mat[i, i] = H_free[i]
     end
 
-    # Final filter/smoother run
-    H_final = Diagonal(H_diag)
-    Q_final = Diagonal(Q_diag)
-    kfp_final = KFParms(Z, Matrix(H_final), T, R, Matrix(Q_final))
-    filt_final = kalman_filter(kfp_final, y, a1, P1)
-    smooth_final = kalman_smoother(
-        Z,
-        T,
-        filt_final.at,
-        filt_final.Pt,
-        filt_final.vt,
-        filt_final.Ft;
-        compute_crosscov = false,
+    Q_free_mat = falses(r, r)
+    for i = 1:r
+        Q_free_mat[i, i] = Q_free[i]
+    end
+
+    # Run full covariance EM with diagonal constraints
+    result = _em_general_ssm_full_cov(
+        Float64.(Z),
+        Float64.(T),
+        Float64.(R),
+        H_init,
+        Q_init,
+        y,
+        a1,
+        P1;
+        Z_free = Z_free,
+        T_free = T_free,
+        H_free = H_free_mat,
+        Q_free = Q_free_mat,
+        maxiter = maxiter,
+        tol_ll = tol_ll,
+        tol_param = tol_param,
+        verbose = verbose,
     )
 
+    # Return with diagonal accessors for compatibility
     return (
-        Z = Z,
-        T = T,
-        H_diag = H_diag,
-        Q_diag = Q_diag,
-        loglik = filt_final.loglik,
-        loglik_history = ll_history,
-        converged = converged,
-        iterations = iter,
-        smoothed_states = smooth_final.alpha,
-        smoothed_cov = smooth_final.V,
+        Z = result.Z,
+        T = result.T,
+        H_diag = diag(result.H),
+        Q_diag = diag(result.Q),
+        loglik = result.loglik,
+        loglik_history = result.loglik_history,
+        converged = result.converged,
+        iterations = result.iterations,
+        smoothed_states = result.smoothed_states,
+        smoothed_cov = result.smoothed_cov,
     )
 end
+
+# ============================================
+# Positive-Definiteness Projection
+# ============================================
 
 # ============================================
 # Positive-Definiteness Projection
@@ -889,160 +448,6 @@ function project_psd(M::AbstractMatrix, ε::Real = 1e-10)
     F = eigen(Symmetric(M))
     λ_clipped = max.(F.values, ε)
     return Symmetric(F.vectors * Diagonal(λ_clipped) * F.vectors')
-end
-
-"""
-    _mstep_general(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
-
-M-step for general model. Returns updated (Z, T, H_diag, Q_diag).
-
-# M-Step Formulas (Shumway & Stoffer)
-
-For Z: Z_new = (Σₜ yₜ α̂ₜ') * (Σₜ (α̂ₜα̂ₜ' + V̂ₜ))⁻¹
-For T: T_new = (Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁)) * (Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁))⁻¹
-For H: H_ii = (1/n) Σₜ [(yᵢₜ - Zᵢα̂ₜ)² + Zᵢ V̂ₜ Zᵢ']  (using current Z)
-For Q: Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [(α̂ᵢₜ - Tᵢα̂ₜ₋₁)² + V̂ᵢᵢₜ + (TV̂ₜ₋₁T')ᵢᵢ - 2(P̂ₜ,ₜ₋₁T')ᵢᵢ]  (using current T)
-
-Note: H and Q are computed using current Z and T (not the updated values),
-which ensures proper EM monotonicity.
-"""
-function _mstep_general(
-    Z::AbstractMatrix,
-    T::AbstractMatrix,
-    R::AbstractMatrix,
-    y::AbstractMatrix,
-    alpha_hat::AbstractMatrix,
-    V_hat::AbstractArray,
-    P_crosslag::AbstractArray,
-)
-    p, n = size(y)
-    m = size(alpha_hat, 1)
-    r = size(R, 2)
-
-    # ============================================
-    # Update Z (observation matrix)
-    # ============================================
-    # Z_new = (Σₜ yₜ α̂ₜ') * (Σₜ (α̂ₜα̂ₜ' + V̂ₜ))⁻¹
-
-    # Compute Σₜ yₜ α̂ₜ' (p × m)
-    sum_y_alpha = zeros(p, m)
-    @inbounds for t = 1:n
-        for i = 1:p
-            for j = 1:m
-                sum_y_alpha[i, j] += y[i, t] * alpha_hat[j, t]
-            end
-        end
-    end
-
-    # Compute Σₜ (α̂ₜα̂ₜ' + V̂ₜ) (m × m)
-    sum_alpha_alpha = zeros(m, m)
-    @inbounds for t = 1:n
-        for i = 1:m
-            for j = 1:m
-                sum_alpha_alpha[i, j] += alpha_hat[i, t] * alpha_hat[j, t] + V_hat[i, j, t]
-            end
-        end
-    end
-
-    # Z_new = sum_y_alpha * inv(sum_alpha_alpha)
-    Z_new = sum_y_alpha / sum_alpha_alpha
-
-    # ============================================
-    # Update T (transition matrix)
-    # ============================================
-    # T_new = (Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁)) * (Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁))⁻¹
-
-    # Compute Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁) (m × m)
-    sum_alpha_alpha_lag = zeros(m, m)
-    @inbounds for t = 2:n
-        for i = 1:m
-            for j = 1:m
-                sum_alpha_alpha_lag[i, j] +=
-                    alpha_hat[i, t] * alpha_hat[j, t-1] + P_crosslag[i, j, t-1]
-            end
-        end
-    end
-
-    # Compute Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁) (m × m)
-    sum_alpha_alpha_prev = zeros(m, m)
-    @inbounds for t = 2:n
-        for i = 1:m
-            for j = 1:m
-                sum_alpha_alpha_prev[i, j] +=
-                    alpha_hat[i, t-1] * alpha_hat[j, t-1] + V_hat[i, j, t-1]
-            end
-        end
-    end
-
-    # T_new = sum_alpha_alpha_lag * inv(sum_alpha_alpha_prev)
-    T_new = sum_alpha_alpha_lag / sum_alpha_alpha_prev
-
-    # ============================================
-    # Update H (observation variances) - diagonal
-    # ============================================
-    # H_ii = (1/n) Σₜ [(yᵢₜ - Zᵢα̂ₜ)² + Zᵢ V̂ₜ Zᵢ']
-    # IMPORTANT: Use current Z (not Z_new) to maintain EM monotonicity
-    H_diag = zeros(p)
-
-    @inbounds for i = 1:p
-        sum_i = 0.0
-        for t = 1:n
-            # Residual: y_it - Z_i * alpha_hat[:, t]
-            residual = y[i, t]
-            for k = 1:m
-                residual -= Z[i, k] * alpha_hat[k, t]
-            end
-            # Variance contribution: Z_i * V_t * Z_i'
-            var_contrib = 0.0
-            for k1 = 1:m
-                for k2 = 1:m
-                    var_contrib += Z[i, k1] * V_hat[k1, k2, t] * Z[i, k2]
-                end
-            end
-            sum_i += residual^2 + var_contrib
-        end
-        H_diag[i] = sum_i / n
-    end
-
-    # ============================================
-    # Update Q (state variances) - diagonal
-    # ============================================
-    # Q_ii = (1/(n-1)) Σₜ₌₂ⁿ [(α̂ᵢₜ - Tᵢα̂ₜ₋₁)² + V̂ᵢᵢₜ + (TV̂ₜ₋₁T')ᵢᵢ - 2(P̂ₜ,ₜ₋₁T')ᵢᵢ]
-    # IMPORTANT: Use current T (not T_new) to maintain EM monotonicity
-    Q_diag = zeros(r)
-
-    @inbounds for i = 1:r
-        sum_i = 0.0
-        for t = 2:n
-            # α̂ₜ - Tᵢα̂ₜ₋₁ for component i
-            eta_hat_i = alpha_hat[i, t]
-            for k = 1:m
-                eta_hat_i -= T[i, k] * alpha_hat[k, t-1]
-            end
-
-            # V̂ₜ[i,i]
-            V_ii = V_hat[i, i, t]
-
-            # (T V̂ₜ₋₁ T')ᵢᵢ = Σⱼₖ T[i,j] V̂ₜ₋₁[j,k] T[i,k]
-            T_V_T_ii = 0.0
-            for j = 1:m
-                for k = 1:m
-                    T_V_T_ii += T[i, j] * V_hat[j, k, t-1] * T[i, k]
-                end
-            end
-
-            # (P̂ₜ,ₜ₋₁ T')ᵢᵢ = Σⱼ P̂ₜ,ₜ₋₁[i,j] T[i,j]
-            P_T_ii = 0.0
-            for j = 1:m
-                P_T_ii += P_crosslag[i, j, t-1] * T[i, j]
-            end
-
-            sum_i += eta_hat_i^2 + V_ii + T_V_T_ii - 2*P_T_ii
-        end
-        Q_diag[i] = sum_i / (n - 1)
-    end
-
-    return (Z_new, T_new, H_diag, Q_diag)
 end
 
 # ============================================

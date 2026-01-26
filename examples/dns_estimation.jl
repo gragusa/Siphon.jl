@@ -214,7 +214,7 @@ function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
     Q_free = trues(m, m)
 
     # Run EM with full covariance
-    result = Siphon.em_ssm_full_cov(
+    result = Siphon.DSL._em_general_ssm_full_cov(
         Z,
         T_init,
         R,
@@ -490,7 +490,7 @@ if isfile(data_path)
         H_free = trues(p_obs, p_obs)
         Q_free = trues(m, m)
 
-        result = Siphon.em_ssm_full_cov(
+        result = Siphon.DSL._em_general_ssm_full_cov(
             Z,
             T_init,
             R,
@@ -690,7 +690,7 @@ if isfile(data_path)
             H_free = Diagonal(trues(p_obs))
             Q_free = trues(m, m)
 
-            result = Siphon.em_ssm_full_cov(
+            result = Siphon.DSL._em_general_ssm_full_cov(
                 Z,
                 T_init,
                 R,

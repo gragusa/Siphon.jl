@@ -414,9 +414,9 @@ end
     @test all(eigvals(C_proj) .>= 1e-10)
 end
 
-@testset "Full cov EM matches diagonal EM" begin
-    # Test that full covariance EM with diagonal constraints produces
-    # the same results as specialized diagonal EM
+@testset "em_ssm_diagonal matches full_cov with diagonal constraints" begin
+    # Test that em_ssm_diagonal convenience wrapper produces
+    # the same results as _em_general_ssm_full_cov with diagonal constraints
     Random.seed!(42)
 
     # Setup: simple 2-state, 2-observation model
@@ -435,13 +435,14 @@ end
     # Generate data
     y = randn(p, n)
 
-    # Method 1: Specialized diagonal EM
-    Z_free_diag = trues(p, m)
-    T_free_diag = trues(m, m)
+    # Free masks
+    Z_free = trues(p, m)
+    T_free = trues(m, m)
     H_free_diag = trues(p)
     Q_free_diag = trues(r)
 
-    result_diag = Siphon.DSL._em_general_ssm(
+    # Method 1: em_ssm_diagonal wrapper
+    result_wrapper = Siphon.DSL.em_ssm_diagonal(
         Z_init,
         T_init,
         R,
@@ -450,8 +451,8 @@ end
         y,
         a1,
         P1;
-        Z_free = Z_free_diag,
-        T_free = T_free_diag,
+        Z_free = Z_free,
+        T_free = T_free,
         H_free = H_free_diag,
         Q_free = Q_free_diag,
         maxiter = 200,
@@ -459,7 +460,7 @@ end
         verbose = false,
     )
 
-    # Method 2: Full covariance EM with diagonal constraints
+    # Method 2: _em_general_ssm_full_cov with diagonal constraints
     H_init_full = Diagonal(H_init_diag) |> Matrix
     Q_init_full = Diagonal(Q_init_diag) |> Matrix
 
@@ -481,8 +482,8 @@ end
         y,
         a1,
         P1;
-        Z_free = Z_free_diag,
-        T_free = T_free_diag,
+        Z_free = Z_free,
+        T_free = T_free,
         H_free = H_free_full,
         Q_free = Q_free_full,
         maxiter = 200,
@@ -491,11 +492,11 @@ end
     )
 
     # Both methods should produce the same results
-    @test maximum(abs.(result_diag.Z - result_full.Z)) < 1e-10
-    @test maximum(abs.(result_diag.T - result_full.T)) < 1e-10
-    @test maximum(abs.(result_diag.H_diag - diag(result_full.H))) < 1e-10
-    @test maximum(abs.(result_diag.Q_diag - diag(result_full.Q))) < 1e-10
-    @test abs(result_diag.loglik - result_full.loglik) < 1e-10
+    @test maximum(abs.(result_wrapper.Z - result_full.Z)) < 1e-10
+    @test maximum(abs.(result_wrapper.T - result_full.T)) < 1e-10
+    @test maximum(abs.(result_wrapper.H_diag - diag(result_full.H))) < 1e-10
+    @test maximum(abs.(result_wrapper.Q_diag - diag(result_full.Q))) < 1e-10
+    @test abs(result_wrapper.loglik - result_full.loglik) < 1e-10
     # Off-diagonals should be exactly zero (they were fixed)
     @test result_full.H[1, 2] == 0.0
     @test result_full.Q[1, 2] == 0.0

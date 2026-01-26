@@ -5,7 +5,7 @@ Validates against MARSS R package results.
 
 using Test
 using Siphon
-using Siphon.DSL: _em_diagonal_ssm, _mstep_diagonal
+using Siphon.DSL: em_ssm_diagonal
 using LinearAlgebra
 using DelimitedFiles
 
@@ -36,26 +36,28 @@ using DelimitedFiles
     a1 = [0.0, 0.0]
     P1 = 1e7 * Matrix(1.0I, 2, 2)
 
-    # Parameter names (all free)
-    H_diag_params = [:R11, :R22, :R33]
-    Q_diag_params = [:Q11, :Q22]
+    # Initial variances
+    H_init = ones(3)
+    Q_init = ones(2)
 
-    # No fixed parameters
-    H_diag_fixed = Tuple{Int,Float64}[]
-    Q_diag_fixed = Tuple{Int,Float64}[]
+    # All diagonal elements are free
+    H_free = trues(3)
+    Q_free = trues(2)
 
     # Run EM with parameter-based convergence (ll oscillations are expected at optimum)
-    result = _em_diagonal_ssm(
+    result = em_ssm_diagonal(
         Z,
         T,
         R,
-        H_diag_params,
-        Q_diag_params,
-        H_diag_fixed,
-        Q_diag_fixed,
+        H_init,
+        Q_init,
         y,
         a1,
         P1;
+        Z_free = falses(size(Z)),
+        T_free = falses(size(T)),
+        H_free = H_free,
+        Q_free = Q_free,
         maxiter = 500,
         tol_ll = 1e-9,
         tol_param = 1e-4,
@@ -69,22 +71,22 @@ using DelimitedFiles
 
     println("\nJulia EM Results:")
     println("================")
-    println("R11 = $(result.theta.R11) (MARSS: 0.547054)")
-    println("R22 = $(result.theta.R22) (MARSS: 0.539332)")
-    println("R33 = $(result.theta.R33) (MARSS: 1.037559)")
-    println("Q11 = $(result.theta.Q11) (MARSS: 1.133779)")
-    println("Q22 = $(result.theta.Q22) (MARSS: 2.303474)")
+    println("R11 = $(result.H_diag[1]) (MARSS: 0.547054)")
+    println("R22 = $(result.H_diag[2]) (MARSS: 0.539332)")
+    println("R33 = $(result.H_diag[3]) (MARSS: 1.037559)")
+    println("Q11 = $(result.Q_diag[1]) (MARSS: 1.133779)")
+    println("Q22 = $(result.Q_diag[2]) (MARSS: 2.303474)")
     println("loglik = $(result.loglik) (MARSS: -546.485583)")
     println("iterations = $(result.iterations)")
     println("converged = $(result.converged)")
 
     # Test against MARSS values (allow some tolerance)
     # Parameters should be very close (within 1%)
-    @test isapprox(result.theta.R11, 0.547054, rtol = 0.01)
-    @test isapprox(result.theta.R22, 0.539332, rtol = 0.01)
-    @test isapprox(result.theta.R33, 1.037559, rtol = 0.01)
-    @test isapprox(result.theta.Q11, 1.133779, rtol = 0.01)
-    @test isapprox(result.theta.Q22, 2.303474, rtol = 0.01)
+    @test isapprox(result.H_diag[1], 0.547054, rtol = 0.01)
+    @test isapprox(result.H_diag[2], 0.539332, rtol = 0.01)
+    @test isapprox(result.H_diag[3], 1.037559, rtol = 0.01)
+    @test isapprox(result.Q_diag[1], 1.133779, rtol = 0.01)
+    @test isapprox(result.Q_diag[2], 2.303474, rtol = 0.01)
     @test isapprox(result.loglik, -546.485583, rtol = 0.001)
 
     # Siphon.jl should achieve at least as good a log-likelihood as MARSS
@@ -109,22 +111,24 @@ end
     a1 = [0.0, 0.0]
     P1 = 1e7 * Matrix(1.0I, 2, 2)
 
-    H_diag_params = [:R11, :R22, :R33]
-    Q_diag_params = [:Q11, :Q22]
-    H_diag_fixed = Tuple{Int,Float64}[]
-    Q_diag_fixed = Tuple{Int,Float64}[]
+    H_init = ones(3)
+    Q_init = ones(2)
+    H_free = trues(3)
+    Q_free = trues(2)
 
-    result = _em_diagonal_ssm(
+    result = em_ssm_diagonal(
         Z,
         T,
         R,
-        H_diag_params,
-        Q_diag_params,
-        H_diag_fixed,
-        Q_diag_fixed,
+        H_init,
+        Q_init,
         y,
         a1,
         P1;
+        Z_free = falses(size(Z)),
+        T_free = falses(size(T)),
+        H_free = H_free,
+        Q_free = Q_free,
         maxiter = 100,
         tol_ll = 1e-9,
         tol_param = 1e-4,

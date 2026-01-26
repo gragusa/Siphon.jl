@@ -5,7 +5,7 @@ Validates against MARSS R package results for a model with estimable Z and T.
 
 using Test
 using Siphon
-using Siphon.DSL: _em_general_ssm, _mstep_general
+using Siphon.DSL: _em_general_ssm_full_cov
 using LinearAlgebra
 using DelimitedFiles
 
@@ -33,8 +33,8 @@ using DelimitedFiles
     ]  # Start with smaller AR coefficients
 
     R = Matrix(1.0I, m, r)
-    H_init = [1.0, 1.0, 1.0]
-    Q_init = [1.0, 1.0]
+    H_init = Matrix(Diagonal([1.0, 1.0, 1.0]))
+    Q_init = Matrix(Diagonal([1.0, 1.0]))
 
     # Initial state - MARSS uses tinitx=0, meaning x0 is at time 0.
     # To match, we need to propagate: a1 = T*x0, P1 = T*V0*T' + R*Q*R'
@@ -43,7 +43,7 @@ using DelimitedFiles
     x0 = [0.0, 0.0]
     V0 = 10.0 * Matrix(1.0I, m, m)
     a1 = T_init * x0  # = [0, 0]
-    P1 = T_init * V0 * T_init' + R * Diagonal(Q_init) * R'
+    P1 = T_init * V0 * T_init' + R * Q_init * R'
 
     # Free parameter masks
     # Z: first two rows fixed (identity), third row free
@@ -56,12 +56,18 @@ using DelimitedFiles
     # T: all elements free
     T_free = trues(m, m)
 
-    # H, Q: all diagonal elements free
-    H_free = trues(p)
-    Q_free = trues(r)
+    # H, Q: only diagonal elements free (use diagonal-only BitMatrix)
+    H_free = falses(p, p)
+    H_free[1, 1] = true
+    H_free[2, 2] = true
+    H_free[3, 3] = true
+
+    Q_free = falses(r, r)
+    Q_free[1, 1] = true
+    Q_free[2, 2] = true
 
     # Run EM
-    result = _em_general_ssm(
+    result = _em_general_ssm_full_cov(
         Z_init,
         T_init,
         R,
@@ -105,12 +111,12 @@ using DelimitedFiles
     println("  Z[3,1] = $(result.Z[3,1]) (MARSS: $marss_Z31)")
     println("  Z[3,2] = $(result.Z[3,2]) (MARSS: $marss_Z32)")
     println("\nQ (state variances):")
-    println("  Q[1,1] = $(result.Q_diag[1]) (MARSS: $marss_Q11)")
-    println("  Q[2,2] = $(result.Q_diag[2]) (MARSS: $marss_Q22)")
+    println("  Q[1,1] = $(result.Q[1,1]) (MARSS: $marss_Q11)")
+    println("  Q[2,2] = $(result.Q[2,2]) (MARSS: $marss_Q22)")
     println("\nH (observation variances):")
-    println("  H[1,1] = $(result.H_diag[1]) (MARSS: $marss_R11)")
-    println("  H[2,2] = $(result.H_diag[2]) (MARSS: $marss_R22)")
-    println("  H[3,3] = $(result.H_diag[3]) (MARSS: $marss_R33)")
+    println("  H[1,1] = $(result.H[1,1]) (MARSS: $marss_R11)")
+    println("  H[2,2] = $(result.H[2,2]) (MARSS: $marss_R22)")
+    println("  H[3,3] = $(result.H[3,3]) (MARSS: $marss_R33)")
     println("\nloglik = $(result.loglik) (MARSS: $marss_loglik)")
     println("iterations = $(result.iterations)")
     println("converged = $(result.converged)")
@@ -122,11 +128,11 @@ using DelimitedFiles
     @test isapprox(result.T[2, 2], marss_B22, rtol = 0.05)
     @test isapprox(result.Z[3, 1], marss_Z31, rtol = 0.05)
     @test isapprox(result.Z[3, 2], marss_Z32, rtol = 0.05)
-    @test isapprox(result.Q_diag[1], marss_Q11, rtol = 0.05)
-    @test isapprox(result.Q_diag[2], marss_Q22, rtol = 0.05)
-    @test isapprox(result.H_diag[1], marss_R11, rtol = 0.05)
-    @test isapprox(result.H_diag[2], marss_R22, rtol = 0.05)
-    @test isapprox(result.H_diag[3], marss_R33, rtol = 0.05)
+    @test isapprox(result.Q[1, 1], marss_Q11, rtol = 0.05)
+    @test isapprox(result.Q[2, 2], marss_Q22, rtol = 0.05)
+    @test isapprox(result.H[1, 1], marss_R11, rtol = 0.05)
+    @test isapprox(result.H[2, 2], marss_R22, rtol = 0.05)
+    @test isapprox(result.H[3, 3], marss_R33, rtol = 0.05)
     # Log-likelihood should match closely now that initial state is propagated correctly
     @test isapprox(result.loglik, marss_loglik, rtol = 0.001)
 
@@ -146,21 +152,28 @@ end
     Z_init = [1.0 0.0; 0.0 1.0; 0.5 0.5]
     T_init = [0.5 0.0; 0.0 0.5]
     R = Matrix(1.0I, m, r)
-    H_init = [1.0, 1.0, 1.0]
-    Q_init = [1.0, 1.0]
+    H_init = Matrix(Diagonal([1.0, 1.0, 1.0]))
+    Q_init = Matrix(Diagonal([1.0, 1.0]))
 
     # Propagate initial state (MARSS tinitx=0 convention)
     x0 = [0.0, 0.0]
     V0 = 10.0 * Matrix(1.0I, m, m)
     a1 = T_init * x0
-    P1 = T_init * V0 * T_init' + R * Diagonal(Q_init) * R'
+    P1 = T_init * V0 * T_init' + R * Q_init * R'
 
     Z_free = [false false; false false; true true]
     T_free = trues(m, m)
-    H_free = trues(p)
-    Q_free = trues(r)
 
-    result = _em_general_ssm(
+    H_free = falses(p, p)
+    H_free[1, 1] = true
+    H_free[2, 2] = true
+    H_free[3, 3] = true
+
+    Q_free = falses(r, r)
+    Q_free[1, 1] = true
+    Q_free[2, 2] = true
+
+    result = _em_general_ssm_full_cov(
         Z_init,
         T_init,
         R,
