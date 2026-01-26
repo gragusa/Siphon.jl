@@ -712,7 +712,7 @@ end
 
 @testset "StateSpaceModel with known parameters (NamedTuple)" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
 
     model = StateSpaceModel(spec, θ, n)
@@ -739,7 +739,7 @@ end
 
 @testset "kalman_loglik(model, y)" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
     y = randn(1, n)
 
@@ -761,7 +761,7 @@ end
 
 @testset "kalman_filter!(model, y)" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
     y = randn(1, n)
 
@@ -787,7 +787,7 @@ end
 
 @testset "kalman_smoother!(model)" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
     y = randn(1, n)
 
@@ -814,7 +814,7 @@ end
 
 @testset "Unified API equivalence with old API" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
     y = randn(1, n)
 
@@ -836,7 +836,7 @@ end
 
 @testset "StateSpaceModel with local_linear_trend" begin
     spec = local_linear_trend()
-    θ = (var_obs=100.0, var_level=50.0, var_slope=10.0)
+    θ = (var_obs = 100.0, var_level = 50.0, var_slope = 10.0)
     n = 100
     y = randn(1, n)
 
@@ -850,7 +850,7 @@ end
 
 @testset "StateSpaceModel dimension validation" begin
     spec = local_level()
-    θ = (var_obs=100.0, var_level=50.0)
+    θ = (var_obs = 100.0, var_level = 50.0)
     n = 100
     y = randn(1, n)
 
