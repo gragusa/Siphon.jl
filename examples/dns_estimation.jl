@@ -44,11 +44,9 @@ n_maturities = length(maturities)
 Φ_true = Diagonal([0.99, 0.95, 0.90])  # Persistence
 
 # Factor covariance (allow some correlation)
-Q_true = [
-    0.01 0.002 0.0;
-    0.002 0.02 0.005;
-    0.0 0.005 0.03
-]
+Q_true = [0.01 0.002 0.0;
+          0.002 0.02 0.005;
+          0.0 0.005 0.03]
 
 # Observation noise (diagonal for simplicity)
 H_true = 0.0001 * I(n_maturities)  # Small measurement error
@@ -100,9 +98,9 @@ yields = zeros(n_maturities, n_obs)
 # Initial state (start at mean)
 factors[:, 1] = zeros(3)
 
-for t = 1:n_obs
+for t in 1:n_obs
     if t > 1
-        factors[:, t] = Φ_true * factors[:, t-1] + L_Q * randn(3)
+        factors[:, t] = Φ_true * factors[:, t - 1] + L_Q * randn(3)
     end
     # Yields = Z * (factors + μ) + noise
     yields[:, t] = Z_true * (factors[:, t] + μ_true) + L_H * randn(n_maturities)
@@ -155,7 +153,7 @@ end
     log(0.01),
     log(0.02),
     log(0.03),  # log(q_L), log(q_S), log(q_C)
-    log(0.0001),  # log(h)
+    log(0.0001)  # log(h)
 ]
 
 println("\n=== MLE Estimation ===")
@@ -171,7 +169,7 @@ obj_fn = (θ, p) -> dns_negloglik(θ, maturities, yields)
 # Set up optimization
 opt_prob = OptimizationProblem(
     OptimizationFunction(obj_fn, Optimization.AutoForwardDiff()),
-    θ_init,
+    θ_init
 )
 
 # Run optimization
@@ -229,7 +227,7 @@ function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
         Q_free = Q_free,
         maxiter = em_iters,
         tol_ll = 1e-6,
-        verbose = false,
+        verbose = false
     )
 
     return -result.loglik, result
@@ -333,13 +331,13 @@ if isfile(data_path)
         "  Mean yields: ",
         round.(mean(real_yields, dims = 2)[1:5], digits = 2),
         " ... ",
-        round.(mean(real_yields, dims = 2)[(end-2):end], digits = 2),
+        round.(mean(real_yields, dims = 2)[(end - 2):end], digits = 2)
     )
     println(
         "  Std yields:  ",
         round.(std(real_yields, dims = 2)[1:5], digits = 2),
         " ... ",
-        round.(std(real_yields, dims = 2)[(end-2):end], digits = 2),
+        round.(std(real_yields, dims = 2)[(end - 2):end], digits = 2)
     )
 
     # ============================================
@@ -392,7 +390,7 @@ if isfile(data_path)
         log(0.1),
         log(0.5),
         log(0.5),  # log(q_L), log(q_S), log(q_C)
-        log(0.01),  # log(h) - measurement error
+        log(0.01)  # log(h) - measurement error
     ]
 
     println("Initial λ = ", θ_init_real[1])
@@ -402,7 +400,7 @@ if isfile(data_path)
 
     opt_prob_real = OptimizationProblem(
         OptimizationFunction(obj_fn_real, Optimization.AutoForwardDiff()),
-        θ_init_real,
+        θ_init_real
     )
 
     sol_real = solve(opt_prob_real, LBFGS(), maxiters = 2000)
@@ -420,7 +418,7 @@ if isfile(data_path)
     println(
         "\n  Implied τ* (max curvature loading): ",
         round(τ_star, digits = 1),
-        " months",
+        " months"
     )
 
     # ============================================
@@ -433,9 +431,8 @@ if isfile(data_path)
     T_real = Diagonal(θ_mle_real[2:4])
     R_real = Matrix{Float64}(I, 3, 3)
     Q_real = Diagonal(exp.(θ_mle_real[5:7]))
-    H_real =
-        exp(θ_mle_real[8]) *
-        Matrix{Float64}(I, length(selected_maturities), length(selected_maturities))
+    H_real = exp(θ_mle_real[8]) *
+             Matrix{Float64}(I, length(selected_maturities), length(selected_maturities))
     a1_real = zeros(3)
     P1_real = 1e4 * Matrix{Float64}(I, 3, 3)
 
@@ -447,7 +444,7 @@ if isfile(data_path)
         filt_real.at,
         filt_real.Pt,
         filt_real.vt,
-        filt_real.Ft,
+        filt_real.Ft
     )
 
     # Factor statistics
@@ -463,7 +460,7 @@ if isfile(data_path)
             round(minimum(factor), digits = 2),
             ", ",
             round(maximum(factor), digits = 2),
-            "]",
+            "]"
         )
     end
 
@@ -505,7 +502,7 @@ if isfile(data_path)
             Q_free = Q_free,
             maxiter = em_iters,
             tol_ll = 1e-6,
-            verbose = false,
+            verbose = false
         )
 
         return -result.loglik, result
@@ -517,11 +514,12 @@ if isfile(data_path)
 
     println("Profiling over λ...")
     for λ_val in λ_grid_real
-        neg_ll, _ = profile_negloglik_real(
+        neg_ll,
+        _ = profile_negloglik_real(
             λ_val,
             selected_maturities,
             selected_yields;
-            em_iters = 150,
+            em_iters = 150
         )
         push!(profile_ll_real, -neg_ll)
     end
@@ -530,11 +528,12 @@ if isfile(data_path)
     println("Profile MLE for λ: ", round(λ_profile_real, digits = 4))
 
     # Final EM at profile MLE
-    _, em_result_real = profile_negloglik_real(
+    _,
+    em_result_real = profile_negloglik_real(
         λ_profile_real,
         selected_maturities,
         selected_yields;
-        em_iters = 300,
+        em_iters = 300
     )
 
     println("\nEM estimates (full covariance):")
@@ -568,7 +567,7 @@ if isfile(data_path)
         ", AIC = ",
         round(aic_mle, digits = 2),
         ", BIC = ",
-        round(bic_mle, digits = 2),
+        round(bic_mle, digits = 2)
     )
     println("Full Covariance Model (EM):")
     println(
@@ -577,7 +576,7 @@ if isfile(data_path)
         ", AIC = ",
         round(aic_em, digits = 2),
         ", BIC = ",
-        round(bic_em, digits = 2),
+        round(bic_em, digits = 2)
     )
 
     # ============================================
@@ -655,17 +654,17 @@ if isfile(data_path)
         obj_fn = (θ, p) -> negloglik(θ, maturities, y)
         opt_prob = OptimizationProblem(
             OptimizationFunction(obj_fn, Optimization.AutoForwardDiff()),
-            θ_init,
+            θ_init
         )
         sol = solve(opt_prob, LBFGS(), maxiters = maxiters)
         return sol.u
     end
 
     @everywhere function estimate_dns_full_cov_worker(
-        y,
-        maturities;
-        λ_grid = range(0.02, 0.12, length = 8),
-        em_iters = 80,
+            y,
+            maturities;
+            λ_grid = range(0.02, 0.12, length = 8),
+            em_iters = 80
     )
         p_obs, n = size(y)
         m = 3
@@ -705,7 +704,7 @@ if isfile(data_path)
                 Q_free = Q_free,
                 maxiter = em_iters,
                 tol_ll = 1e-5,
-                verbose = false,
+                verbose = false
             )
 
             if result.loglik > best_ll
@@ -721,13 +720,13 @@ if isfile(data_path)
     end
 
     @everywhere function forecast_single_origin(
-        y_full,
-        maturities,
-        t::Int,
-        max_horizon::Int,
-        model_type::Symbol,
-        window_type::Symbol,
-        window_size::Int,
+            y_full,
+            maturities,
+            t::Int,
+            max_horizon::Int,
+            model_type::Symbol,
+            window_type::Symbol,
+            window_size::Int
     )
         n_maturities = length(maturities)
 
@@ -773,10 +772,10 @@ if isfile(data_path)
         # Generate forecasts for each horizon
         errors = zeros(n_maturities, max_horizon)
         a = copy(filtered_state)
-        for h = 1:max_horizon
+        for h in 1:max_horizon
             a = T_mat * a  # Propagate state
             y_fc = Z * a
-            y_actual = y_full[:, t+h]
+            y_actual = y_full[:, t + h]
             errors[:, h] = y_fc - y_actual
         end
 
@@ -788,17 +787,17 @@ if isfile(data_path)
     # ============================================
 
     function run_forecast_eval_parallel(
-        y,
-        maturities,
-        model_type::Symbol,
-        start_idx::Int,
-        end_idx::Int;
-        window_type::Symbol = :expanding,
-        window_size::Int = 84,
-        max_horizon::Int = 12,
+            y,
+            maturities,
+            model_type::Symbol,
+            start_idx::Int,
+            end_idx::Int;
+            window_type::Symbol = :expanding,
+            window_size::Int = 84,
+            max_horizon::Int = 12
     )
         n_maturities = length(maturities)
-        forecast_origins = collect(start_idx:(end_idx-max_horizon))
+        forecast_origins = collect(start_idx:(end_idx - max_horizon))
         n_forecasts = length(forecast_origins)
 
         if n_forecasts <= 0
@@ -816,9 +815,9 @@ if isfile(data_path)
                 max_horizon,
                 model_type,
                 window_type,
-                window_size,
+                window_size
             ),
-            forecast_origins,
+            forecast_origins
         )
 
         # Collect results into 3D array
@@ -838,7 +837,7 @@ if isfile(data_path)
         n_fc, n_mat, n_h = size(errors)
         mse = zeros(n_h)
         mae = zeros(n_h)
-        for h = 1:n_h
+        for h in 1:n_h
             e = errors[:, :, h]
             mse[h] = mean(e .^ 2)
             mae[h] = mean(abs.(e))
@@ -872,7 +871,7 @@ if isfile(data_path)
         start_eval,
         end_eval;
         window_type = :expanding,
-        max_horizon = max_horizon,
+        max_horizon = max_horizon
     )
 
     println("Full covariance model:")
@@ -883,7 +882,7 @@ if isfile(data_path)
         start_eval,
         end_eval;
         window_type = :expanding,
-        max_horizon = max_horizon,
+        max_horizon = max_horizon
     )
 
     mse_diag_exp, mae_diag_exp = compute_metrics(errors_diag_expanding)
@@ -895,24 +894,20 @@ if isfile(data_path)
         "Horizon │     MSE (Diagonal)    MSE (Full)  │     MAE (Diagonal)    MAE (Full)",
     )
     println("─"^70)
-    for h = 1:max_horizon
-        @printf(
-            "  %2d    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
+    for h in 1:max_horizon
+        @printf("  %2d    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
             h,
             mse_diag_exp[h],
             mse_full_exp[h],
             mae_diag_exp[h],
-            mae_full_exp[h]
-        )
+            mae_full_exp[h])
     end
     println("─"^70)
-    @printf(
-        " Avg    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
+    @printf(" Avg    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
         mean(mse_diag_exp),
         mean(mse_full_exp),
         mean(mae_diag_exp),
-        mean(mae_full_exp)
-    )
+        mean(mae_full_exp))
     println("─"^70)
 
     # Rolling Window Evaluation
@@ -930,7 +925,7 @@ if isfile(data_path)
         end_eval;
         window_type = :rolling,
         window_size = rolling_window,
-        max_horizon = max_horizon,
+        max_horizon = max_horizon
     )
 
     println("Full covariance model:")
@@ -942,7 +937,7 @@ if isfile(data_path)
         end_eval;
         window_type = :rolling,
         window_size = rolling_window,
-        max_horizon = max_horizon,
+        max_horizon = max_horizon
     )
 
     mse_diag_roll, mae_diag_roll = compute_metrics(errors_diag_rolling)
@@ -954,24 +949,20 @@ if isfile(data_path)
         "Horizon │     MSE (Diagonal)    MSE (Full)  │     MAE (Diagonal)    MAE (Full)",
     )
     println("─"^70)
-    for h = 1:max_horizon
-        @printf(
-            "  %2d    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
+    for h in 1:max_horizon
+        @printf("  %2d    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
             h,
             mse_diag_roll[h],
             mse_full_roll[h],
             mae_diag_roll[h],
-            mae_full_roll[h]
-        )
+            mae_full_roll[h])
     end
     println("─"^70)
-    @printf(
-        " Avg    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
+    @printf(" Avg    │        %8.4f      %8.4f     │        %8.4f      %8.4f\n",
         mean(mse_diag_roll),
         mean(mse_full_roll),
         mean(mae_diag_roll),
-        mean(mae_full_roll)
-    )
+        mean(mae_full_roll))
     println("─"^70)
 
     # ============================================
@@ -985,39 +976,39 @@ if isfile(data_path)
     println(
         "  Full Cov vs Diagonal - MSE improvement: ",
         round(avg_mse_imp_exp, digits = 2),
-        "%",
+        "%"
     )
     println(
         "  Full Cov vs Diagonal - MAE improvement: ",
         round(avg_mae_imp_exp, digits = 2),
-        "%",
+        "%"
     )
 
     println("\nRolling Window:")
-    avg_mse_imp_roll =
-        (mean(mse_diag_roll) - mean(mse_full_roll)) / mean(mse_diag_roll) * 100
-    avg_mae_imp_roll =
-        (mean(mae_diag_roll) - mean(mae_full_roll)) / mean(mae_diag_roll) * 100
+    avg_mse_imp_roll = (mean(mse_diag_roll) - mean(mse_full_roll)) / mean(mse_diag_roll) *
+                       100
+    avg_mae_imp_roll = (mean(mae_diag_roll) - mean(mae_full_roll)) / mean(mae_diag_roll) *
+                       100
     println(
         "  Full Cov vs Diagonal - MSE improvement: ",
         round(avg_mse_imp_roll, digits = 2),
-        "%",
+        "%"
     )
     println(
         "  Full Cov vs Diagonal - MAE improvement: ",
         round(avg_mae_imp_roll, digits = 2),
-        "%",
+        "%"
     )
 
     # By horizon comparison
     println("\nMSE Ratio (Full/Diagonal) by Horizon:")
     print("  Expanding: ")
-    for h = 1:max_horizon
+    for h in 1:max_horizon
         @printf("%.2f ", mse_full_exp[h] / mse_diag_exp[h])
     end
     println()
     print("  Rolling:   ")
-    for h = 1:max_horizon
+    for h in 1:max_horizon
         @printf("%.2f ", mse_full_roll[h] / mse_diag_roll[h])
     end
     println()

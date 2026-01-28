@@ -11,8 +11,7 @@ using DelimitedFiles
 
 @testset "General EM - MARSS Validation" begin
     # Load MARSS reference data
-    data =
-        readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')  # Convert to p × n format (3 × 200)
 
     # Model dimensions
@@ -21,16 +20,12 @@ using DelimitedFiles
     r = 2  # shocks
 
     # Initial values
-    Z_init = [
-        1.0 0.0;
-        0.0 1.0;
-        0.5 0.5
-    ]  # Start with different values
+    Z_init = [1.0 0.0;
+              0.0 1.0;
+              0.5 0.5]  # Start with different values
 
-    T_init = [
-        0.5 0.0;
-        0.0 0.5
-    ]  # Start with smaller AR coefficients
+    T_init = [0.5 0.0;
+              0.0 0.5]  # Start with smaller AR coefficients
 
     R = Matrix(1.0I, m, r)
     H_init = Matrix(Diagonal([1.0, 1.0, 1.0]))
@@ -47,11 +42,9 @@ using DelimitedFiles
 
     # Free parameter masks
     # Z: first two rows fixed (identity), third row free
-    Z_free = [
-        false false;
-        false false;
-        true true
-    ]
+    Z_free = [false false;
+              false false;
+              true true]
 
     # T: all elements free
     T_free = trues(m, m)
@@ -83,7 +76,7 @@ using DelimitedFiles
         maxiter = 2000,
         tol_ll = 1e-8,
         tol_param = 1e-6,
-        verbose = false,
+        verbose = false
     )
 
     # MARSS reference values (from marss_general_results.csv)
@@ -143,8 +136,7 @@ end
 
 @testset "General EM - Log-likelihood Improvement" begin
     # Load MARSS reference data
-    data =
-        readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
+    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
     y = Matrix(data')
 
     p, m, r = 3, 2, 2
@@ -189,7 +181,7 @@ end
         maxiter = 100,
         tol_ll = 1e-9,
         tol_param = 1e-6,
-        verbose = false,
+        verbose = false
     )
 
     # EM should improve log-likelihood overall
@@ -199,8 +191,8 @@ end
 
     # Count significant decreases (> 0.1 in log-likelihood)
     n_significant_decreases = 0
-    for i = 2:length(result.loglik_history)
-        if result.loglik_history[i] < result.loglik_history[i-1] - 0.1
+    for i in 2:length(result.loglik_history)
+        if result.loglik_history[i] < result.loglik_history[i - 1] - 0.1
             n_significant_decreases += 1
         end
     end

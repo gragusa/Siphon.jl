@@ -45,7 +45,7 @@ Union type for parameter specification in templates:
 - `Real` - fix at this value
 - `NamedTuple` - estimate with custom (init=, lower=, upper=)
 """
-const ParamSpec = Union{Symbol,Real,NamedTuple}
+const ParamSpec = Union{Symbol, Real, NamedTuple}
 
 """
     parse_param_spec(name, spec, default_init, default_lower, default_upper)
@@ -54,16 +54,16 @@ Parse a parameter specification into either an SSMParameter (free) or FixedValue
 Returns (is_free::Bool, param_or_value)
 """
 function parse_param_spec(
-    name::Symbol,
-    spec::Symbol,
-    default_init,
-    default_lower,
-    default_upper,
+        name::Symbol,
+        spec::Symbol,
+        default_init,
+        default_lower,
+        default_upper
 )
     spec == :free || throw(
         ArgumentError(
-            "Unknown symbol :$spec for parameter $name. Use :free or a numeric value.",
-        ),
+        "Unknown symbol :$spec for parameter $name. Use :free or a numeric value.",
+    ),
     )
     (
         true,
@@ -71,27 +71,27 @@ function parse_param_spec(
             name;
             lower = default_lower,
             upper = default_upper,
-            init = default_init,
-        ),
+            init = default_init
+        )
     )
 end
 
 function parse_param_spec(
-    name::Symbol,
-    spec::Real,
-    default_init,
-    default_lower,
-    default_upper,
+        name::Symbol,
+        spec::Real,
+        default_init,
+        default_lower,
+        default_upper
 )
     (false, FixedValue(Float64(spec)))
 end
 
 function parse_param_spec(
-    name::Symbol,
-    spec::NamedTuple,
-    default_init,
-    default_lower,
-    default_upper,
+        name::Symbol,
+        spec::NamedTuple,
+        default_init,
+        default_lower,
+        default_upper
 )
     init = get(spec, :init, default_init)
     lower = get(spec, :lower, default_lower)
@@ -106,7 +106,7 @@ Union type for diffuse initialization specification:
 - `Bool` - `true` for approximate diffuse (large P1), `false` for non-diffuse
 - `Symbol` - `:exact` for exact diffuse initialization (Durbin-Koopman method)
 """
-const DiffuseSpec = Union{Bool,Symbol}
+const DiffuseSpec = Union{Bool, Symbol}
 
 """
     local_level(; var_obs=:free, var_level=:free, diffuse=true)
@@ -142,9 +142,9 @@ spec = local_level(var_obs=(init=225.0, lower=1.0, upper=10000.0))
 ```
 """
 function local_level(;
-    var_obs::ParamSpec = :free,
-    var_level::ParamSpec = :free,
-    diffuse::DiffuseSpec = true,
+        var_obs::ParamSpec = :free,
+        var_level::ParamSpec = :free,
+        diffuse::DiffuseSpec = true
 )
     # Parse parameter specifications (variance parameters, lower=0.0)
     obs_free, obs_spec = parse_param_spec(:var_obs, var_obs, 1.0, 0.0, Inf)
@@ -224,10 +224,10 @@ State: [μₜ, νₜ]
   - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
 function local_linear_trend(;
-    var_obs::ParamSpec = :free,
-    var_level::ParamSpec = :free,
-    var_slope::ParamSpec = :free,
-    diffuse::DiffuseSpec = true,
+        var_obs::ParamSpec = :free,
+        var_level::ParamSpec = :free,
+        var_slope::ParamSpec = :free,
+        diffuse::DiffuseSpec = true
 )
     # Parse parameter specifications (variance parameters, lower=0.0)
     obs_free, obs_spec = parse_param_spec(:var_obs, var_obs, 1.0, 0.0, Inf)
@@ -261,10 +261,10 @@ function local_linear_trend(;
 
     # Q = diag(var_level, var_slope)
     Q = SSMMatrixSpec((2, 2))
-    Q.elements[(1, 1)] =
-        level_free ? ParameterRef(:var_level) : FixedValue(level_spec.value)
-    Q.elements[(2, 2)] =
-        slope_free ? ParameterRef(:var_slope) : FixedValue(slope_spec.value)
+    Q.elements[(1, 1)] = level_free ? ParameterRef(:var_level) :
+                         FixedValue(level_spec.value)
+    Q.elements[(2, 2)] = slope_free ? ParameterRef(:var_slope) :
+                         FixedValue(slope_spec.value)
 
     # Initial state mean
     a1 = [FixedValue(0.0), FixedValue(0.0)]
@@ -306,10 +306,10 @@ Model:
   - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
 function ar1(;
-    ρ::ParamSpec = :free,
-    var_obs::ParamSpec = :free,
-    var_state::ParamSpec = :free,
-    diffuse::DiffuseSpec = true,
+        ρ::ParamSpec = :free,
+        var_obs::ParamSpec = :free,
+        var_state::ParamSpec = :free,
+        diffuse::DiffuseSpec = true
 )
     # Parse parameter specifications
     rho_free, rho_spec = parse_param_spec(:ρ, ρ, 0.8, -0.9999, 0.9999)
@@ -340,8 +340,8 @@ function ar1(;
 
     # Q = var_state
     Q = SSMMatrixSpec((1, 1))
-    Q.elements[(1, 1)] =
-        state_free ? ParameterRef(:var_state) : FixedValue(state_spec.value)
+    Q.elements[(1, 1)] = state_free ? ParameterRef(:var_state) :
+                         FixedValue(state_spec.value)
 
     # Initial state mean
     a1 = [FixedValue(0.0)]
@@ -386,18 +386,18 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     params = SSMParameter{Float64}[]
 
     # AR coefficients
-    for i = 1:p
+    for i in 1:p
         push!(
             params,
-            SSMParameter(Symbol("φ$i"); lower = -Inf, upper = Inf, init = ar_init[i]),
+            SSMParameter(Symbol("φ$i"); lower = -Inf, upper = Inf, init = ar_init[i])
         )
     end
 
     # MA coefficients
-    for i = 1:q
+    for i in 1:q
         push!(
             params,
-            SSMParameter(Symbol("θ$i"); lower = -Inf, upper = Inf, init = ma_init[i]),
+            SSMParameter(Symbol("θ$i"); lower = -Inf, upper = Inf, init = ma_init[i])
         )
     end
 
@@ -417,7 +417,7 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     #     [⋮  ⋮ ⋮ ⋱  ⋮]
     #     [φᵣ 0 0 ... 0]
     T = SSMMatrixSpec((r, r))
-    for i = 1:r
+    for i in 1:r
         if i <= p
             T.elements[(i, 1)] = ParameterRef(Symbol("φ$i"))
         end
@@ -429,7 +429,7 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     # R = [1; θ₁; θ₂; ...; θᵧ; 0; ...]
     R = SSMMatrixSpec((r, 1))
     R.elements[(1, 1)] = FixedValue(1.0)
-    for i = 1:q
+    for i in 1:q
         R.elements[(i + 1, 1)] = ParameterRef(Symbol("θ$i"))
     end
 
@@ -438,9 +438,9 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     Q.elements[(1, 1)] = ParameterRef(:var)
 
     # Initial state (diffuse)
-    a1 = [FixedValue(0.0) for _ = 1:r]
+    a1 = [FixedValue(0.0) for _ in 1:r]
     P1 = SSMMatrixSpec((r, r))
-    for i = 1:r
+    for i in 1:r
         P1.elements[(i, i)] = FixedValue(1e7)
     end
 
@@ -540,16 +540,16 @@ spec = dynamic_factor(5, 2; factor_lags=1, obs_lags=2)
 - `var_factor_i`: Factor innovation variances
 """
 function dynamic_factor(
-    n_obs::Int,
-    n_factors::Int;
-    factor_lags::Int = 1,
-    obs_lags::Int = 0,
-    correlated_errors::Bool = false,
-    loadings_init::Real = 0.5,
-    ar_init::Real = 0.5,
-    var_obs_init::Real = 1.0,
-    var_factor_init::Real = 1.0,
-    diffuse::Bool = true,
+        n_obs::Int,
+        n_factors::Int;
+        factor_lags::Int = 1,
+        obs_lags::Int = 0,
+        correlated_errors::Bool = false,
+        loadings_init::Real = 0.5,
+        ar_init::Real = 0.5,
+        var_obs_init::Real = 1.0,
+        var_factor_init::Real = 1.0,
+        diffuse::Bool = true
 )
     # Validation
     n_factors < n_obs ||
@@ -568,7 +568,7 @@ function dynamic_factor(
     # Build using custom_ssm approach for flexibility
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol,Any}()
+    matrix_exprs = Dict{Symbol, Any}()
 
     # ==========================================
     # Z matrix (loadings): n_obs × n_states
@@ -580,8 +580,8 @@ function dynamic_factor(
     Z = SSMMatrixSpec((n_obs, n_states))
 
     # Contemporaneous loadings (Λ₀) - columns 1:n_factors
-    for i = 1:n_obs
-        for j = 1:n_factors
+    for i in 1:n_obs
+        for j in 1:n_factors
             if i == j && i <= n_factors
                 # Diagonal of identity block: fixed at 1
                 Z.elements[(i, j)] = FixedValue(1.0)
@@ -593,7 +593,7 @@ function dynamic_factor(
                 pname = Symbol("λ0_$(i)_$(j)")
                 push!(
                     params,
-                    SSMParameter(pname; lower = -Inf, upper = Inf, init = loadings_init),
+                    SSMParameter(pname; lower = -Inf, upper = Inf, init = loadings_init)
                 )
                 push!(param_set, pname)
                 Z.elements[(i, j)] = ParameterRef(pname)
@@ -602,10 +602,10 @@ function dynamic_factor(
     end
 
     # Lagged loadings (Λ₁, Λ₂, ..., Λₛ) - all free parameters
-    for lag = 1:obs_lags
+    for lag in 1:obs_lags
         col_offset = lag * n_factors
-        for i = 1:n_obs
-            for j = 1:n_factors
+        for i in 1:n_obs
+            for j in 1:n_factors
                 col = col_offset + j
                 # All lagged loadings are free (no identification restrictions)
                 pname = Symbol("λ$(lag)_$(i)_$(j)")
@@ -613,7 +613,7 @@ function dynamic_factor(
                 init_val = loadings_init / (lag + 1)
                 push!(
                     params,
-                    SSMParameter(pname; lower = -Inf, upper = Inf, init = init_val),
+                    SSMParameter(pname; lower = -Inf, upper = Inf, init = init_val)
                 )
                 push!(param_set, pname)
                 Z.elements[(i, col)] = ParameterRef(pname)
@@ -633,7 +633,7 @@ function dynamic_factor(
 
         # Create σ parameters (positive std devs for D*Corr*D)
         σ_param_names = Symbol[]
-        for i = 1:n
+        for i in 1:n
             pname = Symbol("$(prefix)_σ_$i")
             if !(pname in param_set)
                 push!(
@@ -642,8 +642,8 @@ function dynamic_factor(
                         pname;
                         lower = 0.0,
                         upper = Inf,
-                        init = sqrt(var_obs_init),
-                    ),
+                        init = sqrt(var_obs_init)
+                    )
                 )
                 push!(param_set, pname)
             end
@@ -653,7 +653,7 @@ function dynamic_factor(
         # Create correlation parameters (unconstrained)
         n_corr = n * (n - 1) ÷ 2
         corr_param_names = Symbol[]
-        for i = 1:n_corr
+        for i in 1:n_corr
             pname = Symbol("$(prefix)_corr_$i")
             if !(pname in param_set)
                 push!(params, SSMParameter(pname; lower = -Inf, upper = Inf, init = 0.0))
@@ -668,11 +668,11 @@ function dynamic_factor(
     else
         # Diagonal covariance (variance parameters)
         H = SSMMatrixSpec((n_obs, n_obs))
-        for i = 1:n_obs
+        for i in 1:n_obs
             pname = Symbol("var_obs_$i")
             push!(
                 params,
-                SSMParameter(pname; lower = 0.0, upper = Inf, init = var_obs_init),
+                SSMParameter(pname; lower = 0.0, upper = Inf, init = var_obs_init)
             )
             push!(param_set, pname)
             H.elements[(i, i)] = ParameterRef(pname)
@@ -693,8 +693,8 @@ function dynamic_factor(
     T = SSMMatrixSpec((n_states, n_states))
 
     # First n_factors rows: AR coefficient blocks (only up to factor_lags)
-    for i = 1:n_factors
-        for lag = 1:factor_lags
+    for i in 1:n_factors
+        for lag in 1:factor_lags
             # Column block for lag l starts at (lag-1)*n_factors + 1
             col = (lag - 1) * n_factors + i
             pname = Symbol("φ_$(i)_$(lag)")
@@ -702,7 +702,7 @@ function dynamic_factor(
             init_val = ar_init / lag
             push!(
                 params,
-                SSMParameter(pname; lower = -0.9999, upper = 0.9999, init = init_val),
+                SSMParameter(pname; lower = -0.9999, upper = 0.9999, init = init_val)
             )
             push!(param_set, pname)
             T.elements[(i, col)] = ParameterRef(pname)
@@ -712,8 +712,8 @@ function dynamic_factor(
 
     # Identity blocks for shifting lags (rows n_factors+1 to n_states)
     if n_state_lags > 1
-        for lag = 1:(n_state_lags-1)
-            for i = 1:n_factors
+        for lag in 1:(n_state_lags - 1)
+            for i in 1:n_factors
                 row = lag * n_factors + i
                 col = (lag - 1) * n_factors + i
                 T.elements[(row, col)] = FixedValue(1.0)
@@ -728,7 +728,7 @@ function dynamic_factor(
     # R = [I]   <- n_factors × n_factors identity
     #     [0]   <- (n_states - n_factors) × n_factors zeros
     R = SSMMatrixSpec((n_states, n_shocks))
-    for i = 1:n_factors
+    for i in 1:n_factors
         R.elements[(i, i)] = FixedValue(1.0)
     end
 
@@ -737,7 +737,7 @@ function dynamic_factor(
     # ==========================================
     # Diagonal covariance for factor innovations (variance parameters)
     Q = SSMMatrixSpec((n_shocks, n_shocks))
-    for i = 1:n_factors
+    for i in 1:n_factors
         pname = Symbol("var_factor_$i")
         push!(params, SSMParameter(pname; lower = 0.0, upper = Inf, init = var_factor_init))
         push!(param_set, pname)
@@ -747,10 +747,10 @@ function dynamic_factor(
     # ==========================================
     # Initial state
     # ==========================================
-    a1 = [FixedValue(0.0) for _ = 1:n_states]
+    a1 = [FixedValue(0.0) for _ in 1:n_states]
     P1_val = diffuse ? 1e7 : 1e4
     P1 = SSMMatrixSpec((n_states, n_states))
-    for i = 1:n_states
+    for i in 1:n_states
         P1.elements[(i, i)] = FixedValue(P1_val)
     end
 
@@ -767,7 +767,7 @@ function dynamic_factor(
         Q,
         a1,
         P1,
-        matrix_exprs,
+        matrix_exprs
     )
 end
 
@@ -848,17 +848,17 @@ smooth = smoothed_states(model)
 - Q covariance elements (depends on Q_structure)
 """
 function dns_model(
-    maturities::AbstractVector{<:Real};
-    T_structure::Symbol = :diagonal,
-    H_structure::Symbol = :diagonal,
-    Q_structure::Symbol = :full,
-    λ_init::Real = 0.0609,
-    λ_lower::Real = 0.001,
-    λ_upper::Real = 1.0,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.01,
-    diffuse::Bool = true,
+        maturities::AbstractVector{<:Real};
+        T_structure::Symbol = :diagonal,
+        H_structure::Symbol = :diagonal,
+        Q_structure::Symbol = :full,
+        λ_init::Real = 0.0609,
+        λ_lower::Real = 0.001,
+        λ_upper::Real = 1.0,
+        T_init = 0.95,
+        Q_init = 0.01,
+        H_init = 0.01,
+        diffuse::Bool = true
 )
     p = length(maturities)
     n_states = 3
@@ -866,7 +866,7 @@ function dns_model(
 
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol,Any}()
+    matrix_exprs = Dict{Symbol, Any}()
 
     # ==========================================
     # Z matrix: DNS loadings via MatrixExpr
@@ -875,7 +875,7 @@ function dns_model(
         maturities;
         λ_init = λ_init,
         λ_lower = λ_lower,
-        λ_upper = λ_upper,
+        λ_upper = λ_upper
     )
     matrix_exprs[:Z] = Z_expr
 
@@ -907,17 +907,17 @@ function dns_model(
     # R matrix: Identity selection
     # ==========================================
     R = SSMMatrixSpec((n_states, n_shocks))
-    for i = 1:n_states
+    for i in 1:n_states
         R.elements[(i, i)] = FixedValue(1.0)
     end
 
     # ==========================================
     # Initial state
     # ==========================================
-    a1 = [FixedValue(0.0) for _ = 1:n_states]
+    a1 = [FixedValue(0.0) for _ in 1:n_states]
     P1_val = diffuse ? 1e7 : 1e4
     P1 = SSMMatrixSpec((n_states, n_states))
-    for i = 1:n_states
+    for i in 1:n_states
         P1.elements[(i, i)] = FixedValue(P1_val)
     end
 
@@ -932,8 +932,8 @@ function _build_dns_T_spec(structure::Symbol, T_init, params, param_set)
 
     if structure == :full
         # Full 3×3 VAR matrix
-        for i = 1:3
-            for j = 1:3
+        for i in 1:3
+            for j in 1:3
                 pname = Symbol("T_$(i)_$(j)")
                 # Diagonal elements get T_init, off-diagonal get small values
                 if i == j
@@ -943,7 +943,7 @@ function _build_dns_T_spec(structure::Symbol, T_init, params, param_set)
                 end
                 push!(
                     params,
-                    SSMParameter(pname; init = init_val, lower = -0.9999, upper = 0.9999),
+                    SSMParameter(pname; init = init_val, lower = -0.9999, upper = 0.9999)
                 )
                 push!(param_set, pname)
                 T.elements[(i, j)] = ParameterRef(pname)
@@ -956,7 +956,7 @@ function _build_dns_T_spec(structure::Symbol, T_init, params, param_set)
             init_val = T_init isa Real ? T_init : T_init[i]
             push!(
                 params,
-                SSMParameter(fname; init = init_val, lower = -0.9999, upper = 0.9999),
+                SSMParameter(fname; init = init_val, lower = -0.9999, upper = 0.9999)
             )
             push!(param_set, fname)
             T.elements[(i, i)] = ParameterRef(fname)
@@ -966,7 +966,7 @@ function _build_dns_T_spec(structure::Symbol, T_init, params, param_set)
         init_val = T_init isa Real ? T_init : T_init[1]
         push!(params, SSMParameter(:φ; init = init_val, lower = -0.9999, upper = 0.9999))
         push!(param_set, :φ)
-        for i = 1:3
+        for i in 1:3
             T.elements[(i, i)] = ParameterRef(:φ)
         end
     else
@@ -982,18 +982,18 @@ end
 Build H matrix specification for DNS model based on structure.
 """
 function _build_dns_H_spec(
-    structure::Symbol,
-    p::Int,
-    H_init,
-    params,
-    param_set,
-    matrix_exprs,
+        structure::Symbol,
+        p::Int,
+        H_init,
+        params,
+        param_set,
+        matrix_exprs
 )
     H = SSMMatrixSpec((p, p))
 
     if structure == :diagonal
         # Diagonal observation variances
-        for i = 1:p
+        for i in 1:p
             pname = Symbol("H_$i")
             init_val = H_init isa Real ? H_init : H_init[i]
             push!(params, SSMParameter(pname; init = init_val, lower = 0.0, upper = Inf))
@@ -1008,11 +1008,11 @@ function _build_dns_H_spec(
                 :H;
                 init = H_init isa Real ? H_init : H_init[1],
                 lower = 0.0,
-                upper = Inf,
-            ),
+                upper = Inf
+            )
         )
         push!(param_set, :H)
-        for i = 1:p
+        for i in 1:p
             H.elements[(i, i)] = ParameterRef(:H)
         end
     else
@@ -1050,7 +1050,7 @@ function _build_dns_Q_spec(structure::Symbol, Q_init, params, param_set, matrix_
         # Create correlation parameters (unconstrained for Cholesky)
         n_corr = n * (n - 1) ÷ 2  # 3 correlations
         corr_param_names = Symbol[]
-        for i = 1:n_corr
+        for i in 1:n_corr
             pname = Symbol("Q_corr_$i")
             push!(params, SSMParameter(pname; init = 0.0, lower = -Inf, upper = Inf))
             push!(param_set, pname)

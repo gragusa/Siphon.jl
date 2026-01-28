@@ -39,7 +39,7 @@ function benchmark_filter_scalar(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_pure.times) / 1e6) ms (median)")
 
@@ -52,7 +52,7 @@ function benchmark_filter_scalar(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_inplace.times) / 1e6) ms (median)")
 
@@ -83,7 +83,7 @@ function benchmark_filter_small(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_pure.times) / 1e6) ms (median)")
 
@@ -96,7 +96,7 @@ function benchmark_filter_small(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_inplace.times) / 1e6) ms (median)")
 
@@ -112,7 +112,7 @@ function benchmark_filter_small(; lengths = [100, 1000, 10000])
             parms.R,
             parms.Q,
             parms.a1,
-            parms.P1,
+            parms.P1
         )
         alloc_inplace = @allocated filter_inplace(
             y,
@@ -122,7 +122,7 @@ function benchmark_filter_small(; lengths = [100, 1000, 10000])
             parms.R,
             parms.Q,
             parms.a1,
-            parms.P1,
+            parms.P1
         )
         println(
             "Memory - Pure: $(alloc_pure ÷ 1024) KB, In-place: $(alloc_inplace ÷ 1024) KB",
@@ -151,7 +151,7 @@ function benchmark_filter_medium(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_pure.times) / 1e6) ms (median)")
 
@@ -164,7 +164,7 @@ function benchmark_filter_medium(; lengths = [100, 1000, 10000])
             $(parms.R),
             $(parms.Q),
             $(parms.a1),
-            $(parms.P1),
+            $(parms.P1)
         )
         println("$(median(t_inplace.times) / 1e6) ms (median)")
 
@@ -180,7 +180,7 @@ function benchmark_filter_medium(; lengths = [100, 1000, 10000])
             parms.R,
             parms.Q,
             parms.a1,
-            parms.P1,
+            parms.P1
         )
         alloc_inplace = @allocated filter_inplace(
             y,
@@ -190,7 +190,7 @@ function benchmark_filter_medium(; lengths = [100, 1000, 10000])
             parms.R,
             parms.Q,
             parms.a1,
-            parms.P1,
+            parms.P1
         )
         println(
             "Memory - Pure: $(alloc_pure ÷ 1024) KB, In-place: $(alloc_inplace ÷ 1024) KB",
@@ -220,7 +220,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_scalar.R,
             parms_scalar.Q,
             parms_scalar.a1,
-            parms_scalar.P1,
+            parms_scalar.P1
         )
         filter_scalar_inplace(
             y,
@@ -230,7 +230,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_scalar.R,
             parms_scalar.Q,
             parms_scalar.a1,
-            parms_scalar.P1,
+            parms_scalar.P1
         )
 
         t_pure = @belapsed filter_scalar_pure(
@@ -241,7 +241,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_scalar.R),
             $(parms_scalar.Q),
             $(parms_scalar.a1),
-            $(parms_scalar.P1),
+            $(parms_scalar.P1)
         )
         t_inplace = @belapsed filter_scalar_inplace(
             $y,
@@ -251,7 +251,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_scalar.R),
             $(parms_scalar.Q),
             $(parms_scalar.a1),
-            $(parms_scalar.P1),
+            $(parms_scalar.P1)
         )
         push!(results, ("scalar", 1, n, t_pure * 1e9, t_inplace * 1e9))  # Convert to ns
     end
@@ -271,7 +271,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_small.R,
             parms_small.Q,
             parms_small.a1,
-            parms_small.P1,
+            parms_small.P1
         )
         filter_inplace(
             y,
@@ -281,7 +281,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_small.R,
             parms_small.Q,
             parms_small.a1,
-            parms_small.P1,
+            parms_small.P1
         )
 
         t_pure = @belapsed filter_pure(
@@ -292,7 +292,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_small.R),
             $(parms_small.Q),
             $(parms_small.a1),
-            $(parms_small.P1),
+            $(parms_small.P1)
         )
         t_inplace = @belapsed filter_inplace(
             $y,
@@ -302,7 +302,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_small.R),
             $(parms_small.Q),
             $(parms_small.a1),
-            $(parms_small.P1),
+            $(parms_small.P1)
         )
         push!(results, ("small", 3, n, t_pure * 1e9, t_inplace * 1e9))
     end
@@ -323,7 +323,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_med.R,
             parms_med.Q,
             parms_med.a1,
-            parms_med.P1,
+            parms_med.P1
         )
         filter_inplace(
             y,
@@ -333,7 +333,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             parms_med.R,
             parms_med.Q,
             parms_med.a1,
-            parms_med.P1,
+            parms_med.P1
         )
 
         t_pure = @belapsed filter_pure(
@@ -344,7 +344,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_med.R),
             $(parms_med.Q),
             $(parms_med.a1),
-            $(parms_med.P1),
+            $(parms_med.P1)
         )
         t_inplace = @belapsed filter_inplace(
             $y,
@@ -354,7 +354,7 @@ function benchmark_comparison_table(; lengths = [100, 1000, 10000])
             $(parms_med.R),
             $(parms_med.Q),
             $(parms_med.a1),
-            $(parms_med.P1),
+            $(parms_med.P1)
         )
         push!(results, ("medium", 10, n, t_pure * 1e9, t_inplace * 1e9))
     end

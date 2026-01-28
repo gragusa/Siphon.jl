@@ -78,10 +78,10 @@ The filter skips the measurement update and propagates the state:
     P_{t+1} = T * P_t * T' + R * Q * R'
 """
 function kalman_loglik(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix
 )
     n = size(y, 2)
     obs_dim = size(y, 1)
@@ -94,7 +94,7 @@ function kalman_loglik(
         eltype(p.R),
         eltype(p.Q),
         eltype(a1),
-        eltype(P1),
+        eltype(P1)
     )
 
     # Initialize state
@@ -107,7 +107,7 @@ function kalman_loglik(
     # Count non-missing observations for constant term
     n_obs = 0
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[:, t]
 
         # Check for missing observation
@@ -186,8 +186,8 @@ end
 
 Check if all KFParms matrices are StaticArrays.
 """
-@inline _is_static_kfparms(::KFParms{<:SMatrix,<:SMatrix,<:SMatrix,<:SMatrix,<:SMatrix}) =
-    true
+@inline _is_static_kfparms(::KFParms{
+    <:SMatrix, <:SMatrix, <:SMatrix, <:SMatrix, <:SMatrix}) = true
 @inline _is_static_kfparms(::KFParms) = false
 
 """
@@ -208,11 +208,12 @@ both state dimension m and observation dimension p are small (≤ STATIC_THRESHO
 - Best for m ≤ 8 and p ≤ 5 (speedup decreases for larger dimensions)
 """
 function kalman_loglik(
-    p::KFParms{<:SMatrix{P,M},<:SMatrix{P,P},<:SMatrix{M,M},<:SMatrix{M,R},<:SMatrix{R,R}},
-    y::AbstractMatrix,
-    a1::SVector{M},
-    P1::SMatrix{M,M},
-) where {P,M,R}
+        p::KFParms{<:SMatrix{P, M}, <:SMatrix{P, P}, <:SMatrix{M, M},
+            <:SMatrix{M, R}, <:SMatrix{R, R}},
+        y::AbstractMatrix,
+        a1::SVector{M},
+        P1::SMatrix{M, M}
+) where {P, M, R}
     n = size(y, 2)
 
     # Get element type for AD compatibility
@@ -223,19 +224,19 @@ function kalman_loglik(
         eltype(p.R),
         eltype(p.Q),
         eltype(a1),
-        eltype(P1),
+        eltype(P1)
     )
 
     # Initialize state as static types
-    a = SVector{M,ET}(a1)
-    P_state = SMatrix{M,M,ET}(P1)
+    a = SVector{M, ET}(a1)
+    P_state = SMatrix{M, M, ET}(P1)
 
     # Static system matrices (ensure correct element type for AD)
-    Z = SMatrix{P,M,ET}(p.Z)
-    H = SMatrix{P,P,ET}(p.H)
-    T_mat = SMatrix{M,M,ET}(p.T)
-    R_mat = SMatrix{M,R,ET}(p.R)
-    Q = SMatrix{R,R,ET}(p.Q)
+    Z = SMatrix{P, M, ET}(p.Z)
+    H = SMatrix{P, P, ET}(p.H)
+    T_mat = SMatrix{M, M, ET}(p.T)
+    R_mat = SMatrix{M, R, ET}(p.R)
+    Q = SMatrix{R, R, ET}(p.Q)
 
     # Precompute R*Q*R' (constant across iterations)
     RQR = R_mat * Q * transpose(R_mat)
@@ -243,9 +244,9 @@ function kalman_loglik(
     loglik = zero(ET)
     n_obs = 0
 
-    @inbounds for t = 1:n
+    @inbounds for t in 1:n
         # Extract observation as SVector
-        y_t = SVector{P,ET}(ntuple(i -> ET(y[i, t]), Val(P)))
+        y_t = SVector{P, ET}(ntuple(i -> ET(y[i, t]), Val(P)))
 
         # Check for missing observation
         if _has_missing(y_t)
@@ -270,18 +271,18 @@ function kalman_loglik(
             if F_val <= zero(ET)
                 return ET(-Inf)
             end
-            Finv = SMatrix{1,1,ET}((one(ET) / F_val,))
+            Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
             logdetF = log(F_val)
             quad_form = v[1]^2 / F_val
         else
             # Multivariate: use Cholesky
-            F_sym = Symmetric(SMatrix{P,P,ET}((F + transpose(F)) / 2))
+            F_sym = Symmetric(SMatrix{P, P, ET}((F + transpose(F)) / 2))
             chol_result = cholesky(F_sym; check = false)
             if !issuccess(chol_result)
                 return ET(-Inf)
             end
             # For static matrices, inv is efficient
-            Finv = SMatrix{P,P,ET}(inv(chol_result))
+            Finv = SMatrix{P, P, ET}(inv(chol_result))
             # logdet from Cholesky: 2 * sum(log(diag(U)))
             logdetF = 2 * sum(log.(diag(chol_result.U)))
             quad_form = dot(v, Finv * v)
@@ -320,14 +321,14 @@ Optimized for the common case of scalar state and observation.
 Handles missing observations marked as NaN.
 """
 function kalman_loglik_scalar(
-    Z::Real,
-    H::Real,
-    Tmat::Real,
-    R::Real,
-    Q::Real,
-    a1::Real,
-    P1::Real,
-    y::AbstractVector,
+        Z::Real,
+        H::Real,
+        Tmat::Real,
+        R::Real,
+        Q::Real,
+        a1::Real,
+        P1::Real,
+        y::AbstractVector
 )
     n = length(y)
     T = promote_type(
@@ -337,7 +338,7 @@ function kalman_loglik_scalar(
         typeof(R),
         typeof(Q),
         typeof(a1),
-        typeof(P1),
+        typeof(P1)
     )
 
     a = convert(T, a1)
@@ -345,7 +346,7 @@ function kalman_loglik_scalar(
     loglik = zero(T)
     n_obs = 0
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[t]
 
         # Check for missing observation
@@ -409,10 +410,10 @@ ll = kalman_loglik(p_static, y, a1_static, P1_static)
 ```
 """
 function kalman_loglik_static(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix
 )
     m = length(a1)
     obs_dim = size(y, 1)
@@ -460,10 +461,10 @@ When `y[:, t]` contains any NaN, the observation is treated as missing.
 The filter skips the measurement update and propagates the state.
 """
 function kalman_filter(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix
 )
     n = size(y, 2)
     obs_dim = size(y, 1)
@@ -476,7 +477,7 @@ function kalman_filter(
         eltype(p.R),
         eltype(p.Q),
         eltype(a1),
-        eltype(P1),
+        eltype(P1)
     )
 
     # Predicted state storage: n entries (at = a_{t|t-1})
@@ -500,7 +501,7 @@ function kalman_filter(
     loglik = zero(ET)
     n_obs = 0
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[:, t]
 
         # Store predicted state (before measurement update)
@@ -574,7 +575,7 @@ function kalman_filter(
         vt_store,
         Ft_store,
         Kt_store,
-        missing_mask,
+        missing_mask
     )
 end
 
@@ -595,11 +596,12 @@ The speedup comes from keeping intermediate state computations (a, P, v, F, K) a
 StaticArrays, avoiding temporary allocations within each iteration.
 """
 function kalman_filter(
-    p::KFParms{<:SMatrix{P,M},<:SMatrix{P,P},<:SMatrix{M,M},<:SMatrix{M,R},<:SMatrix{R,R}},
-    y::AbstractMatrix,
-    a1::SVector{M},
-    P1::SMatrix{M,M},
-) where {P,M,R}
+        p::KFParms{<:SMatrix{P, M}, <:SMatrix{P, P}, <:SMatrix{M, M},
+            <:SMatrix{M, R}, <:SMatrix{R, R}},
+        y::AbstractMatrix,
+        a1::SVector{M},
+        P1::SMatrix{M, M}
+) where {P, M, R}
     n = size(y, 2)
 
     ET = promote_type(
@@ -609,7 +611,7 @@ function kalman_filter(
         eltype(p.R),
         eltype(p.Q),
         eltype(a1),
-        eltype(P1),
+        eltype(P1)
     )
 
     # Output storage (heap-allocated, but filled with static values)
@@ -623,52 +625,56 @@ function kalman_filter(
     missing_mask = BitVector(undef, n)
 
     # Static system matrices
-    Z = SMatrix{P,M,ET}(p.Z)
-    H = SMatrix{P,P,ET}(p.H)
-    T_mat = SMatrix{M,M,ET}(p.T)
-    R_mat = SMatrix{M,R,ET}(p.R)
-    Q = SMatrix{R,R,ET}(p.Q)
+    Z = SMatrix{P, M, ET}(p.Z)
+    H = SMatrix{P, P, ET}(p.H)
+    T_mat = SMatrix{M, M, ET}(p.T)
+    R_mat = SMatrix{M, R, ET}(p.R)
+    Q = SMatrix{R, R, ET}(p.Q)
 
     # Precompute R*Q*R'
     RQR = R_mat * Q * transpose(R_mat)
 
     # Initialize state as static
-    a_pred = SVector{M,ET}(a1)
-    P_pred = SMatrix{M,M,ET}(P1)
+    a_pred = SVector{M, ET}(a1)
+    P_pred = SMatrix{M, M, ET}(P1)
 
     loglik = zero(ET)
     n_obs = 0
 
-    @inbounds for t = 1:n
+    @inbounds for t in 1:n
         # Extract observation as SVector
-        y_t = SVector{P,ET}(ntuple(i -> ET(y[i, t]), Val(P)))
+        y_t = SVector{P, ET}(ntuple(i -> ET(y[i, t]), Val(P)))
 
         # Store predicted state
-        for i = 1:M
+        for i in 1:M
             at_store[i, t] = a_pred[i]
         end
-        for j = 1:M, i = 1:M
+        for j in 1:M, i in 1:M
+
             Pt_store[i, j, t] = P_pred[i, j]
         end
 
         if _has_missing(y_t)
             missing_mask[t] = true
-            for i = 1:P
+            for i in 1:P
                 vt_store[i, t] = ET(NaN)
             end
             F_miss = Z * P_pred * transpose(Z) + H
-            for j = 1:P, i = 1:P
+            for j in 1:P, i in 1:P
+
                 Ft_store[i, j, t] = F_miss[i, j]
             end
-            for j = 1:P, i = 1:M
+            for j in 1:P, i in 1:M
+
                 Kt_store[i, j, t] = zero(ET)
             end
 
             # Filtered = predicted for missing
-            for i = 1:M
+            for i in 1:M
                 att_store[i, t] = a_pred[i]
             end
-            for j = 1:M, i = 1:M
+            for j in 1:M, i in 1:M
+
                 Ptt_store[i, j, t] = P_pred[i, j]
             end
 
@@ -686,11 +692,11 @@ function kalman_filter(
             # Inverse and log-det
             if P == 1
                 F_val = F[1, 1]
-                Finv = SMatrix{1,1,ET}((one(ET) / F_val,))
+                Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
             else
-                F_sym = Symmetric(SMatrix{P,P,ET}((F + transpose(F)) / 2))
+                F_sym = Symmetric(SMatrix{P, P, ET}((F + transpose(F)) / 2))
                 chol_result = cholesky(F_sym; check = false)
                 if !issuccess(chol_result)
                     # Return early with -Inf likelihood
@@ -704,10 +710,10 @@ function kalman_filter(
                         vt_store,
                         Ft_store,
                         Kt_store,
-                        missing_mask,
+                        missing_mask
                     )
                 end
-                Finv = SMatrix{P,P,ET}(inv(chol_result))
+                Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
                 quad_form = dot(v, Finv * v)
             end
@@ -718,13 +724,15 @@ function kalman_filter(
             K = T_mat * P_pred * transpose(Z) * Finv
 
             # Store
-            for i = 1:P
+            for i in 1:P
                 vt_store[i, t] = v[i]
             end
-            for j = 1:P, i = 1:P
+            for j in 1:P, i in 1:P
+
                 Ft_store[i, j, t] = F[i, j]
             end
-            for j = 1:P, i = 1:M
+            for j in 1:P, i in 1:M
+
                 Kt_store[i, j, t] = K[i, j]
             end
 
@@ -732,10 +740,11 @@ function kalman_filter(
             a_filt = a_pred + P_pred * transpose(Z) * Finv * v
             P_filt = P_pred - P_pred * transpose(Z) * Finv * Z * P_pred
 
-            for i = 1:M
+            for i in 1:M
                 att_store[i, t] = a_filt[i]
             end
-            for j = 1:M, i = 1:M
+            for j in 1:M, i in 1:M
+
                 Ptt_store[i, j, t] = P_filt[i, j]
             end
 
@@ -757,7 +766,7 @@ function kalman_filter(
         vt_store,
         Ft_store,
         Kt_store,
-        missing_mask,
+        missing_mask
     )
 end
 
@@ -769,10 +778,10 @@ Run full Kalman filter using StaticArrays if dimensions are small enough.
 Automatically converts inputs to StaticArrays when dimensions ≤ STATIC_THRESHOLD.
 """
 function kalman_filter_static(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix
 )
     m = length(a1)
     obs_dim = size(y, 1)
@@ -799,14 +808,14 @@ For `n` observations, returns `n` time points:
 - `att[t]` = E[αₜ | y₁:ₜ] (filtered state)
 """
 function kalman_filter_scalar(
-    Z::Real,
-    H::Real,
-    Tmat::Real,
-    R::Real,
-    Q::Real,
-    a1::Real,
-    P1::Real,
-    y::AbstractVector,
+        Z::Real,
+        H::Real,
+        Tmat::Real,
+        R::Real,
+        Q::Real,
+        a1::Real,
+        P1::Real,
+        y::AbstractVector
 )
     n = length(y)
     ET = promote_type(
@@ -816,7 +825,7 @@ function kalman_filter_scalar(
         typeof(R),
         typeof(Q),
         typeof(a1),
-        typeof(P1),
+        typeof(P1)
     )
 
     # Predicted state storage: n entries
@@ -838,7 +847,7 @@ function kalman_filter_scalar(
     loglik = zero(ET)
     n_obs = 0
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[t]
 
         # Store predicted state
@@ -893,7 +902,7 @@ function kalman_filter_scalar(
         Ptt_store,
         vt_store,
         Ft_store,
-        missing_mask,
+        missing_mask
     )
 end
 
@@ -963,12 +972,12 @@ ll = kalman_loglik_diffuse(p, y, a1, P1_star, P1_inf)
 ```
 """
 function kalman_loglik_diffuse(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1_star::AbstractMatrix,
-    P1_inf::AbstractMatrix;
-    tol::Real = 1e-8,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1_star::AbstractMatrix,
+        P1_inf::AbstractMatrix;
+        tol::Real = 1e-8
 )
     n = size(y, 2)
     obs_dim = size(y, 1)
@@ -982,7 +991,7 @@ function kalman_loglik_diffuse(
         eltype(p.Q),
         eltype(a1),
         eltype(P1_star),
-        eltype(P1_inf),
+        eltype(P1_inf)
     )
 
     # Initialize state
@@ -1000,7 +1009,7 @@ function kalman_loglik_diffuse(
     # Track if diffuse period has ended
     diffuse_ended = false
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[:, t]
 
         # Check for missing observation
@@ -1164,12 +1173,12 @@ including the diffuse covariances (Pinf, Pstar) during the diffuse period.
 - `kalman_filter`: Standard filter without diffuse initialization
 """
 function kalman_filter_diffuse(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1_star::AbstractMatrix,
-    P1_inf::AbstractMatrix;
-    tol::Real = 1e-8,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1_star::AbstractMatrix,
+        P1_inf::AbstractMatrix;
+        tol::Real = 1e-8
 )
     n = size(y, 2)
     obs_dim = size(y, 1)
@@ -1183,7 +1192,7 @@ function kalman_filter_diffuse(
         eltype(p.Q),
         eltype(a1),
         eltype(P1_star),
-        eltype(P1_inf),
+        eltype(P1_inf)
     )
 
     # Allocate storage
@@ -1214,7 +1223,7 @@ function kalman_filter_diffuse(
     diffuse_ended = false
     d = 0  # Diffuse period length
 
-    for t = 1:n
+    for t in 1:n
         y_t = y[:, t]
 
         # Store predicted state
@@ -1371,7 +1380,7 @@ function kalman_filter_diffuse(
     if d > 0
         Pinf_store = Array{ET}(undef, state_dim, state_dim, d)
         Pstar_store = Array{ET}(undef, state_dim, state_dim, d)
-        for i = 1:d
+        for i in 1:d
             Pinf_store[:, :, i] = Pinf_list[i]
             Pstar_store[:, :, i] = Pstar_list[i]
         end
@@ -1396,7 +1405,7 @@ function kalman_filter_diffuse(
         Ft_store,
         Kt_store,
         flag_list,
-        missing_mask,
+        missing_mask
     )
 end
 
@@ -1439,12 +1448,12 @@ ll = kalman_loglik(p, y, a1, P1_star, P1_inf)
 See also: [`kalman_filter`](@ref) (5-arg version for full filter output)
 """
 function kalman_loglik(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1_star::AbstractMatrix,
-    P1_inf::AbstractMatrix;
-    tol::Real = 1e-8,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1_star::AbstractMatrix,
+        P1_inf::AbstractMatrix;
+        tol::Real = 1e-8
 )
     return kalman_loglik_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
 end
@@ -1484,12 +1493,12 @@ d = diffuse_period(result)  # Number of diffuse observations
 See also: [`kalman_loglik`](@ref) (5-arg version for log-likelihood only)
 """
 function kalman_filter(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1_star::AbstractMatrix,
-    P1_inf::AbstractMatrix;
-    tol::Real = 1e-8,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1_star::AbstractMatrix,
+        P1_inf::AbstractMatrix;
+        tol::Real = 1e-8
 )
     return kalman_filter_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
 end

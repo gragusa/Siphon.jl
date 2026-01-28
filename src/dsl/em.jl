@@ -33,7 +33,7 @@ Result from EM algorithm estimation.
 - `smoothed_states`: Final smoothed states (m × n)
 - `smoothed_cov`: Final smoothed covariances (m × m × n)
 """
-struct EMResult{T<:Real,NT<:NamedTuple}
+struct EMResult{T <: Real, NT <: NamedTuple}
     theta::NT
     theta_vec::Vector{T}
     loglik::T
@@ -41,7 +41,7 @@ struct EMResult{T<:Real,NT<:NamedTuple}
     converged::Bool
     iterations::Int
     smoothed_states::Matrix{T}
-    smoothed_cov::Array{T,3}
+    smoothed_cov::Array{T, 3}
 end
 
 # ============================================
@@ -67,14 +67,13 @@ M-step closed forms:
     var_level = (1/(n-1)) * Σₜ [(μ̂ₜ - μ̂ₜ₋₁)² + Vₜ + Vₜ₋₁ - 2Pₜ,ₜ₋₁]
 """
 function _em_local_level(
-    spec::SSMSpec,
-    y::AbstractMatrix;
-    maxiter::Int = 100,
-    tol_ll::Real = 1e-6,
-    tol_param::Real = 1e-6,
-    verbose::Bool = false,
+        spec::SSMSpec,
+        y::AbstractMatrix;
+        maxiter::Int = 100,
+        tol_ll::Real = 1e-6,
+        tol_param::Real = 1e-6,
+        verbose::Bool = false
 )
-
     n = size(y, 2)
 
     # Determine which parameters are free vs fixed
@@ -118,7 +117,7 @@ function _em_local_level(
     iter = 0
     ll_prev = -Inf
 
-    for iter_i = 1:maxiter
+    for iter_i in 1:maxiter
         iter = iter_i
 
         # Build current KFParms
@@ -133,7 +132,7 @@ function _em_local_level(
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true,
+            compute_crosscov = true
         )
 
         alpha_hat = smooth_result.alpha      # m × n
@@ -223,7 +222,7 @@ function _em_local_level(
         filt_final.Pt,
         filt_final.vt,
         filt_final.Ft;
-        compute_crosscov = false,
+        compute_crosscov = false
     )
 
     EMResult(
@@ -234,7 +233,7 @@ function _em_local_level(
         converged,
         iter,
         smooth_final.alpha,
-        smooth_final.V,
+        smooth_final.V
     )
 end
 
@@ -263,16 +262,16 @@ Formulas:
     var_level = (1/(n-1)) * Σₜ₌₂ⁿ [(α̂ₜ - α̂ₜ₋₁)² + Vₜ + Vₜ₋₁ - 2Pₜ,ₜ₋₁]
 """
 function _mstep_local_level(
-    y::AbstractMatrix,
-    alpha_hat::AbstractMatrix,
-    V_hat::AbstractArray,
-    P_crosslag::AbstractArray,
+        y::AbstractMatrix,
+        alpha_hat::AbstractMatrix,
+        V_hat::AbstractArray,
+        P_crosslag::AbstractArray
 )
     n = size(y, 2)
 
     # Observation variance: var_obs
     sum_obs = zero(eltype(alpha_hat))
-    @inbounds for t = 1:n
+    @inbounds for t in 1:n
         residual = y[1, t] - alpha_hat[1, t]
         sum_obs += residual^2 + V_hat[1, 1, t]
     end
@@ -281,11 +280,11 @@ function _mstep_local_level(
     # State variance: var_level
     # Σₜ₌₂ⁿ [(α̂ₜ - α̂ₜ₋₁)² + Vₜ + Vₜ₋₁ - 2Pₜ,ₜ₋₁|n]
     sum_state = zero(eltype(alpha_hat))
-    @inbounds for t = 2:n
-        state_diff = alpha_hat[1, t] - alpha_hat[1, t-1]
+    @inbounds for t in 2:n
+        state_diff = alpha_hat[1, t] - alpha_hat[1, t - 1]
         # P_crosslag[:, :, t-1] = P_{t,t-1|n}
-        cross_cov = P_crosslag[1, 1, t-1]
-        sum_state += state_diff^2 + V_hat[1, 1, t] + V_hat[1, 1, t-1] - 2*cross_cov
+        cross_cov = P_crosslag[1, 1, t - 1]
+        sum_state += state_diff^2 + V_hat[1, 1, t] + V_hat[1, 1, t - 1] - 2*cross_cov
     end
     var_level = sum_state / (n - 1)
 
@@ -297,7 +296,7 @@ end
 
 Extract fixed value from matrix specification.
 """
-function _get_fixed_value(mat_spec::SSMMatrixSpec, idx::Tuple{Int,Int})
+function _get_fixed_value(mat_spec::SSMMatrixSpec, idx::Tuple{Int, Int})
     elem = get(mat_spec.elements, idx, mat_spec.default)
     if elem isa FixedValue
         return elem.value
@@ -358,22 +357,22 @@ println("Q diagonal: ", result.Q_diag)
 ```
 """
 function em_ssm_diagonal(
-    Z::AbstractMatrix,
-    T::AbstractMatrix,
-    R::AbstractMatrix,
-    H_diag_init::AbstractVector,
-    Q_diag_init::AbstractVector,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix;
-    Z_free::AbstractMatrix{Bool} = falses(size(Z)),
-    T_free::AbstractMatrix{Bool} = falses(size(T)),
-    H_free::AbstractVector{Bool} = trues(length(H_diag_init)),
-    Q_free::AbstractVector{Bool} = trues(length(Q_diag_init)),
-    maxiter::Int = 500,
-    tol_ll::Real = 1e-6,
-    tol_param::Real = 1e-6,
-    verbose::Bool = false,
+        Z::AbstractMatrix,
+        T::AbstractMatrix,
+        R::AbstractMatrix,
+        H_diag_init::AbstractVector,
+        Q_diag_init::AbstractVector,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix;
+        Z_free::AbstractMatrix{Bool} = falses(size(Z)),
+        T_free::AbstractMatrix{Bool} = falses(size(T)),
+        H_free::AbstractVector{Bool} = trues(length(H_diag_init)),
+        Q_free::AbstractVector{Bool} = trues(length(Q_diag_init)),
+        maxiter::Int = 500,
+        tol_ll::Real = 1e-6,
+        tol_param::Real = 1e-6,
+        verbose::Bool = false
 )
     p = length(H_diag_init)
     r = length(Q_diag_init)
@@ -384,12 +383,12 @@ function em_ssm_diagonal(
 
     # Build diagonal-only free masks from BitVectors
     H_free_mat = falses(p, p)
-    for i = 1:p
+    for i in 1:p
         H_free_mat[i, i] = H_free[i]
     end
 
     Q_free_mat = falses(r, r)
-    for i = 1:r
+    for i in 1:r
         Q_free_mat[i, i] = Q_free[i]
     end
 
@@ -410,7 +409,7 @@ function em_ssm_diagonal(
         maxiter = maxiter,
         tol_ll = tol_ll,
         tol_param = tol_param,
-        verbose = verbose,
+        verbose = verbose
     )
 
     # Return with diagonal accessors for compatibility
@@ -424,7 +423,7 @@ function em_ssm_diagonal(
         converged = result.converged,
         iterations = result.iterations,
         smoothed_states = result.smoothed_states,
-        smoothed_cov = result.smoothed_cov,
+        smoothed_cov = result.smoothed_cov
     )
 end
 
@@ -472,13 +471,13 @@ For Q: `Q_new = (1/(n-1)) Σₜ₌₂ⁿ [R⁺(α̂ₜ - Tα̂ₜ₋₁)(α̂ₜ
 where V_contrib = V̂ₜ + T V̂ₜ₋₁ T' - P̂ₜ,ₜ₋₁ T' - T P̂'ₜ,ₜ₋₁
 """
 function _mstep_full_cov(
-    Z::AbstractMatrix,
-    T::AbstractMatrix,
-    R::AbstractMatrix,
-    y::AbstractMatrix,
-    alpha_hat::AbstractMatrix,
-    V_hat::AbstractArray,
-    P_crosslag::AbstractArray,
+        Z::AbstractMatrix,
+        T::AbstractMatrix,
+        R::AbstractMatrix,
+        y::AbstractMatrix,
+        alpha_hat::AbstractMatrix,
+        V_hat::AbstractArray,
+        P_crosslag::AbstractArray
 )
     p, n = size(y)
     m = size(alpha_hat, 1)
@@ -490,11 +489,13 @@ function _mstep_full_cov(
     # Z_new = (Σₜ yₜ α̂ₜ') * (Σₜ (α̂ₜα̂ₜ' + V̂ₜ))⁻¹
     sum_y_alpha = zeros(p, m)
     sum_alpha_alpha = zeros(m, m)
-    @inbounds for t = 1:n
-        for i = 1:p, j = 1:m
+    @inbounds for t in 1:n
+        for i in 1:p, j in 1:m
+
             sum_y_alpha[i, j] += y[i, t] * alpha_hat[j, t]
         end
-        for i = 1:m, j = 1:m
+        for i in 1:m, j in 1:m
+
             sum_alpha_alpha[i, j] += alpha_hat[i, t] * alpha_hat[j, t] + V_hat[i, j, t]
         end
     end
@@ -506,12 +507,13 @@ function _mstep_full_cov(
     # T_new = (Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁)) * (Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁))⁻¹
     sum_alpha_alpha_lag = zeros(m, m)
     sum_alpha_alpha_prev = zeros(m, m)
-    @inbounds for t = 2:n
-        for i = 1:m, j = 1:m
-            sum_alpha_alpha_lag[i, j] +=
-                alpha_hat[i, t] * alpha_hat[j, t-1] + P_crosslag[i, j, t-1]
-            sum_alpha_alpha_prev[i, j] +=
-                alpha_hat[i, t-1] * alpha_hat[j, t-1] + V_hat[i, j, t-1]
+    @inbounds for t in 2:n
+        for i in 1:m, j in 1:m
+
+            sum_alpha_alpha_lag[i, j] += alpha_hat[i, t] * alpha_hat[j, t - 1] +
+                                         P_crosslag[i, j, t - 1]
+            sum_alpha_alpha_prev[i, j] += alpha_hat[i, t - 1] * alpha_hat[j, t - 1] +
+                                          V_hat[i, j, t - 1]
         end
     end
     T_new = sum_alpha_alpha_lag / sum_alpha_alpha_prev
@@ -522,22 +524,25 @@ function _mstep_full_cov(
     # H_new = (1/n) Σₜ [(yₜ - Zα̂ₜ)(yₜ - Zα̂ₜ)' + Z V̂ₜ Z']
     # Use current Z (not Z_new) to maintain EM monotonicity
     H_new = zeros(p, p)
-    @inbounds for t = 1:n
+    @inbounds for t in 1:n
         # Compute residual: y_t - Z * alpha_hat[:, t]
         residual = Vector{Float64}(undef, p)
-        for i = 1:p
+        for i in 1:p
             residual[i] = y[i, t]
-            for k = 1:m
+            for k in 1:m
                 residual[i] -= Z[i, k] * alpha_hat[k, t]
             end
         end
         # Outer product: residual * residual'
-        for i = 1:p, j = 1:p
+        for i in 1:p, j in 1:p
+
             H_new[i, j] += residual[i] * residual[j]
         end
         # Variance contribution: Z * V_hat[:, :, t] * Z'
-        for i = 1:p, j = 1:p
-            for k1 = 1:m, k2 = 1:m
+        for i in 1:p, j in 1:p
+
+            for k1 in 1:m, k2 in 1:m
+
                 H_new[i, j] += Z[i, k1] * V_hat[k1, k2, t] * Z[j, k2]
             end
         end
@@ -555,13 +560,13 @@ function _mstep_full_cov(
     Q_new = zeros(r, r)
     R_pinv = pinv(R)
 
-    @inbounds for t = 2:n
+    @inbounds for t in 2:n
         # State residual: α̂ₜ - T α̂ₜ₋₁
         state_resid = Vector{Float64}(undef, m)
-        for i = 1:m
+        for i in 1:m
             state_resid[i] = alpha_hat[i, t]
-            for k = 1:m
-                state_resid[i] -= T[i, k] * alpha_hat[k, t-1]
+            for k in 1:m
+                state_resid[i] -= T[i, k] * alpha_hat[k, t - 1]
             end
         end
 
@@ -569,32 +574,36 @@ function _mstep_full_cov(
         eta_hat = R_pinv * state_resid
 
         # Outer product contribution: η̂ₜ η̂ₜ'
-        for i = 1:r, j = 1:r
+        for i in 1:r, j in 1:r
+
             Q_new[i, j] += eta_hat[i] * eta_hat[j]
         end
 
         # Variance contribution: R⁺ * V_contrib * R⁺'
         # V_contrib = V̂ₜ + T V̂ₜ₋₁ T' - P̂ₜ,ₜ₋₁ T' - T P̂'ₜ,ₜ₋₁
         V_contrib = zeros(m, m)
-        for i = 1:m, j = 1:m
+        for i in 1:m, j in 1:m
+
             V_contrib[i, j] = V_hat[i, j, t]
             # + T V̂ₜ₋₁ T'
-            for k1 = 1:m, k2 = 1:m
-                V_contrib[i, j] += T[i, k1] * V_hat[k1, k2, t-1] * T[j, k2]
+            for k1 in 1:m, k2 in 1:m
+
+                V_contrib[i, j] += T[i, k1] * V_hat[k1, k2, t - 1] * T[j, k2]
             end
             # - P̂ₜ,ₜ₋₁ T'
-            for k = 1:m
-                V_contrib[i, j] -= P_crosslag[i, k, t-1] * T[j, k]
+            for k in 1:m
+                V_contrib[i, j] -= P_crosslag[i, k, t - 1] * T[j, k]
             end
             # - T P̂'ₜ,ₜ₋₁
-            for k = 1:m
-                V_contrib[i, j] -= T[i, k] * P_crosslag[j, k, t-1]
+            for k in 1:m
+                V_contrib[i, j] -= T[i, k] * P_crosslag[j, k, t - 1]
             end
         end
 
         # R⁺ * V_contrib * R⁺'
         RVR = R_pinv * V_contrib * R_pinv'
-        for i = 1:r, j = 1:r
+        for i in 1:r, j in 1:r
+
             Q_new[i, j] += RVR[i, j]
         end
     end
@@ -633,24 +642,23 @@ NamedTuple with: Z, T, H, Q, loglik, loglik_history, converged, iterations,
 smoothed_states, smoothed_cov
 """
 function _em_general_ssm_full_cov(
-    Z_init::AbstractMatrix,
-    T_init::AbstractMatrix,
-    R::AbstractMatrix,
-    H_init::AbstractMatrix,
-    Q_init::AbstractMatrix,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix;
-    Z_free::AbstractMatrix{Bool} = trues(size(Z_init)),
-    T_free::AbstractMatrix{Bool} = trues(size(T_init)),
-    H_free::AbstractMatrix{Bool} = trues(size(H_init)),
-    Q_free::AbstractMatrix{Bool} = trues(size(Q_init)),
-    maxiter::Int = 500,
-    tol_ll::Real = 1e-6,
-    tol_param::Real = 1e-6,
-    verbose::Bool = false,
+        Z_init::AbstractMatrix,
+        T_init::AbstractMatrix,
+        R::AbstractMatrix,
+        H_init::AbstractMatrix,
+        Q_init::AbstractMatrix,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix;
+        Z_free::AbstractMatrix{Bool} = trues(size(Z_init)),
+        T_free::AbstractMatrix{Bool} = trues(size(T_init)),
+        H_free::AbstractMatrix{Bool} = trues(size(H_init)),
+        Q_free::AbstractMatrix{Bool} = trues(size(Q_init)),
+        maxiter::Int = 500,
+        tol_ll::Real = 1e-6,
+        tol_param::Real = 1e-6,
+        verbose::Bool = false
 )
-
     p, n = size(y)      # p observations, n time points
     m = size(T_init, 1) # m states
     r = size(R, 2)      # r shocks
@@ -669,7 +677,7 @@ function _em_general_ssm_full_cov(
     iter = 0
     ll_prev = -Inf
 
-    for iter_i = 1:maxiter
+    for iter_i in 1:maxiter
         iter = iter_i
 
         # Build current KFParms
@@ -684,7 +692,7 @@ function _em_general_ssm_full_cov(
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true,
+            compute_crosscov = true
         )
 
         alpha_hat = smooth_result.alpha       # m × n
@@ -716,14 +724,15 @@ function _em_general_ssm_full_cov(
         ll_prev = ll
 
         # M-step: Update all parameters with full covariance
-        Z_new, T_new, H_new, Q_new =
-            _mstep_full_cov(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
+        Z_new, T_new, H_new,
+        Q_new = _mstep_full_cov(Z, T, R, y, alpha_hat, V_hat, P_crosslag)
 
         # Apply updates only for free parameters, enforce constraints
         param_change = 0.0
 
         # Update Z (observation matrix)
-        for i = 1:p, j = 1:m
+        for i in 1:p, j in 1:m
+
             if Z_free[i, j]
                 param_change += abs(Z_new[i, j] - Z[i, j])
                 Z[i, j] = Z_new[i, j]
@@ -731,7 +740,8 @@ function _em_general_ssm_full_cov(
         end
 
         # Update T (transition matrix)
-        for i = 1:m, j = 1:m
+        for i in 1:m, j in 1:m
+
             if T_free[i, j]
                 param_change += abs(T_new[i, j] - T[i, j])
                 T[i, j] = T_new[i, j]
@@ -740,11 +750,11 @@ function _em_general_ssm_full_cov(
 
         # Update H (observation covariance)
         # Check if H is diagonal-only (no off-diagonal elements free)
-        H_is_diagonal = !any(H_free[i, j] for i = 1:p for j = 1:p if i != j)
+        H_is_diagonal = !any(H_free[i, j] for i in 1:p for j in 1:p if i != j)
 
         if H_is_diagonal
             # Diagonal case: just update and ensure positivity
-            for i = 1:p
+            for i in 1:p
                 if H_free[i, i]
                     H_new_i = max(H_new[i, i], 1e-10)
                     param_change += abs(H_new_i - H[i, i])
@@ -753,7 +763,8 @@ function _em_general_ssm_full_cov(
             end
         else
             # Full covariance case: apply free mask and project to PSD
-            for i = 1:p, j = 1:p
+            for i in 1:p, j in 1:p
+
                 if H_free[i, j]
                     param_change += abs(H_new[i, j] - H[i, j])
                     H[i, j] = H_new[i, j]
@@ -769,11 +780,11 @@ function _em_general_ssm_full_cov(
 
         # Update Q (state covariance)
         # Check if Q is diagonal-only (no off-diagonal elements free)
-        Q_is_diagonal = !any(Q_free[i, j] for i = 1:r for j = 1:r if i != j)
+        Q_is_diagonal = !any(Q_free[i, j] for i in 1:r for j in 1:r if i != j)
 
         if Q_is_diagonal
             # Diagonal case: just update and ensure positivity
-            for i = 1:r
+            for i in 1:r
                 if Q_free[i, i]
                     Q_new_i = max(Q_new[i, i], 1e-10)
                     param_change += abs(Q_new_i - Q[i, i])
@@ -782,7 +793,8 @@ function _em_general_ssm_full_cov(
             end
         else
             # Full covariance case: apply free mask and project to PSD
-            for i = 1:r, j = 1:r
+            for i in 1:r, j in 1:r
+
                 if Q_free[i, j]
                     param_change += abs(Q_new[i, j] - Q[i, j])
                     Q[i, j] = Q_new[i, j]
@@ -819,7 +831,7 @@ function _em_general_ssm_full_cov(
         filt_final.Pt,
         filt_final.vt,
         filt_final.Ft;
-        compute_crosscov = false,
+        compute_crosscov = false
     )
 
     return (
@@ -832,7 +844,7 @@ function _em_general_ssm_full_cov(
         converged = converged,
         iterations = iter,
         smoothed_states = smooth_final.alpha,
-        smoothed_cov = smooth_final.V,
+        smoothed_cov = smooth_final.V
     )
 end
 
@@ -869,7 +881,7 @@ result.θ  # NamedTuple with λ, T elements, H elements, Q elements
 plot(result.λ_grid, result.loglik_profile)
 ```
 """
-struct ProfileEMResult{T<:Real,NT<:NamedTuple}
+struct ProfileEMResult{T <: Real, NT <: NamedTuple}
     λ_optimal::T
     θ::NT
     loglik::T
@@ -929,23 +941,23 @@ smooth = kalman_smoother(ss.p, yields, ss.a1, ss.P1)
 - Warm-starting significantly improves speed
 """
 function profile_em_ssm(
-    spec::SSMSpec,
-    y::AbstractMatrix;
-    λ_grid = 0.01:0.005:0.2,
-    λ_param::Symbol = :λ,
-    verbose::Bool = false,
-    maxiter::Int = 500,
-    tol_ll::Real = 1e-6,
-    warm_start::Bool = true,
+        spec::SSMSpec,
+        y::AbstractMatrix;
+        λ_grid = 0.01:0.005:0.2,
+        λ_param::Symbol = :λ,
+        verbose::Bool = false,
+        maxiter::Int = 500,
+        tol_ll::Real = 1e-6,
+        warm_start::Bool = true
 )
 
     # Validate: must have MatrixExpr for Z
     if !haskey(spec.matrix_exprs, :Z)
         throw(
             ArgumentError(
-                "profile_em_ssm requires spec.matrix_exprs[:Z] to be a MatrixExpr. " *
-                "Use dns_model() or manually add a MatrixExpr for Z.",
-            ),
+            "profile_em_ssm requires spec.matrix_exprs[:Z] to be a MatrixExpr. " *
+            "Use dns_model() or manually add a MatrixExpr for Z.",
+        ),
         )
     end
 
@@ -971,7 +983,7 @@ function profile_em_ssm(
     # Cap P1 to prevent numerical issues with very large diffuse priors
     # The EM algorithm is robust to reasonable prior choices, but 1e7 can cause issues
     max_P1_diag = 1e4
-    for i = 1:m
+    for i in 1:m
         if P1[i, i] > max_P1_diag
             P1[i, i] = max_P1_diag
         end
@@ -1023,7 +1035,7 @@ function profile_em_ssm(
             maxiter = maxiter,
             tol_ll = tol_ll,
             tol_param = 1e-8,
-            verbose = false,
+            verbose = false
         )
 
         loglik_profile[idx] = em_result.loglik
@@ -1068,10 +1080,10 @@ end
 Extract matrix and free mask from SSMMatrixSpec for EM.
 """
 function _extract_matrix_for_em(
-    mat_spec::SSMMatrixSpec,
-    params::Vector{SSMParameter{Float64}},
-    nrow::Int,
-    ncol::Int,
+        mat_spec::SSMMatrixSpec,
+        params::Vector{SSMParameter{Float64}},
+        nrow::Int,
+        ncol::Int
 )
     mat = zeros(nrow, ncol)
     free = falses(nrow, ncol)
@@ -1079,7 +1091,8 @@ function _extract_matrix_for_em(
     # Build parameter name -> init value map
     param_init = Dict(p.name => p.init for p in params)
 
-    for i = 1:nrow, j = 1:ncol
+    for i in 1:nrow, j in 1:ncol
+
         elem = get(mat_spec.elements, (i, j), mat_spec.default)
         if elem isa FixedValue
             mat[i, j] = elem.value
@@ -1107,13 +1120,13 @@ function _extract_Q_for_em(spec::SSMSpec, nrow::Int, ncol::Int)
             Q = zeros(nrow, ncol)
             # Use stored variances if available (avoids sqrt/square roundoff)
             if !isempty(Q_expr.var_init)
-                for i = 1:min(nrow, length(Q_expr.var_init))
+                for i in 1:min(nrow, length(Q_expr.var_init))
                     Q[i, i] = Q_expr.var_init[i]
                 end
             else
                 # Fallback: compute from σ params (may have roundoff)
                 param_init = Dict(p.name => p.init for p in spec.params)
-                for i = 1:nrow
+                for i in 1:nrow
                     σ_name = Q_expr.σ_param_names[i]
                     σ_val = get(param_init, σ_name, 1.0)
                     Q[i, i] = σ_val^2
@@ -1134,7 +1147,8 @@ Build fixed matrix from SSMMatrixSpec.
 """
 function _build_fixed_matrix(mat_spec::SSMMatrixSpec, nrow::Int, ncol::Int)
     mat = zeros(nrow, ncol)
-    for i = 1:nrow, j = 1:ncol
+    for i in 1:nrow, j in 1:ncol
+
         elem = get(mat_spec.elements, (i, j), mat_spec.default)
         if elem isa FixedValue
             mat[i, j] = elem.value
@@ -1148,7 +1162,7 @@ Extract initial state mean and covariance from spec.
 """
 function _extract_initial_state(spec::SSMSpec, m::Int)
     a1 = zeros(m)
-    for i = 1:m
+    for i in 1:m
         elem = spec.a1[i]
         if elem isa FixedValue
             a1[i] = elem.value
@@ -1156,7 +1170,8 @@ function _extract_initial_state(spec::SSMSpec, m::Int)
     end
 
     P1 = zeros(m, m)
-    for i = 1:m, j = 1:m
+    for i in 1:m, j in 1:m
+
         elem = get(spec.P1.elements, (i, j), spec.P1.default)
         if elem isa FixedValue
             P1[i, j] = elem.value
@@ -1170,10 +1185,10 @@ end
 Build NamedTuple of all parameters from profile EM result.
 """
 function _build_profile_em_theta(
-    spec::SSMSpec,
-    λ_optimal::Real,
-    em_result::NamedTuple,
-    λ_param::Symbol,
+        spec::SSMSpec,
+        λ_optimal::Real,
+        em_result::NamedTuple,
+        λ_param::Symbol
 )
     names = Symbol[]
     values = Float64[]
@@ -1237,10 +1252,11 @@ Find parameters in a matrix spec, returning (name, row, col) tuples.
 """
 function _find_matrix_params(mat_spec::SSMMatrixSpec, params::Vector{SSMParameter{Float64}})
     param_names_set = Set(p.name for p in params)
-    result = Tuple{Symbol,Int,Int}[]
+    result = Tuple{Symbol, Int, Int}[]
 
     nrow, ncol = mat_spec.dims
-    for i = 1:nrow, j = 1:ncol
+    for i in 1:nrow, j in 1:ncol
+
         elem = get(mat_spec.elements, (i, j), mat_spec.default)
         if elem isa ParameterRef && elem.name in param_names_set
             push!(result, (elem.name, i, j))

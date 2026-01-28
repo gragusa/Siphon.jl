@@ -106,7 +106,7 @@ result = optimize(θ -> -logdensity(ld, θ), θ0, LBFGS())
 # θ_hat is a NamedTuple like (σ_obs = 12.3, σ_level = 3.4)
 ```
 """
-struct SSMLogDensity{S<:SSMSpec,T,Y<:AbstractMatrix,P}
+struct SSMLogDensity{S <: SSMSpec, T, Y <: AbstractMatrix, P}
     spec::S
     transformation::T
     y::Y
@@ -115,10 +115,10 @@ struct SSMLogDensity{S<:SSMSpec,T,Y<:AbstractMatrix,P}
 end
 
 function SSMLogDensity(
-    spec::SSMSpec,
-    y::AbstractMatrix;
-    prior = nothing,
-    use_static::Bool = true,
+        spec::SSMSpec,
+        y::AbstractMatrix;
+        prior = nothing,
+        use_static::Bool = true
 )
     t = build_transformation(spec)
     SSMLogDensity(spec, t, y, prior, use_static)
@@ -158,8 +158,9 @@ end
 # LogDensityProblems.jl Interface
 # ============================================
 
-LogDensityProblems.capabilities(::Type{<:SSMLogDensity}) =
+function LogDensityProblems.capabilities(::Type{<:SSMLogDensity})
     LogDensityProblems.LogDensityOrder{0}()
+end
 
 LogDensityProblems.dimension(ld::SSMLogDensity) = n_params(ld.spec)
 
@@ -191,7 +192,7 @@ prior = NormalPrior(
 )
 ```
 """
-struct NormalPrior{M<:NamedTuple,S<:NamedTuple}
+struct NormalPrior{M <: NamedTuple, S <: NamedTuple}
     μ::M
     σ::S
 end
@@ -208,7 +209,7 @@ function (p::NormalPrior)(θ::NamedTuple)
 end
 
 # Also support vector-based priors for backwards compatibility
-struct NormalPriorVec{M<:AbstractVector,S<:AbstractVector}
+struct NormalPriorVec{M <: AbstractVector, S <: AbstractVector}
     μ::M
     σ::S
 end
@@ -225,7 +226,7 @@ end
 function _normal_logpdf(θ, μ, σ)
     n = length(θ)
     result = zero(eltype(θ))
-    for i = 1:n
+    for i in 1:n
         result += -0.5 * ((θ[i] - μ[i]) / σ[i])^2 - log(σ[i])
     end
     result - n * 0.5 * log(2π)
@@ -242,7 +243,7 @@ Assumes θ contains standard deviations (will square them).
 prior = InverseGammaPrior(2.0, 1.0, (:σ_obs, :σ_level))
 ```
 """
-struct InverseGammaPrior{A<:Real,B<:Real,N}
+struct InverseGammaPrior{A <: Real, B <: Real, N}
     α::A
     β::B
     param_names::N  # Tuple of Symbols
@@ -263,7 +264,7 @@ end
 
 Combine multiple priors by summing their log-densities.
 """
-struct CompositePrior{T<:Tuple}
+struct CompositePrior{T <: Tuple}
     priors::T
 end
 

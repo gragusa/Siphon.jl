@@ -96,6 +96,5 @@ export optimize_ssm, optimize_ssm_with_stderr
 
 # EM algorithm - main API is fit!(EM(), model, y)
 export EMResult, profile_em_ssm, ProfileEMResult
-export _mstep_Z, _mstep_T, _mstep_H_diag, _mstep_Q_diag, _mstep_H_full, _mstep_Q_full
 
 end # module DSL

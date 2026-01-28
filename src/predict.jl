@@ -40,15 +40,19 @@ Use this if your data contains `missing` values:
 y_clean = missing_to_nan(y_with_missing)
 ```
 """
-function missing_to_nan(y::AbstractArray{Union{Missing,T}}) where {T<:Real}
+function missing_to_nan(y::AbstractArray{<:Union{Missing, Real}})
     result = Array{Float64}(undef, size(y))
     for i in eachindex(y)
-        result[i] = ismissing(y[i]) ? NaN : Float64(y[i])
+        val = y[i]
+        result[i] = ismissing(val) ? NaN : Float64(val)
     end
     result
 end
 
 missing_to_nan(y::AbstractArray{<:Real}) = convert(Array{Float64}, y)
+
+# Edge case: array of only Missing values
+missing_to_nan(y::AbstractArray{Missing}) = fill(NaN, size(y))
 
 """
     nan_to_missing(y::AbstractArray)
@@ -61,7 +65,7 @@ y_missing = nan_to_missing(y_with_nan)
 ```
 """
 function nan_to_missing(y::AbstractArray{<:Real})
-    result = Array{Union{Float64,Missing}}(undef, size(y))
+    result = Array{Union{Float64, Missing}}(undef, size(y))
     for i in eachindex(y)
         result[i] = isnan(y[i]) ? missing : y[i]
     end
@@ -76,7 +80,7 @@ Count number of time periods with at least one missing observation.
 function count_missing(y::AbstractMatrix)
     n = size(y, 2)
     count = 0
-    for t = 1:n
+    for t in 1:n
         if ismissing_obs(view(y, :, t))
             count += 1
         end
@@ -138,7 +142,7 @@ function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::Abstract
 
     # Compute one-step-ahead predictions: ŷₜ|ₜ₋₁ = Z * at[:, t]
     yhat = Matrix{ET}(undef, obs_dim, n)
-    for t = 1:n
+    for t in 1:n
         yhat[:, t] = p.Z * filt.at[:, t]
     end
 
@@ -151,7 +155,7 @@ function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::Abstract
         vt = filt.vt,
         Ft = filt.Ft,
         loglik = filt.loglik,
-        missing_mask = filt.missing_mask,
+        missing_mask = filt.missing_mask
     )
 end
 
@@ -187,11 +191,11 @@ println("Forecast std: ", sqrt.(fc.F[1,1,:]))
 ```
 """
 function forecast(
-    spec::SSMSpec,
-    θ::NamedTuple,
-    y::AbstractMatrix,
-    h::Int;
-    use_static::Bool = true,
+        spec::SSMSpec,
+        θ::NamedTuple,
+        y::AbstractMatrix,
+        h::Int;
+        use_static::Bool = true
 )
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
     forecast(ss.p, y, ss.a1, ss.P1, h)
@@ -205,11 +209,11 @@ Low-level forecasting using KFParms directly.
 Starts from the last filtered state and propagates forward h steps.
 """
 function forecast(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
-    h::Int,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix,
+        h::Int
 )
     filt = kalman_filter(p, y, a1, P1)
 
@@ -228,7 +232,7 @@ function forecast(
     P_fc = Array{ET}(undef, state_dim, state_dim, h)
     F_fc = Array{ET}(undef, obs_dim, obs_dim, h)
 
-    for j = 1:h
+    for j in 1:h
         # Store forecast state
         a_fc[:, j] = a
         P_fc[:, :, j] = P
@@ -264,24 +268,24 @@ quantiles = [quantile(paths[1, j, :], [0.1, 0.5, 0.9]) for j in 1:12]
 ```
 """
 function forecast_paths(
-    spec::SSMSpec,
-    θ::NamedTuple,
-    y::AbstractMatrix,
-    h::Int,
-    n_paths::Int;
-    use_static::Bool = true,
+        spec::SSMSpec,
+        θ::NamedTuple,
+        y::AbstractMatrix,
+        h::Int,
+        n_paths::Int;
+        use_static::Bool = true
 )
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
     forecast_paths(ss.p, y, ss.a1, ss.P1, h, n_paths)
 end
 
 function forecast_paths(
-    p::KFParms,
-    y::AbstractMatrix,
-    a1::AbstractVector,
-    P1::AbstractMatrix,
-    h::Int,
-    n_paths::Int,
+        p::KFParms,
+        y::AbstractMatrix,
+        a1::AbstractVector,
+        P1::AbstractMatrix,
+        h::Int,
+        n_paths::Int
 )
     filt = kalman_filter(p, y, a1, P1)
 
@@ -300,11 +304,11 @@ function forecast_paths(
 
     paths = Array{Float64}(undef, obs_dim, h, n_paths)
 
-    for s = 1:n_paths
+    for s in 1:n_paths
         # Sample initial state from N(a_start, P_start)
         a = a_start + chol_P * randn(state_dim)
 
-        for j = 1:h
+        for j in 1:h
             # Observation with noise
             paths[:, j, s] = p.Z * a + chol_H * randn(obs_dim)
 

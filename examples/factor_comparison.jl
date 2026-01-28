@@ -54,13 +54,13 @@ Named tuple with:
 - `Lambda_true`: N × r true loading matrix
 """
 function simulate_dfm(
-    N::Int,
-    T::Int,
-    r::Int;
-    phi::Float64 = 0.7,
-    sigma_f::Float64 = 1.0,
-    sigma_e::Float64 = 0.5,
-    rng::AbstractRNG = Random.default_rng(),
+        N::Int,
+        T::Int,
+        r::Int;
+        phi::Float64 = 0.7,
+        sigma_f::Float64 = 1.0,
+        sigma_e::Float64 = 0.5,
+        rng::AbstractRNG = Random.default_rng()
 )
     # Generate loadings: Lambda ~ N(0, 1)
     Lambda = randn(rng, N, r)
@@ -77,8 +77,8 @@ function simulate_dfm(
     end
 
     # Simulate AR(1) process
-    for t = 2:T
-        f[:, t] = phi * f[:, t-1] + sigma_f * randn(rng, r)
+    for t in 2:T
+        f[:, t] = phi * f[:, t - 1] + sigma_f * randn(rng, r)
     end
 
     # Generate observations: y = Lambda * f + e
@@ -115,12 +115,12 @@ Named tuple with:
 - `time`: Computation time in seconds
 """
 function extract_kfs(
-    y::Matrix{Float64},
-    r::Int;
-    factor_lags::Int = 1,
-    maxiter::Int = 200,
-    tol::Float64 = 1e-6,
-    verbose::Bool = false,
+        y::Matrix{Float64},
+        r::Int;
+        factor_lags::Int = 1,
+        maxiter::Int = 200,
+        tol::Float64 = 1e-6,
+        verbose::Bool = false
 )
     N, T = size(y)
 
@@ -132,7 +132,7 @@ function extract_kfs(
         loading_lags = 0,
         factor_lags = factor_lags,
         error_lags = 0,
-        identification = :named_factor,
+        identification = :named_factor
     )
 
     # Fit with EM algorithm
@@ -152,7 +152,7 @@ function extract_kfs(
         model = model,
         converged = isconverged(model),
         loglik = loglikelihood(model),
-        time = t_elapsed,
+        time = t_elapsed
     )
 end
 
@@ -311,7 +311,7 @@ function canonical_correlations(F_est::Matrix{Float64}, F_true::Matrix{Float64})
     return (
         correlations = canon_corrs,
         avg_correlation = mean(canon_corrs),
-        min_correlation = minimum(canon_corrs),
+        min_correlation = minimum(canon_corrs)
     )
 end
 
@@ -336,10 +336,10 @@ Named tuple with:
 - `mse_loadings`: MSE of loadings (after rotation alignment)
 """
 function compute_metrics(
-    F_est::Matrix{Float64},
-    F_true::Matrix{Float64},
-    Lambda_est::Matrix{Float64},
-    Lambda_true::Matrix{Float64},
+        F_est::Matrix{Float64},
+        F_true::Matrix{Float64},
+        Lambda_est::Matrix{Float64},
+        Lambda_true::Matrix{Float64}
 )
     r, T = size(F_est)
     N, _ = size(Lambda_est)
@@ -378,7 +378,7 @@ function compute_metrics(
         avg_canonical_corr = cc.avg_correlation,
         min_canonical_corr = cc.min_correlation,
         space_r2 = space_r2,
-        mse_loadings = mse_loadings,
+        mse_loadings = mse_loadings
     )
 end
 
@@ -406,15 +406,14 @@ Following simulation design from Poncela et al. (2021) Section 3.
 Vector of named tuples with results for each (N, method, replication)
 """
 function run_monte_carlo(;
-    N_values::Vector{Int} = [5, 50, 150],
-    T::Int = 200,
-    r::Int = 1,
-    phi::Float64 = 0.7,
-    n_reps::Int = 20,
-    seed::Int = 42,
-    verbose::Bool = true,
+        N_values::Vector{Int} = [5, 50, 150],
+        T::Int = 200,
+        r::Int = 1,
+        phi::Float64 = 0.7,
+        n_reps::Int = 20,
+        seed::Int = 42,
+        verbose::Bool = true
 )
-
     rng = MersenneTwister(seed)
 
     results = []
@@ -427,7 +426,7 @@ function run_monte_carlo(;
             println("=" ^ 60)
         end
 
-        for rep = 1:n_reps
+        for rep in 1:n_reps
             # Generate data
             data = simulate_dfm(N, T, r; phi = phi, rng = rng)
             y, f_true, Lambda_true = data.y, data.f_true, data.Lambda_true
@@ -438,7 +437,7 @@ function run_monte_carlo(;
                 kfs_result.factors,
                 f_true,
                 kfs_result.loadings,
-                Lambda_true,
+                Lambda_true
             )
 
             push!(
@@ -455,8 +454,8 @@ function run_monte_carlo(;
                     min_canonical_corr = kfs_metrics.min_canonical_corr,
                     space_r2 = kfs_metrics.space_r2,
                     time = kfs_result.time,
-                    converged = kfs_result.converged,
-                ),
+                    converged = kfs_result.converged
+                )
             )
 
             # PCA extraction
@@ -465,7 +464,7 @@ function run_monte_carlo(;
                 pca_result.factors,
                 f_true,
                 pca_result.loadings,
-                Lambda_true,
+                Lambda_true
             )
 
             push!(
@@ -482,8 +481,8 @@ function run_monte_carlo(;
                     min_canonical_corr = pca_metrics.min_canonical_corr,
                     space_r2 = pca_metrics.space_r2,
                     time = pca_result.time,
-                    converged = true,
-                ),
+                    converged = true
+                )
             )
 
             if verbose && rep % 5 == 0
@@ -513,25 +512,21 @@ function summarize_results(results; r::Int = 1)
 
     # Header - adjust based on r
     if r == 1
-        @printf(
-            "| %-6s | %-6s | %-12s | %-12s | %-10s | %-10s |\n",
+        @printf("| %-6s | %-6s | %-12s | %-12s | %-10s | %-10s |\n",
             "N",
             "Method",
             "MSE",
             "Avg Corr",
             "Space R²",
-            "Time (s)"
-        )
+            "Time (s)")
     else
-        @printf(
-            "| %-6s | %-6s | %-12s | %-12s | %-12s | %-10s |\n",
+        @printf("| %-6s | %-6s | %-12s | %-12s | %-12s | %-10s |\n",
             "N",
             "Method",
             "MSE",
             "Avg CC",
             "Min CC",
-            "Space R²"
-        )
+            "Space R²")
     end
     println(
         "|" *
@@ -564,8 +559,7 @@ function summarize_results(results; r::Int = 1)
             time_mean = mean(res.time for res in subset)
 
             if r == 1
-                @printf(
-                    "| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f | %10.4f |\n",
+                @printf("| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f | %10.4f |\n",
                     N,
                     method,
                     mse_mean,
@@ -573,11 +567,9 @@ function summarize_results(results; r::Int = 1)
                     avg_cc_mean,
                     avg_cc_std,
                     r2_mean,
-                    time_mean
-                )
+                    time_mean)
             else
-                @printf(
-                    "| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f |\n",
+                @printf("| %6d | %-6s | %5.4f (%.3f) | %5.4f (%.3f) | %5.4f (%.3f) | %10.4f |\n",
                     N,
                     method,
                     mse_mean,
@@ -586,8 +578,7 @@ function summarize_results(results; r::Int = 1)
                     avg_cc_std,
                     min_cc_mean,
                     min_cc_std,
-                    r2_mean
-                )
+                    r2_mean)
             end
         end
         println(
@@ -649,7 +640,7 @@ function real_data_comparison(data_path::String; n_factors::Int = 6)
     y_raw_t = permutedims(y_raw)
 
     # Handle missing values (keep variables with ≤10% missing)
-    missing_counts = [count(isnan, y_raw_t[i, :]) for i = 1:n_vars]
+    missing_counts = [count(isnan, y_raw_t[i, :]) for i in 1:n_vars]
     max_missing = div(T_obs, 10)
     valid_vars = findall(x -> x <= max_missing, missing_counts)
 
@@ -661,12 +652,12 @@ function real_data_comparison(data_path::String; n_factors::Int = 6)
     println()
 
     # Standardize (handling NaN)
-    for i = 1:N
+    for i in 1:N
         valid_obs = filter(!isnan, y[i, :])
         μ = mean(valid_obs)
         σ = std(valid_obs)
         σ = σ < 1e-10 ? 1.0 : σ
-        for t = 1:n
+        for t in 1:n
             if !isnan(y[i, t])
                 y[i, t] = (y[i, t] - μ) / σ
             end
@@ -700,7 +691,7 @@ function real_data_comparison(data_path::String; n_factors::Int = 6)
     # Canonical correlations between KFS and PCA factor spaces
     println("\nCanonical correlations between KFS and PCA factors:")
     cc = canonical_correlations(kfs_result.factors, pca_result.factors)
-    for i = 1:n_factors
+    for i in 1:n_factors
         @printf("  Canonical correlation %d: %.4f\n", i, cc.correlations[i])
     end
     @printf("  Average: %.4f, Minimum: %.4f\n", cc.avg_correlation, cc.min_correlation)
@@ -712,7 +703,7 @@ function real_data_comparison(data_path::String; n_factors::Int = 6)
     Lambda = Factotum.loadings(fm)
     eigvals_approx = vec(sum(Lambda .^ 2, dims = 1))
     total_var = sum(eigvals_approx)
-    for i = 1:n_factors
+    for i in 1:n_factors
         pct = eigvals_approx[i] / total_var * 100
         @printf("  Factor %d: %.1f%%\n", i, pct)
     end
@@ -777,21 +768,19 @@ function demonstrate_ic(y::Matrix{Float64}; kmax::Int = 10)
     @printf("\n| %-3s | %-12s | %-12s | %-12s |\n", "k", "IC1", "IC2", "BIC3")
     println("|" * "-"^5 * "|" * "-"^14 * "|" * "-"^14 * "|" * "-"^14 * "|")
 
-    for k = 1:kmax
+    for k in 1:kmax
         marker_ic1 = k == k_ic1 ? "*" : " "
         marker_ic2 = k == k_ic2 ? "*" : " "
         marker_bic3 = k == k_bic3 ? "*" : " "
 
-        @printf(
-            "| %3d | %11.4f%s | %11.4f%s | %11.4f%s |\n",
+        @printf("| %3d | %11.4f%s | %11.4f%s | %11.4f%s |\n",
             k,
             ic1_vals[k],
             marker_ic1,
             ic2_vals[k],
             marker_ic2,
             bic3_vals[k],
-            marker_bic3
-        )
+            marker_bic3)
     end
 
     println()
@@ -809,7 +798,7 @@ function demonstrate_ic(y::Matrix{Float64}; kmax::Int = 10)
         k_bic3 = k_bic3,
         ic1 = ic1_vals,
         ic2 = ic2_vals,
-        bic3 = bic3_vals,
+        bic3 = bic3_vals
     )
 end
 
@@ -849,7 +838,7 @@ function main()
         r = 1,
         phi = 0.7,
         n_reps = 20,
-        verbose = true,
+        verbose = true
     )
 
     summarize_results(results_r1; r = 1)
@@ -879,7 +868,7 @@ function main()
         r = 2,
         phi = 0.7,
         n_reps = 20,
-        verbose = true,
+        verbose = true
     )
 
     summarize_results(results_r2; r = 2)

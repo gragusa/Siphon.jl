@@ -158,7 +158,7 @@ function run_julia_em(y::Matrix{Float64}; maxiter = 100, tol_ll = 1e-8, tol_para
         maxiter = maxiter,
         tol_ll = tol_ll,
         tol_param = tol_param,
-        verbose = false,
+        verbose = false
     )
 
     return result
@@ -176,10 +176,9 @@ function benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
     # Julia timing - use loose tolerance so it runs exactly maxiter iterations
     julia_times = Float64[]
     julia_result = nothing
-    for _ = 1:n_runs
+    for _ in 1:n_runs
         t = @elapsed begin
-            julia_result =
-                run_julia_em(y_jl; maxiter = maxiter, tol_ll = 1e-15, tol_param = 1e-15)
+            julia_result = run_julia_em(y_jl; maxiter = maxiter, tol_ll = 1e-15, tol_param = 1e-15)
         end
         push!(julia_times, t * 1000)  # Convert to ms
     end
@@ -187,7 +186,7 @@ function benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
     # MARSS timing - use loose tolerance so it runs exactly maxiter iterations
     marss_times = Float64[]
     marss_result = nothing
-    for _ = 1:n_runs
+    for _ in 1:n_runs
         t = @elapsed begin
             marss_result = run_marss_em(y_r; maxiter = maxiter, tol = 1e-15)
         end
@@ -198,7 +197,7 @@ function benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
         julia_times = julia_times,
         julia_result = julia_result,
         marss_times = marss_times,
-        marss_result = marss_result,
+        marss_result = marss_result
     )
 end
 
@@ -210,10 +209,9 @@ function benchmark_convergence(y_jl, y_r; n_runs = 3)
     # Julia to convergence
     julia_times = Float64[]
     julia_result = nothing
-    for _ = 1:n_runs
+    for _ in 1:n_runs
         t = @elapsed begin
-            julia_result =
-                run_julia_em(y_jl; maxiter = 5000, tol_ll = 1e-8, tol_param = 1e-6)
+            julia_result = run_julia_em(y_jl; maxiter = 5000, tol_ll = 1e-8, tol_param = 1e-6)
         end
         push!(julia_times, t * 1000)
     end
@@ -221,7 +219,7 @@ function benchmark_convergence(y_jl, y_r; n_runs = 3)
     # MARSS to convergence
     marss_times = Float64[]
     marss_result = nothing
-    for _ = 1:n_runs
+    for _ in 1:n_runs
         t = @elapsed begin
             marss_result = run_marss_em(y_r; maxiter = 5000, tol = 1e-8)
         end
@@ -232,7 +230,7 @@ function benchmark_convergence(y_jl, y_r; n_runs = 3)
         julia_times = julia_times,
         julia_result = julia_result,
         marss_times = marss_times,
-        marss_result = marss_result,
+        marss_result = marss_result
     )
 end
 
@@ -272,16 +270,12 @@ function main()
     marss_med = median(results_100.marss_times)
     speedup = marss_med / julia_med
 
-    @printf(
-        "Julia:  %8.1f ms (median), %8.1f ms (min)\n",
+    @printf("Julia:  %8.1f ms (median), %8.1f ms (min)\n",
         julia_med,
-        minimum(results_100.julia_times)
-    )
-    @printf(
-        "MARSS:  %8.1f ms (median), %8.1f ms (min)\n",
+        minimum(results_100.julia_times))
+    @printf("MARSS:  %8.1f ms (median), %8.1f ms (min)\n",
         marss_med,
-        minimum(results_100.marss_times)
-    )
+        minimum(results_100.marss_times))
     @printf("Speedup: %.1fx\n", speedup)
     println()
 
@@ -301,11 +295,9 @@ function main()
 
     @printf("Julia:  %8.1f ms, %d iterations\n", julia_med_conv, julia_iters)
     @printf("MARSS:  %8.1f ms, %d iterations\n", marss_med_conv, marss_iters)
-    @printf(
-        "Speedup: %.1fx (%.1fx fewer iterations)\n",
+    @printf("Speedup: %.1fx (%.1fx fewer iterations)\n",
         speedup_conv,
-        marss_iters/julia_iters
-    )
+        marss_iters/julia_iters)
     println()
 
     # Compare final estimates
@@ -327,20 +319,16 @@ function main()
     println("\nTransition matrix T (true B[1,1]=0.8, B[2,2]=0.7):")
     T_julia = results_conv.julia_result.T
     T_marss = rcopy(R"$(results_conv.marss_result)$B")
-    @printf(
-        "  Julia: [%.4f, %.4f; %.4f, %.4f]\n",
+    @printf("  Julia: [%.4f, %.4f; %.4f, %.4f]\n",
         T_julia[1, 1],
         T_julia[1, 2],
         T_julia[2, 1],
-        T_julia[2, 2]
-    )
-    @printf(
-        "  MARSS: [%.4f, %.4f; %.4f, %.4f]\n",
+        T_julia[2, 2])
+    @printf("  MARSS: [%.4f, %.4f; %.4f, %.4f]\n",
         T_marss[1, 1],
         T_marss[1, 2],
         T_marss[2, 1],
-        T_marss[2, 2]
-    )
+        T_marss[2, 2])
 
     println("\nObservation matrix Z[3,:] (true: [0.6, 0.4]):")
     Z_julia = results_conv.julia_result.Z
@@ -366,11 +354,9 @@ function main()
     println("=" ^ 70)
     @printf("Per-iteration speedup:     %.1fx\n", speedup)
     @printf("Total speedup (converge):  %.1fx\n", speedup_conv)
-    @printf(
-        "Julia iterations:          %d (%.1fx fewer than MARSS)\n",
+    @printf("Julia iterations:          %d (%.1fx fewer than MARSS)\n",
         julia_iters,
-        marss_iters/julia_iters
-    )
+        marss_iters/julia_iters)
     println()
 end
 

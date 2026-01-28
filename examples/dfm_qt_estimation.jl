@@ -53,7 +53,7 @@ y_raw_t = permutedims(y_raw)
 # ============================================
 
 # Count missing values per variable
-missing_counts = [count(isnan, y_raw_t[i, :]) for i = 1:n_vars]
+missing_counts = [count(isnan, y_raw_t[i, :]) for i in 1:n_vars]
 println()
 println("Missing data summary:")
 println("  Variables with no missing: ", count(==(0), missing_counts))
@@ -83,7 +83,7 @@ println("Standardizing data...")
 # Compute means and stds ignoring NaN
 means = zeros(N)
 stds = zeros(N)
-for i = 1:N
+for i in 1:N
     valid_obs = filter(!isnan, y[i, :])
     means[i] = mean(valid_obs)
     stds[i] = std(valid_obs)
@@ -94,8 +94,8 @@ end
 
 # Standardize
 y_std = similar(y)
-for i = 1:N
-    for t = 1:n
+for i in 1:N
+    for t in 1:n
         if isnan(y[i, t])
             y_std[i, t] = NaN
         else
@@ -128,7 +128,7 @@ model = DynamicFactorModel(
     n;
     loading_lags = 0,    # Static loadings
     factor_lags = n_lags,
-    error_lags = 0,
+    error_lags = 0
 )      # White noise errors
 
 # Run EM estimation
@@ -149,7 +149,7 @@ println("  Total time: ", round(t_elapsed, digits = 2), " seconds")
 println(
     "  Time per iteration: ",
     round(t_elapsed / niterations(model) * 1000, digits = 2),
-    " ms",
+    " ms"
 )
 println()
 
@@ -169,7 +169,7 @@ smoothed_factors = factors(model)
 
 println("Factor loadings (Λ) - first 10 variables:")
 println("-" ^ 50)
-for i = 1:min(10, N)
+for i in 1:min(10, N)
     name = selected_names[i]
     loading_vals = round.(Λ[i, :], digits = 3)
     println("  ", rpad(name[1:min(20, length(name))], 22), loading_vals)
@@ -199,7 +199,7 @@ factor_cov = (smoothed_factors * smoothed_factors') / n
 
 # Compute communalities properly
 communalities = zeros(N)
-for i = 1:N
+for i in 1:N
     λ_i = Λ[i, :]
     communalities[i] = λ_i' * factor_cov * λ_i
 end
@@ -213,24 +213,24 @@ var_explained_pct = communalities ./ total_var
 println(
     "  Average variance explained by factors: ",
     round(mean(var_explained_pct) * 100, digits = 1),
-    "%",
+    "%"
 )
 println(
     "  Min variance explained: ",
     round(minimum(var_explained_pct) * 100, digits = 1),
-    "%",
+    "%"
 )
 println(
     "  Max variance explained: ",
     round(maximum(var_explained_pct) * 100, digits = 1),
-    "%",
+    "%"
 )
 println()
 
 # Show top-loading variables for each factor
 println("Top 5 variables loading on each factor:")
 println("-" ^ 50)
-for k = 1:n_factors
+for k in 1:n_factors
     loadings_k = abs.(Λ[:, k])
     top_idx = sortperm(loadings_k, rev = true)[1:5]
     println("Factor $k:")
@@ -240,7 +240,7 @@ for k = 1:n_factors
             "  ",
             rpad(name[1:min(25, length(name))], 27),
             "loading = ",
-            round(Λ[idx, k], digits = 3),
+            round(Λ[idx, k], digits = 3)
         )
     end
     println()
@@ -249,7 +249,7 @@ end
 # Factor summary statistics
 println("Factor summary statistics:")
 println("-" ^ 50)
-for k = 1:n_factors
+for k in 1:n_factors
     f_k = smoothed_factors[k, :]
     println(
         "  Factor $k: mean=$(round(mean(f_k), digits=3)), " *

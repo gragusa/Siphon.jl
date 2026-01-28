@@ -16,8 +16,8 @@ using DelimitedFiles
 # Helper function to load MARSS results CSV
 function load_marss_results(filename)
     data = readdlm(joinpath(@__DIR__, filename), ','; header = true)[1]
-    result = Dict{String,Float64}()
-    for i = 1:size(data, 1)
+    result = Dict{String, Float64}()
+    for i in 1:size(data, 1)
         param_name = String(data[i, 1])
         param_value = Float64(data[i, 2])
         result[param_name] = param_value
@@ -74,7 +74,7 @@ end
 
         # Build Z matrix using Siphon
         Z_siphon = ones(p, 3)
-        for i = 1:p
+        for i in 1:p
             Z_siphon[i, 2] = Siphon.dns_loading1(λ, maturities[i])
             Z_siphon[i, 3] = Siphon.dns_loading2(λ, maturities[i])
         end
@@ -102,7 +102,7 @@ end
 
     # Build Z matrix at MARSS lambda
     Z = ones(p, m)
-    for i = 1:p
+    for i in 1:p
         Z[i, 2] = Siphon.dns_loading1(λ, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ, maturities[i])
     end
@@ -120,12 +120,12 @@ end
         results_diag["R_2"],
         results_diag["R_3"],
         results_diag["R_4"],
-        results_diag["R_5"],
+        results_diag["R_5"]
     ])
 
     # Handle zero variance (MARSS sometimes estimates exactly 0)
     # Replace with small positive value to avoid numerical issues
-    for i = 1:p
+    for i in 1:p
         if H[i, i] < 1e-10
             H[i, i] = 1e-10
         end
@@ -177,7 +177,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i = 1:p
+    for i in 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -187,7 +187,7 @@ end
     R = Matrix(1.0I, m, m)
 
     # Initialize H closer to MARSS (avoid zeros by using small positive values)
-    H_diag = [max(results["R_$i"], 1e-6) for i = 1:p]
+    H_diag = [max(results["R_$i"], 1e-6) for i in 1:p]
     H_init = diagm(H_diag)
 
     # Initialize Q closer to MARSS
@@ -214,7 +214,7 @@ end
         maxiter = 2000,
         tol_ll = 1e-8,
         tol_param = 1e-6,
-        verbose = false,
+        verbose = false
     )
 
     println("\nJulia DNS EM Results (Diagonal):")
@@ -225,7 +225,7 @@ end
     println("Q_L = $(em_result.Q[1,1]) (MARSS: $(results["Q_L"]))")
     println("Q_S = $(em_result.Q[2,2]) (MARSS: $(results["Q_S"]))")
     println("Q_C = $(em_result.Q[3,3]) (MARSS: $(results["Q_C"]))")
-    for i = 1:p
+    for i in 1:p
         println("H_$i = $(em_result.H[i,i]) (MARSS: $(results["R_$i"]))")
     end
     println("loglik = $(em_result.loglik) (MARSS: $(results["loglik"]))")
@@ -267,7 +267,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i = 1:p
+    for i in 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -299,22 +299,18 @@ end
         maxiter = 2000,
         tol_ll = 1e-8,
         tol_param = 1e-6,
-        verbose = false,
+        verbose = false
     )
 
     # Extract MARSS T matrix estimates
-    T_marss = [
-        results["B_1_1"] results["B_1_2"] results["B_1_3"];
-        results["B_2_1"] results["B_2_2"] results["B_2_3"];
-        results["B_3_1"] results["B_3_2"] results["B_3_3"]
-    ]
+    T_marss = [results["B_1_1"] results["B_1_2"] results["B_1_3"];
+               results["B_2_1"] results["B_2_2"] results["B_2_3"];
+               results["B_3_1"] results["B_3_2"] results["B_3_3"]]
 
     # Extract MARSS Q matrix estimates
-    Q_marss = [
-        results["Q_1_1"] results["Q_1_2"] results["Q_1_3"];
-        results["Q_2_1"] results["Q_2_2"] results["Q_2_3"];
-        results["Q_3_1"] results["Q_3_2"] results["Q_3_3"]
-    ]
+    Q_marss = [results["Q_1_1"] results["Q_1_2"] results["Q_1_3"];
+               results["Q_2_1"] results["Q_2_2"] results["Q_2_3"];
+               results["Q_3_1"] results["Q_3_2"] results["Q_3_3"]]
 
     println("\nJulia DNS EM Results (Full):")
     println("============================")
@@ -361,7 +357,7 @@ end
 
     # Build Z at fixed lambda
     Z = ones(p, m)
-    for i = 1:p
+    for i in 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
@@ -418,12 +414,12 @@ end
         H_structure = :diagonal,
         Q_structure = :diagonal,
         λ_init = 0.06,
-        diffuse = false,
+        diffuse = false
     )
 
     # Run profile EM with grid search over lambda
-    result =
-        profile_em_ssm(spec, y; λ_grid = 0.04:0.01:0.10, verbose = false, maxiter = 200)
+    result = profile_em_ssm(
+        spec, y; λ_grid = 0.04:0.01:0.10, verbose = false, maxiter = 200)
 
     println("\nProfile EM Results:")
     println("==================")

@@ -45,15 +45,14 @@ function diag_free(names::AbstractVector{Symbol}; init = 1.0, lower = 0.0, upper
     # Build matrix
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
-    for i = 1:n
-        mat[i, i] =
-            FreeParam(names[i], init = inits[i], lower = lowers[i], upper = uppers[i])
+    for i in 1:n
+        mat[i, i] = FreeParam(names[i], init = inits[i], lower = lowers[i], upper = uppers[i])
     end
     mat
 end
 
 function diag_free(n::Int, prefix::Symbol; init = 1.0, lower = 0.0, upper = Inf)
-    names = [Symbol("$(prefix)_$i") for i = 1:n]
+    names = [Symbol("$(prefix)_$i") for i in 1:n]
     diag_free(names; init = init, lower = lower, upper = upper)
 end
 
@@ -116,7 +115,7 @@ Q = diag_fixed([0.1, 0.01, 0.001])  # Fixed 3×3 diagonal
 function diag_fixed(values::AbstractVector{<:Real})
     n = length(values)
     mat = zeros(Float64, n, n)
-    for i = 1:n
+    for i in 1:n
         mat[i, i] = values[i]
     end
     mat
@@ -140,17 +139,17 @@ L = lower_triangular_free(2, :L)
 ```
 """
 function lower_triangular_free(
-    n::Int,
-    prefix::Symbol;
-    init = 0.0,
-    lower = -Inf,
-    upper = Inf,
+        n::Int,
+        prefix::Symbol;
+        init = 0.0,
+        lower = -Inf,
+        upper = Inf
 )
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
 
-    for j = 1:n
-        for i = j:n
+    for j in 1:n
+        for i in j:n
             name = Symbol("$(prefix)_$(i)_$(j)")
             mat[i, j] = FreeParam(name, init = init, lower = lower, upper = upper)
         end
@@ -174,33 +173,32 @@ Diagonal and off-diagonal elements can have different settings.
 ```
 """
 function symmetric_free(
-    n::Int,
-    prefix::Symbol;
-    init_diag = 1.0,
-    init_offdiag = 0.0,
-    lower_diag = 0.0,
-    lower_offdiag = -Inf,
-    upper_diag = Inf,
-    upper_offdiag = Inf,
+        n::Int,
+        prefix::Symbol;
+        init_diag = 1.0,
+        init_offdiag = 0.0,
+        lower_diag = 0.0,
+        lower_offdiag = -Inf,
+        upper_diag = Inf,
+        upper_offdiag = Inf
 )
     mat = Matrix{Any}(undef, n, n)
 
     # Diagonal elements
-    for i = 1:n
+    for i in 1:n
         name = Symbol("$(prefix)_$(i)_$(i)")
-        mat[i, i] =
-            FreeParam(name, init = init_diag, lower = lower_diag, upper = upper_diag)
+        mat[i, i] = FreeParam(name, init = init_diag, lower = lower_diag, upper = upper_diag)
     end
 
     # Off-diagonal (lower triangle, upper references same params)
-    for j = 1:n
-        for i = (j+1):n
+    for j in 1:n
+        for i in (j + 1):n
             name = Symbol("$(prefix)_$(i)_$(j)")
             param = FreeParam(
                 name,
                 init = init_offdiag,
                 lower = lower_offdiag,
-                upper = upper_offdiag,
+                upper = upper_offdiag
             )
             mat[i, j] = param
             mat[j, i] = param  # Symmetric - same parameter reference
@@ -228,7 +226,7 @@ R = selection_mat(3, 2)
 """
 function selection_mat(m::Int, r::Int)
     R = zeros(Float64, m, r)
-    for i = 1:min(m, r)
+    for i in 1:min(m, r)
         R[i, i] = 1.0
     end
     R
@@ -252,14 +250,14 @@ function companion_mat(n::Int, prefix::Symbol; init = 0.5, lower = -Inf, upper =
     fill!(mat, 0.0)
 
     # First column: AR coefficients
-    for i = 1:n
+    for i in 1:n
         name = Symbol("$(prefix)_$i")
         mat[i, 1] = FreeParam(name, init = init/i, lower = lower, upper = upper)
     end
 
     # Superdiagonal: 1s
-    for i = 1:(n-1)
-        mat[i, i+1] = 1.0
+    for i in 1:(n - 1)
+        mat[i, i + 1] = 1.0
     end
     mat
 end

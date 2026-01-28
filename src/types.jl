@@ -16,7 +16,7 @@ y_t = Z * α_t + ε_t,    ε_t ~ N(0, H)
 - `R`: State noise selection matrix (m × r)
 - `Q`: State noise covariance (r × r)
 """
-struct KFParms{Zt,Ht,Tt,Rt,Qt}
+struct KFParms{Zt, Ht, Tt, Rt, Qt}
     Z::Zt
     H::Ht
     T::Tt
@@ -31,9 +31,10 @@ numstates(T::Real) = 1
 nummeasur(Z::AbstractMatrix) = size(Z, 1)
 nummeasur(Z::Real) = 1
 
-Base.size(p::KFParms{P}) where {P<:Real} = (1, 1, 1)
-Base.size(p::KFParms{P}) where {P<:AbstractArray} =
+Base.size(p::KFParms{P}) where {P <: Real} = (1, 1, 1)
+function Base.size(p::KFParms{P}) where {P <: AbstractArray}
     (size(p.Z, 1), size(p.T, 1), size(p.Q, 1))
+end
 
 # ============================================
 # StaticArrays automatic conversion
@@ -63,7 +64,7 @@ end
 
 function to_static_if_small(x::AbstractMatrix)
     m, n = size(x)
-    (m ≤ STATIC_THRESHOLD && n ≤ STATIC_THRESHOLD) ? SMatrix{m,n}(x) : x
+    (m ≤ STATIC_THRESHOLD && n ≤ STATIC_THRESHOLD) ? SMatrix{m, n}(x) : x
 end
 
 # Already static - pass through unchanged
@@ -94,7 +95,7 @@ function KFParms_static(Z, H, T, R, Q)
         to_static_if_small(H),
         to_static_if_small(T),
         to_static_if_small(R),
-        to_static_if_small(Q),
+        to_static_if_small(Q)
     )
 end
 
@@ -193,21 +194,21 @@ Use accessor methods for clear, consistent API:
 - `kalman_gains(r)` → `Kt`
 - `loglikelihood(r)` → `loglik`
 """
-struct KalmanFilterResult{T<:Real,P<:KFParms}
+struct KalmanFilterResult{T <: Real, P <: KFParms}
     # Model parameters
     p::P
     # Log-likelihood
     loglik::T
     # Predicted quantities: a_{t|t-1}, P_{t|t-1}
     at::Matrix{T}          # m × n
-    Pt::Array{T,3}         # m × m × n
+    Pt::Array{T, 3}         # m × m × n
     # Filtered quantities: a_{t|t}, P_{t|t}
     att::Matrix{T}         # m × n
-    Ptt::Array{T,3}        # m × m × n
+    Ptt::Array{T, 3}        # m × m × n
     # Innovations
     vt::Matrix{T}          # p × n
-    Ft::Array{T,3}         # p × p × n
-    Kt::Array{T,3}         # m × p × n
+    Ft::Array{T, 3}         # p × p × n
+    Kt::Array{T, 3}         # m × p × n
     # Missing data
     missing_mask::BitVector
 end
@@ -324,7 +325,7 @@ Scalar (univariate state) version of KalmanFilterResult.
 Same naming conventions as KalmanFilterResult but with vectors instead of matrices
 for state quantities.
 """
-struct KalmanFilterResultScalar{T<:Real}
+struct KalmanFilterResultScalar{T <: Real}
     loglik::T
     at::Vector{T}          # n: predicted states
     Pt::Vector{T}          # n: predicted variances
@@ -364,11 +365,11 @@ Allows in-place computation to avoid allocations when smoothing repeatedly.
 # Constructor
     SmootherWorkspace(m::Int, n::Int, ::Type{T}=Float64) where T
 """
-mutable struct SmootherWorkspace{T<:Real}
+mutable struct SmootherWorkspace{T <: Real}
     alpha::Matrix{T}       # m × n: smoothed states
-    V::Array{T,3}          # m × m × n: smoothed covariances
+    V::Array{T, 3}          # m × m × n: smoothed covariances
     r::Matrix{T}           # m × n: smoothing recursion auxiliary
-    N::Array{T,3}          # m × m × n: smoothing recursion auxiliary
+    N::Array{T, 3}          # m × m × n: smoothing recursion auxiliary
 end
 
 function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
@@ -376,7 +377,7 @@ function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
         Matrix{T}(undef, m, n),
         Array{T}(undef, m, m, n),
         Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n),
+        Array{T}(undef, m, m, n)
     )
 end
 
@@ -435,7 +436,7 @@ After the diffuse period (t > d), standard Kalman filter recursion is used.
 - `kalman_loglik_diffuse`: Compute log-likelihood with diffuse initialization
 - `KalmanFilterResult`: Standard filter result without diffuse initialization
 """
-struct DiffuseFilterResult{T<:Real,P<:KFParms}
+struct DiffuseFilterResult{T <: Real, P <: KFParms}
     # Model parameters
     p::P
     # Log-likelihood (non-diffuse observations only)
@@ -444,17 +445,17 @@ struct DiffuseFilterResult{T<:Real,P<:KFParms}
     d::Int
     # Predicted quantities: a_{t|t-1}, P_{t|t-1}
     at::Matrix{T}           # m × n
-    Pt::Array{T,3}          # m × m × n
+    Pt::Array{T, 3}          # m × m × n
     # Filtered quantities: a_{t|t}, P_{t|t}
     att::Matrix{T}          # m × n
-    Ptt::Array{T,3}         # m × m × n
+    Ptt::Array{T, 3}         # m × m × n
     # Diffuse period covariances (only first d time points)
-    Pinf_store::Array{T,3}  # m × m × d
-    Pstar_store::Array{T,3} # m × m × d
+    Pinf_store::Array{T, 3}  # m × m × d
+    Pstar_store::Array{T, 3} # m × m × d
     # Innovations
     vt::Matrix{T}           # p × n
-    Ft::Array{T,3}          # p × p × n
-    Kt::Array{T,3}          # m × p × n
+    Ft::Array{T, 3}          # p × p × n
+    Kt::Array{T, 3}          # m × p × n
     # Diffuse step flags: 1=Finf invertible, 0=singular
     diffuse_flag::Vector{Int}  # length d
     # Missing data

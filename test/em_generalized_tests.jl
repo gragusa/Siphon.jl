@@ -15,16 +15,14 @@ using DelimitedFiles
         joinpath(@__DIR__, "marss_reference_data.csv"),
         ',',
         Float64;
-        header = true,
+        header = true
     )[1]
     y = Matrix(data')  # Convert to p × n format (3 × 100)
 
     # Z matrix from R script (fixed)
-    Z = [
-        1.0 0.0;
-        0.0 1.0;
-        0.7 0.3
-    ]
+    Z = [1.0 0.0;
+         0.0 1.0;
+         0.7 0.3]
 
     # T = identity (random walk)
     T = Matrix(1.0I, 2, 2)
@@ -61,7 +59,7 @@ using DelimitedFiles
         maxiter = 500,
         tol_ll = 1e-9,
         tol_param = 1e-4,
-        verbose = false,
+        verbose = false
     )
 
     # MARSS reference values (from marss_reference_results.csv)
@@ -101,7 +99,7 @@ end
         joinpath(@__DIR__, "marss_reference_data.csv"),
         ',',
         Float64;
-        header = true,
+        header = true
     )[1]
     y = Matrix(data')
 
@@ -132,7 +130,7 @@ end
         maxiter = 100,
         tol_ll = 1e-9,
         tol_param = 1e-4,
-        verbose = false,
+        verbose = false
     )
 
     # Log-likelihood should be approximately monotonically non-decreasing
@@ -146,8 +144,8 @@ end
 
     # Count significant decreases (> 0.01 in log-likelihood)
     n_significant_decreases = 0
-    for i = 2:length(result.loglik_history)
-        if result.loglik_history[i] < result.loglik_history[i-1] - 0.01
+    for i in 2:length(result.loglik_history)
+        if result.loglik_history[i] < result.loglik_history[i - 1] - 0.01
             n_significant_decreases += 1
         end
     end

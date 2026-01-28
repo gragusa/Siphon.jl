@@ -61,14 +61,14 @@ const fkf_at_first10 = [
     1136.2243333621434,
     1058.6623178789882,
     1100.715153023627,
-    1167.6439427329178,
+    1167.6439427329178
 ]
 const fkf_at_last5 = [
     907.2004994420702,
     910.1801224150503,
     861.6505846700672,
     824.365695204029,
-    803.0615762434667,
+    803.0615762434667
 ]
 
 # Predicted variances Pt[,,t] = Var[α_t | y_{1:t-1}]
@@ -82,7 +82,7 @@ const fkf_Pt_first10 = [
     4814.120467776086,
     4959.684698730231,
     5043.164980325884,
-    5090.500040863827,
+    5090.500040863827
 ]
 
 # Filtered states att[,t] = E[α_t | y_{1:t}]
@@ -96,14 +96,14 @@ const fkf_att_first10 = [
     1058.6623178789882,
     1100.715153023627,
     1167.6439427329178,
-    1160.7248944698297,
+    1160.7248944698297
 ]
 const fkf_att_last5 = [
     907.2004994420702,
     910.1801224150503,
     861.6505846700672,
     824.365695204029,
-    803.0615762434667,
+    803.0615762434667
 ]
 
 # Filtered variances Ptt[,,t] = Var[α_t | y_{1:t}]
@@ -117,7 +117,7 @@ const fkf_Ptt_first10 = [
     3658.9076705976295,
     3742.387952193283,
     3789.7230127312255,
-    3816.390345069674,
+    3816.390345069674
 ]
 const fkf_Ptt_100 = 3850.3845142427253
 
@@ -132,7 +132,7 @@ const fkf_vt_first10 = [
     -323.2243333621434,
     171.33768212101177,
     269.28484697637305,
-    -27.64394273291782,
+    -27.64394273291782
 ]
 
 # Innovation variances Ft[,,t] = Var[y_t | y_{1:t-1}]
@@ -146,7 +146,7 @@ const fkf_Ft_first10 = [
     20061.893302139786,
     20207.457533093933,
     20290.937814689583,
-    20338.27287522753,
+    20338.27287522753
 ]
 
 # Kalman gains Kt[,,t]
@@ -160,7 +160,7 @@ const fkf_Kt_first10 = [
     0.2399634169753368,
     0.2454383333780467,
     0.2485427251506776,
-    0.25029165810161635,
+    0.25029165810161635
 ]
 
 # Nile data
@@ -264,7 +264,7 @@ const nile_Y = [
     919.0,
     718.0,
     714.0,
-    740.0,
+    740.0
 ]
 
 # ============================================
@@ -308,8 +308,8 @@ const nile_Y = [
         end
         # For local level model with T=1: at[:,t+1] = att[:,t]
         # This is a consistency check (fkf_at_last5 reference values were incorrect)
-        for t = 2:n
-            @test isapprox(result.at[1, t], result.att[1, t-1], rtol = 1e-10)
+        for t in 2:n
+            @test isapprox(result.at[1, t], result.att[1, t - 1], rtol = 1e-10)
         end
     end
 
@@ -408,7 +408,7 @@ const fkf_na_at_first15 = [
     1119.793956485756,
     1067.2207231992086,
     1078.9121347544572,
-    1056.2123426414194,
+    1056.2123426414194
 ]
 
 const fkf_na_at_last5 = [
@@ -416,7 +416,7 @@ const fkf_na_at_last5 = [
     909.6604839598359,
     859.7757863151869,
     821.8337918361999,
-    800.5343884405607,
+    800.5343884405607
 ]
 
 # Predicted variances
@@ -435,7 +435,7 @@ const fkf_na_Pt_first15 = [
     6013.614685801527,
     5687.828417361774,
     5518.432865524594,
-    5428.24123048511,
+    5428.24123048511
 ]
 
 # Filtered states
@@ -454,7 +454,7 @@ const fkf_na_att_first15 = [
     1067.2207231992086,
     1078.9121347544572,
     1056.2123426414194,
-    1046.6480292688207,
+    1046.6480292688207
 ]
 
 const fkf_na_att_last5 = [
@@ -462,7 +462,7 @@ const fkf_na_att_last5 = [
     909.6604839598359,
     859.7757863151869,
     821.8337918361999,
-    800.5343884405607,
+    800.5343884405607
 ]
 
 # Filtered variances
@@ -481,7 +481,7 @@ const fkf_na_Ptt_first15 = [
     4302.76237339692,
     4133.36682155974,
     4043.175186520256,
-    3994.547732538421,
+    3994.547732538421
 ]
 
 const fkf_na_Ptt_100 = 3936.454198447892
@@ -587,7 +587,7 @@ const nile_Y_na = [
     919.0,
     718.0,
     714.0,
-    740.0,
+    740.0
 ]
 
 @testset "FKF Validation - Missing Data" begin
@@ -616,13 +616,13 @@ const nile_Y_na = [
         # When t is missing: at[:,t+1] = at[:,t]
         # This is a consistency check (fkf_na_at_last5 reference values were incorrect)
         n = size(y, 2)
-        for t = 2:n
-            if result.missing_mask[t-1]
+        for t in 2:n
+            if result.missing_mask[t - 1]
                 # Missing at t-1: predicted state propagates unchanged
-                @test isapprox(result.at[1, t], result.at[1, t-1], rtol = 1e-10)
+                @test isapprox(result.at[1, t], result.at[1, t - 1], rtol = 1e-10)
             else
                 # Not missing: predicted state = T * filtered state
-                @test isapprox(result.at[1, t], result.att[1, t-1], rtol = 1e-10)
+                @test isapprox(result.at[1, t], result.att[1, t - 1], rtol = 1e-10)
             end
         end
     end

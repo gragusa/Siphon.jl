@@ -39,7 +39,7 @@ function benchmark_filterstep_scalar()
         $(parms.T),
         $(parms.R),
         $(parms.Q),
-        $y,
+        $y
     )
 end
 
@@ -65,7 +65,7 @@ function benchmark_filterstep_small()
         $(parms.T),
         $(parms.R),
         $(parms.Q),
-        $y,
+        $y
     )
 
     # In-place
@@ -85,7 +85,7 @@ function benchmark_filterstep_small()
         $(parms.R),
         $(parms.Q),
         $y,
-        $cache,
+        $cache
     )
 end
 
@@ -112,7 +112,7 @@ function benchmark_filterstep_medium()
         $(parms.T),
         $(parms.R),
         $(parms.Q),
-        $y,
+        $y
     )
 
     # In-place
@@ -132,7 +132,7 @@ function benchmark_filterstep_medium()
         $(parms.R),
         $(parms.Q),
         $y,
-        $cache,
+        $cache
     )
 end
 
@@ -144,7 +144,7 @@ function benchmark_filterstep_static()
     parms = small_static()
 
     a = SVector{3}(randn(3))
-    P = SMatrix{3,3}(Matrix(1.0I, 3, 3) * 100)
+    P = SMatrix{3, 3}(Matrix(1.0I, 3, 3) * 100)
 
     y = SVector{1}(randn(1))
 

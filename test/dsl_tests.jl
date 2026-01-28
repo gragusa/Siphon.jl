@@ -99,7 +99,7 @@ end
         R = [1.0],
         Q = [FreeParam(:var_level, init = 25.0, lower = 0.0)],
         a1 = [0.0],
-        P1 = [1e7],
+        P1 = [1e7]
     )
 
     @test spec.n_states == 1
@@ -117,7 +117,7 @@ end
         R = [1.0;;],
         Q = [1.0;;],
         a1 = [0.0],      # wrong length
-        P1 = [1e7;;],
+        P1 = [1e7;;]
     )
 end
 
@@ -127,12 +127,10 @@ end
         H = [FreeParam(:var_obs, init = 1.0, lower = 0.0);;],
         T = [1.0 1.0; 0.0 1.0],
         R = Matrix(1.0I, 2, 2),
-        Q = [
-            FreeParam(:var_level, init = 0.01, lower = 0.0) 0.0;
-            0.0 FreeParam(:var_slope, init = 0.0001, lower = 0.0)
-        ],
+        Q = [FreeParam(:var_level, init = 0.01, lower = 0.0) 0.0;
+             0.0 FreeParam(:var_slope, init = 0.0001, lower = 0.0)],
         a1 = [0.0, 0.0],
-        P1 = 1e7 * Matrix(1.0I, 2, 2),
+        P1 = 1e7 * Matrix(1.0I, 2, 2)
     )
 
     @test spec.n_states == 2
@@ -231,15 +229,13 @@ end
     spec = custom_ssm(
         Z = Z,
         H = diag_free(3, :var_obs, init = 0.01),
-        T = [
-            FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
-            0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
-            0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)
-        ],
+        T = [FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
+             0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
+             0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)],
         R = identity_mat(3),
         Q = diag_free([:var_L, :var_S, :var_C], init = 0.01),
         a1 = [0.0, 0.0, 0.0],
-        P1 = 1e6 * identity_mat(3),
+        P1 = 1e6 * identity_mat(3)
     )
 
     @test :λ in param_names(spec)
@@ -352,7 +348,7 @@ end
     # NormalPrior now takes NamedTuple arguments (variance parameters)
     prior = NormalPrior(
         (var_obs = 25.0, var_level = 25.0),
-        (var_obs = 100.0, var_level = 100.0),
+        (var_obs = 100.0, var_level = 100.0)
     )
     ld = SSMLogDensity(spec, y; prior = prior)
 
@@ -554,7 +550,7 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Smoothed variance should be <= predicted variance (smoothing uses more info)
-    for t = 1:30
+    for t in 1:30
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
@@ -596,7 +592,7 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Variance should be smaller than predicted variance (smoothing uses more info)
-    for t = 1:size(y, 2)
+    for t in 1:size(y, 2)
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
@@ -673,13 +669,14 @@ end
     result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
 
     # Run scalar smoother
-    alpha_smooth, V_smooth = kalman_smoother_scalar(
+    alpha_smooth,
+    V_smooth = kalman_smoother_scalar(
         Z,
         T,
         result_scalar.at,
         result_scalar.Pt,
         result_scalar.vt,
-        result_scalar.Ft,
+        result_scalar.Ft
     )
 
     @test length(alpha_smooth) == 30
@@ -870,5 +867,5 @@ end
     θ_wrong = [100.0]  # Too few parameters
     n = 100
 
-    @test_throws AssertionError StateSpaceModel(spec, θ_wrong, n)
+    @test_throws ArgumentError StateSpaceModel(spec, θ_wrong, n)
 end

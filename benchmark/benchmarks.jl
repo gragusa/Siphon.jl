@@ -1,148 +1,264 @@
 """
-    benchmarks.jl
+Benchmarks for Siphon.jl
 
-Main benchmark runner for Siphon.jl Kalman filter implementations.
-
-Usage:
-    julia --project=benchmark benchmark/benchmarks.jl [options]
-
-Options:
-    --step      Run single-step benchmarks only
-    --full      Run full filter benchmarks only
-    --quick     Run quick benchmarks (smaller n values)
-    --all       Run all benchmarks (default)
-
-Results Summary:
-    The benchmarks compare:
-    1. Pure (functional) implementation - creates new arrays each step
-    2. In-place implementation - reuses preallocated buffers
-
-    Key findings (typical):
-    - Scalar models: In-place provides minimal benefit (no matrix allocation anyway)
-    - Small matrices (m < 5): Pure implementation is often comparable or faster
-    - Medium/Large matrices (m >= 5): In-place can be 1.5-3x faster
-    - Long sequences (n > 1000): In-place benefits compound
-
-Recommendation:
-    For most use cases with Siphon.jl:
-    - Keep the pure implementation as default (simpler, easier to maintain)
-    - Consider in-place variant for:
-      * Online/streaming filtering with large state dimensions
-      * Performance-critical production code with m >= 10
-      * Very long sequences where allocation pressure matters
+Benchmark suite measuring:
+1. Kalman filter operations (scalar and matrix models)
+2. Kalman smoother operations
+3. Log-likelihood computation
+4. MLE estimation
+5. EM estimation
+6. DSL model construction
 """
 
-using Pkg
-Pkg.activate(@__DIR__)
-Pkg.instantiate()
-
 using BenchmarkTools
+using LinearAlgebra
+using Random
+using StableRNGs
 
-# Configure BenchmarkTools for consistent results
-BenchmarkTools.DEFAULT_PARAMETERS.samples = 100
-BenchmarkTools.DEFAULT_PARAMETERS.evals = 1
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
+using Siphon
+using Siphon: local_level, local_linear_trend, ar1, dynamic_factor
+using Siphon: StateSpaceModel, kalman_filter!, kalman_smoother!, kalman_loglik
+using Siphon: MLE, EM, fit!
 
-include("filterstep_bench.jl")
-include("filter_full_bench.jl")
+# ============================================================================
+# Data Generation
+# ============================================================================
 
-function print_header()
-    println()
-    println("╔" * "═"^58 * "╗")
-    println("║" * " "^14 * "Siphon.jl Kalman Filter Benchmarks" * " "^9 * "║")
-    println("║" * " "^58 * "║")
-    println("║  Comparing pure (functional) vs in-place implementations  ║")
-    println("╚" * "═"^58 * "╝")
-    println()
-    println("Julia version: ", VERSION)
-    println("Threads: ", Threads.nthreads())
-    println("BLAS threads: ", LinearAlgebra.BLAS.get_num_threads())
-    println()
+const DEFAULT_SEED = 20240612
+
+"""
+Generate local level model data.
+"""
+function generate_local_level_data(rng::AbstractRNG, n::Int; σ_obs = 15.0, σ_level = 10.0)
+    μ = zeros(n + 1)
+    y = zeros(1, n)
+    μ[1] = randn(rng) * 100
+    for t in 1:n
+        y[1, t] = μ[t] + σ_obs * randn(rng)
+        μ[t + 1] = μ[t] + σ_level * randn(rng)
+    end
+    return y
 end
 
-function print_recommendations(results)
-    println()
-    println("╔" * "═"^58 * "╗")
-    println("║" * " "^20 * "RECOMMENDATIONS" * " "^23 * "║")
-    println("╚" * "═"^58 * "╝")
-    println()
+"""
+Generate local linear trend model data.
+"""
+function generate_trend_data(rng::AbstractRNG, n::Int)
+    level = zeros(n + 1)
+    slope = zeros(n + 1)
+    y = zeros(1, n)
 
-    # Analyze results
-    speedups = [(r[2], r[3], r[4]/r[5]) for r in results]
+    level[1] = randn(rng) * 10
+    slope[1] = randn(rng) * 0.5
 
-    println("Based on benchmark results:")
-    println()
+    σ_obs = 5.0
+    σ_level = 2.0
+    σ_slope = 0.5
 
-    # Scalar case
-    scalar_speedups = [s[3] for s in speedups if s[1] == 1]
-    avg_scalar = sum(scalar_speedups) / length(scalar_speedups)
-    println(
-        "• Scalar models: In-place $(avg_scalar > 1.0 ? "faster" : "slower") by $(round(abs(avg_scalar - 1)*100, digits=1))%",
-    )
-    println("  → Recommendation: Use pure implementation (simpler code)")
-    println()
-
-    # Small matrix
-    small_speedups = [s[3] for s in speedups if s[1] == 3]
-    avg_small = sum(small_speedups) / length(small_speedups)
-    println(
-        "• Small matrices (m=3): In-place $(avg_small > 1.0 ? "faster" : "slower") by $(round(abs(avg_small - 1)*100, digits=1))%",
-    )
-    if avg_small < 1.2
-        println("  → Recommendation: Use pure implementation")
-    else
-        println("  → Recommendation: Consider in-place for long sequences")
+    for t in 1:n
+        y[1, t] = level[t] + σ_obs * randn(rng)
+        level[t + 1] = level[t] + slope[t] + σ_level * randn(rng)
+        slope[t + 1] = slope[t] + σ_slope * randn(rng)
     end
-    println()
-
-    # Medium matrix
-    medium_speedups = [s[3] for s in speedups if s[1] == 10]
-    avg_medium = sum(medium_speedups) / length(medium_speedups)
-    println(
-        "• Medium matrices (m=10): In-place $(avg_medium > 1.0 ? "faster" : "slower") by $(round(abs(avg_medium - 1)*100, digits=1))%",
-    )
-    if avg_medium > 1.5
-        println("  → Recommendation: Implement in-place variant for m >= 10")
-    else
-        println("  → Recommendation: Pure implementation sufficient")
-    end
-    println()
-
-    println("General guidance:")
-    println("  • StaticArrays for m <= 4: Best performance, stack-allocated")
-    println("  • Pure implementation: Default choice, maintainable code")
-    println("  • In-place: Consider for m >= 10 AND n >= 1000")
+    return y
 end
 
-function main(args = ARGS)
-    print_header()
+"""
+Generate multivariate factor model data.
+"""
+function generate_factor_data(rng::AbstractRNG, n::Int, n_obs::Int, n_factors::Int)
+    # Generate factors
+    F = zeros(n_factors, n + 1)
+    F[:, 1] = randn(rng, n_factors)
 
-    quick = "--quick" in args
-    step_only = "--step" in args
-    full_only = "--full" in args
-
-    # Default: run both unless specific flag given
-    run_step = !full_only
-    run_full = !step_only
-
-    lengths = quick ? [100, 1000] : [100, 1000, 10000]
-
-    if run_step
-        run_filterstep_benchmarks()
+    for t in 1:n
+        F[:, t + 1] = 0.8 * F[:, t] + 0.3 * randn(rng, n_factors)
     end
 
-    results = nothing
-    if run_full
-        results = benchmark_comparison_table(; lengths = lengths)
+    # Generate loadings and observations
+    Lambda = randn(rng, n_obs, n_factors) ./ sqrt(n_factors)
+    y = zeros(n_obs, n)
+
+    for t in 1:n
+        y[:, t] = Lambda * F[:, t] + 0.5 * randn(rng, n_obs)
     end
 
-    if results !== nothing
-        print_recommendations(results)
-    end
-
-    println()
-    println("Benchmarks complete.")
+    return y
 end
 
-# Run main
-main()
+# ============================================================================
+# Benchmark Suite
+# ============================================================================
+
+const SUITE = BenchmarkGroup()
+
+# ----------------------------------------------------------------------------
+# DSL Model Construction Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["dsl"] = BenchmarkGroup()
+
+SUITE["dsl"]["local_level"] = @benchmarkable local_level(var_obs_init = 225.0)
+SUITE["dsl"]["local_linear_trend"] = @benchmarkable local_linear_trend()
+SUITE["dsl"]["ar1"] = @benchmarkable ar1(rho_init = 0.9)
+SUITE["dsl"]["dynamic_factor_10obs_3factors"] = @benchmarkable dynamic_factor(10, 3; factor_lags = 2)
+
+# ----------------------------------------------------------------------------
+# Log-likelihood Computation Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["loglik"] = BenchmarkGroup()
+
+# Local level model
+let rng = StableRNG(DEFAULT_SEED)
+    y = generate_local_level_data(rng, 500)
+    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    θ = (var_obs = 225.0, var_level = 100.0)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+
+    SUITE["loglik"]["local_level_n500"] = @benchmarkable kalman_loglik($model, $y)
+end
+
+let rng = StableRNG(DEFAULT_SEED + 1)
+    y = generate_local_level_data(rng, 2000)
+    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    θ = (var_obs = 225.0, var_level = 100.0)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+
+    SUITE["loglik"]["local_level_n2000"] = @benchmarkable kalman_loglik($model, $y)
+end
+
+# Local linear trend model
+let rng = StableRNG(DEFAULT_SEED + 2)
+    y = generate_trend_data(rng, 500)
+    spec = local_linear_trend()
+    θ = (var_obs = 25.0, var_level = 4.0, var_slope = 0.25)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+
+    SUITE["loglik"]["trend_n500"] = @benchmarkable kalman_loglik($model, $y)
+end
+
+# ----------------------------------------------------------------------------
+# Filter + Smoother Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["filter"] = BenchmarkGroup()
+
+let rng = StableRNG(DEFAULT_SEED + 10)
+    y = generate_local_level_data(rng, 1000)
+    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    θ = (var_obs = 225.0, var_level = 100.0)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+
+    SUITE["filter"]["local_level_n1000"] = @benchmarkable kalman_filter!($model, $y)
+end
+
+let rng = StableRNG(DEFAULT_SEED + 11)
+    y = generate_trend_data(rng, 1000)
+    spec = local_linear_trend()
+    θ = (var_obs = 25.0, var_level = 4.0, var_slope = 0.25)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+
+    SUITE["filter"]["trend_n1000"] = @benchmarkable kalman_filter!($model, $y)
+end
+
+SUITE["smoother"] = BenchmarkGroup()
+
+let rng = StableRNG(DEFAULT_SEED + 20)
+    y = generate_local_level_data(rng, 1000)
+    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    θ = (var_obs = 225.0, var_level = 100.0)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+    kalman_filter!(model, y)
+
+    SUITE["smoother"]["local_level_n1000"] = @benchmarkable kalman_smoother!($model)
+end
+
+let rng = StableRNG(DEFAULT_SEED + 21)
+    y = generate_trend_data(rng, 1000)
+    spec = local_linear_trend()
+    θ = (var_obs = 25.0, var_level = 4.0, var_slope = 0.25)
+    model = StateSpaceModel(spec, θ, size(y, 2))
+    kalman_filter!(model, y)
+
+    SUITE["smoother"]["trend_n1000"] = @benchmarkable kalman_smoother!($model)
+end
+
+# ----------------------------------------------------------------------------
+# MLE Estimation Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["mle"] = BenchmarkGroup()
+
+let rng = StableRNG(DEFAULT_SEED + 30)
+    y = generate_local_level_data(rng, 200)
+    spec = local_level(var_obs_init = 100.0, var_level_init = 50.0)
+
+    SUITE["mle"]["local_level_n200"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(MLE(), m, $y)
+    end
+end
+
+let rng = StableRNG(DEFAULT_SEED + 31)
+    y = generate_trend_data(rng, 200)
+    spec = local_linear_trend()
+
+    SUITE["mle"]["trend_n200"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(MLE(), m, $y)
+    end
+end
+
+# ----------------------------------------------------------------------------
+# EM Estimation Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["em"] = BenchmarkGroup()
+
+let rng = StableRNG(DEFAULT_SEED + 40)
+    y = generate_local_level_data(rng, 200)
+    spec = local_level(var_obs_init = 100.0, var_level_init = 50.0)
+
+    SUITE["em"]["local_level_n200_iter50"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(EM(), m, $y; maxiter = 50, verbose = false)
+    end
+end
+
+let rng = StableRNG(DEFAULT_SEED + 41)
+    y = generate_trend_data(rng, 200)
+    spec = local_linear_trend()
+
+    SUITE["em"]["trend_n200_iter50"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(EM(), m, $y; maxiter = 50, verbose = false)
+    end
+end
+
+# ----------------------------------------------------------------------------
+# Dynamic Factor Model Benchmarks
+# ----------------------------------------------------------------------------
+
+SUITE["dfm"] = BenchmarkGroup()
+
+let rng = StableRNG(DEFAULT_SEED + 50)
+    y = generate_factor_data(rng, 200, 10, 2)
+    spec = dynamic_factor(10, 2; factor_lags = 1)
+
+    # Note: DFM estimation can be slow, so we just benchmark a few EM iterations
+    SUITE["dfm"]["10obs_2factors_em20"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(EM(), m, $y; maxiter = 20, verbose = false)
+    end
+end
+
+let rng = StableRNG(DEFAULT_SEED + 51)
+    y = generate_factor_data(rng, 200, 20, 3)
+    spec = dynamic_factor(20, 3; factor_lags = 1)
+
+    SUITE["dfm"]["20obs_3factors_em20"] = @benchmarkable begin
+        m = StateSpaceModel($spec, size($y, 2))
+        fit!(EM(), m, $y; maxiter = 20, verbose = false)
+    end
+end
