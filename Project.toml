@@ -16,7 +16,7 @@ TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
 
 [compat]
 Aqua = "0.8"
-DelimitedFiles = "1.10"
+DelimitedFiles = "1.10, 1"
 ForwardDiff = "1"
 LinearAlgebra = "1.10"
 LogDensityProblems = "2"
