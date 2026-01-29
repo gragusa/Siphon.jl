@@ -5,7 +5,8 @@ Tests for EM algorithm implementation.
 using Test
 using Siphon
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 using ForwardDiff
 using Random
 
@@ -74,8 +75,8 @@ end
 
 @testset "fit!(EM(), ...) Nile data" begin
     # Load Nile data
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     spec = local_level()
     model = StateSpaceModel(spec, size(y, 2))
@@ -111,8 +112,8 @@ end
 @testset "_em_local_level finds MLE" begin
     # EM should find the maximum likelihood estimate
     # Test on Nile data where the MLE is known from Durbin & Koopman (2012)
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     spec = local_level()
     result_em = Siphon.DSL._em_local_level(spec, y; maxiter = 300, tol_ll = 1e-8)
@@ -133,8 +134,8 @@ end
     # Fix var_obs, estimate var_level only
     spec_fixed = local_level(var_obs = 15099.0)
 
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 
@@ -150,8 +151,8 @@ end
     # Fix var_level, estimate var_obs only
     spec_fixed = local_level(var_level = 1469.0)
 
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 

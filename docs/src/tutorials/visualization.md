@@ -168,11 +168,12 @@ plot(result, ObservablePlot, vars=1, level=0.90)
 ```julia
 using Plots
 using Siphon
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # Load Nile data
-nile = readdlm("Nile.csv", ',', Float64)
-y = reshape(nile[:, 1], 1, :)
+nile = CSV.read("Nile.csv", DataFrame; header=false)
+y = reshape(Float64.(nile[!, 1]), 1, :)
 n = size(y, 2)
 
 # Local level model parameters (MLE estimates)

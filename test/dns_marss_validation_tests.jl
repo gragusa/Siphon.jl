@@ -11,15 +11,16 @@ using Test
 using Siphon
 using Siphon.DSL
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # Helper function to load MARSS results CSV
 function load_marss_results(filename)
-    data = readdlm(joinpath(@__DIR__, filename), ','; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, filename), DataFrame)
     result = Dict{String, Float64}()
-    for i in 1:size(data, 1)
-        param_name = String(data[i, 1])
-        param_value = Float64(data[i, 2])
+    for row in eachrow(df)
+        param_name = String(row[1])
+        param_value = Float64(row[2])
         result[param_name] = param_value
     end
     return result
@@ -65,7 +66,8 @@ end
 
     @testset "Z matrix matches MARSS" begin
         # Load MARSS Z matrix
-        z_data = readdlm(joinpath(@__DIR__, "marss_dns_Z.csv"), ','; header = true)[1]
+        z_df = CSV.read(joinpath(@__DIR__, "marss_dns_Z.csv"), DataFrame)
+        z_data = Matrix(z_df)
         maturities = Int.(z_data[:, 1])
         Z_marss = z_data[:, 2:4]
 
@@ -90,7 +92,8 @@ end
 
 @testset "DNS Log-likelihood - MARSS Validation" begin
     # Load reference data and results
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')  # Convert to p × n
 
     p, n = size(y)
@@ -165,7 +168,8 @@ end
 
 @testset "DNS EM - Diagonal Structure - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     p, n = size(y)
@@ -255,7 +259,8 @@ end
 
 @testset "DNS EM - Full Structure - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     p, n = size(y)
@@ -345,7 +350,8 @@ end
 
 @testset "DNS EM - Scalar H - MARSS Validation" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     p, n = size(y)
@@ -402,7 +408,8 @@ end
 
 @testset "DNS Profile EM - Grid Search" begin
     # Load reference data
-    data = readdlm(joinpath(@__DIR__, "marss_dns_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     maturities = [3, 12, 24, 60, 120]

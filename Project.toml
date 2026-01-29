@@ -16,7 +16,8 @@ TransformVariables = "84d833dd-6860-57f9-a1a7-6da5db126cff"
 
 [compat]
 Aqua = "0.8"
-DelimitedFiles = "1.10"
+CSV = "0.10"
+DataFrames = "1"
 ForwardDiff = "1"
 LinearAlgebra = "1.10"
 LogDensityProblems = "2"
@@ -34,7 +35,8 @@ julia = "1.10"
 
 [extras]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
-DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
@@ -42,4 +44,4 @@ TestItemRunner = "f8b46487-2199-4994-9208-9a1283c18c0a"
 TestItems = "1c621080-faea-4a02-84b6-bbd5e436b8fe"
 
 [targets]
-test = ["Aqua", "Test", "DelimitedFiles", "Random", "RecipesBase", "TestItems", "TestItemRunner"]
+test = ["Aqua", "Test", "CSV", "DataFrames", "Random", "RecipesBase", "TestItems", "TestItemRunner"]

@@ -7,16 +7,13 @@ using Test
 using Siphon
 using Siphon.DSL: em_ssm_diagonal
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 
 @testset "Generalized EM - MARSS Validation" begin
     # Load MARSS reference data
-    data = readdlm(
-        joinpath(@__DIR__, "marss_reference_data.csv"),
-        ',',
-        Float64;
-        header = true
-    )[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_reference_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')  # Convert to p × n format (3 × 100)
 
     # Z matrix from R script (fixed)
@@ -95,12 +92,8 @@ end
 
 @testset "Generalized EM - Log-likelihood Near-Monotonicity" begin
     # Load MARSS reference data
-    data = readdlm(
-        joinpath(@__DIR__, "marss_reference_data.csv"),
-        ',',
-        Float64;
-        header = true
-    )[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_reference_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     Z = [1.0 0.0; 0.0 1.0; 0.7 0.3]

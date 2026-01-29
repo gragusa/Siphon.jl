@@ -1,12 +1,13 @@
 using Siphon
 using Test
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 using ForwardDiff
 
 # Load Nile data
-nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-y = reshape(nile[:, 1], 1, :)  # 1 x 100 matrix
+nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+y = reshape(Float64.(nile[!, 1]), 1, :)  # 1 x 100 matrix
 
 # MLE estimates from Durbin & Koopman (2012)
 const Z_nile = [1.0;;]
@@ -159,7 +160,8 @@ end
 end
 
 @testset "kalman_loglik_scalar" begin
-    ll = kalman_loglik_scalar(1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
+    ll = kalman_loglik_scalar(
+        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, Float64.(nile[!, 1]))
 
     @test isfinite(ll)
     @test ll < 0
@@ -271,8 +273,9 @@ end
 end
 
 @testset "kalman_smoother_scalar" begin
+    nile_vec = Float64.(nile[!, 1])
     result_scalar = kalman_filter_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
+        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, nile_vec)
 
     # Check struct type
     @test result_scalar isa Siphon.KalmanFilterResultScalar
@@ -287,7 +290,7 @@ end
         result_scalar.Ft
     )
 
-    n = length(nile)
+    n = length(nile_vec)
     @test length(alpha) == n
     @test length(V) == n
 

@@ -138,12 +138,13 @@ end
 @testitem "SmootherResult convenience constructor" tags=[:recipes] begin
     using Siphon
     using Siphon: SmootherResult
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # Local level model parameters
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
@@ -161,12 +162,13 @@ end
 @testitem "KalmanFilterResult recipe produces series" tags=[:recipes] begin
     using Siphon
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # Local level model
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
@@ -192,11 +194,12 @@ end
     using Siphon
     using Siphon: SmootherResult
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -231,11 +234,12 @@ end
     using Siphon
     using Siphon: SmootherResult
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -252,11 +256,12 @@ end
     using Siphon
     using Siphon: ObservablePlot
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -332,12 +337,13 @@ end
 @testitem "KalmanWorkspace filter and smoother" tags=[:recipes, :inplace] begin
     using Siphon
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     # Local level model
@@ -371,11 +377,12 @@ end
     using Siphon
     using RecipesBase
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     ws = KalmanWorkspace(
@@ -409,11 +416,12 @@ end
     using Siphon: SmootherResult
     using RecipesBase
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     ws = KalmanWorkspace(

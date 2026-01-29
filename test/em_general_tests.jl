@@ -7,11 +7,13 @@ using Test
 using Siphon
 using Siphon.DSL: _em_general_ssm_full_cov
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 
 @testset "General EM - MARSS Validation" begin
     # Load MARSS reference data
-    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_general_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')  # Convert to p × n format (3 × 200)
 
     # Model dimensions
@@ -136,7 +138,8 @@ end
 
 @testset "General EM - Log-likelihood Improvement" begin
     # Load MARSS reference data
-    data = readdlm(joinpath(@__DIR__, "marss_general_data.csv"), ',', Float64; header = true)[1]
+    df = CSV.read(joinpath(@__DIR__, "marss_general_data.csv"), DataFrame)
+    data = Matrix(df)
     y = Matrix(data')
 
     p, m, r = 3, 2, 2

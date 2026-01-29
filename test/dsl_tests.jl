@@ -556,11 +556,12 @@ end
 end
 
 @testset "kalman_smoother Nile reference" begin
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # MLE estimates from Durbin & Koopman (2012)
     # σ²_ε (observation) = 15099

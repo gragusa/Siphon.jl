@@ -50,11 +50,12 @@ Initial values: [225.0, 100.0]
 Let's work with the classic Nile River dataset:
 
 ```julia
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # Load the Nile data
-nile = readdlm("test/Nile.csv", ',', Float64)
-y = nile'  # Convert to 1×n matrix (p × T format)
+nile = CSV.read("test/Nile.csv", DataFrame; header=false)
+y = permutedims(Matrix(nile))  # Convert to 1×n matrix (p × T format)
 
 println("Number of observations: ", size(y, 2))
 ```

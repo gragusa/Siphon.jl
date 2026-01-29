@@ -8,11 +8,12 @@ This example demonstrates how to:
 """
 
 using Siphon
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # Load the Nile data
-nile = readdlm(joinpath(@__DIR__, "..", "test", "Nile.csv"), ',', Float64)
-y = nile'  # Convert to 1×n matrix for the filter
+nile = CSV.read(joinpath(@__DIR__, "..", "test", "Nile.csv"), DataFrame; header = false)
+y = permutedims(Matrix(nile))  # Convert to 1×n matrix for the filter
 
 println("Nile data: $(length(nile)) observations")
 println("Range: $(minimum(nile)) - $(maximum(nile))")

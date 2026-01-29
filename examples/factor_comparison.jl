@@ -23,7 +23,8 @@ using LinearAlgebra
 using Statistics
 using Random
 using Printf
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # ============================================================================
 # Section 1: Data Simulation
@@ -628,12 +629,10 @@ function real_data_comparison(data_path::String; n_factors::Int = 6)
     println()
 
     # Load data (same preprocessing as dfm_full_estimation.jl)
-    raw_data = readdlm(data_path, ',', Any; header = true)
-    data_matrix = raw_data[1]
-    header = raw_data[2]
+    df = CSV.read(data_path, DataFrame)
 
-    var_names = String.(header[2:end])
-    y_raw = Matrix{Float64}(data_matrix[:, 2:end])
+    var_names = String.(names(df)[2:end])
+    y_raw = Matrix{Float64}(Matrix(df[:, 2:end]))
     T_obs, n_vars = size(y_raw)
 
     # Transpose to N × T for Siphon
