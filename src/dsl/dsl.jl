@@ -49,7 +49,7 @@ module DSL
 using LinearAlgebra
 using TransformVariables
 using ..Siphon: KFParms, KFParms_static, kalman_loglik
-using ..Siphon: kalman_filter, kalman_smoother, ismissing_obs
+using ..Siphon: kalman_filter, kalman_smoother
 using ..Siphon: to_static_if_small, STATIC_THRESHOLD
 
 include("types.jl")
