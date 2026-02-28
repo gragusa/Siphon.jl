@@ -77,16 +77,7 @@ end
 
 Count number of time periods with at least one missing observation.
 """
-function count_missing(y::AbstractMatrix)
-    n = size(y, 2)
-    count = 0
-    for t in 1:n
-        if ismissing_obs(view(y, :, t))
-            count += 1
-        end
-    end
-    count
-end
+count_missing(y::AbstractMatrix) = count(t -> ismissing_obs(view(y, :, t)), axes(y, 2))
 
 # ============================================
 # Prediction (In-Sample Fitted Values)

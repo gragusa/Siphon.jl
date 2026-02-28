@@ -31,11 +31,6 @@ numstates(T::Real) = 1
 nummeasur(Z::AbstractMatrix) = size(Z, 1)
 nummeasur(Z::Real) = 1
 
-Base.size(p::KFParms{P}) where {P <: Real} = (1, 1, 1)
-function Base.size(p::KFParms{P}) where {P <: AbstractArray}
-    (size(p.Z, 1), size(p.T, 1), size(p.Q, 1))
-end
-
 # ============================================
 # StaticArrays automatic conversion
 # ============================================

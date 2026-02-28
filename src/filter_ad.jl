@@ -44,6 +44,21 @@ Check if scalar observation is NaN (missing).
 """
 @inline _has_missing(y_t::Real) = isnan(y_t)
 
+# ============================================
+# Element type helper for AD compatibility
+# ============================================
+
+@inline _filter_eltype(p::KFParms,
+    a1,
+    P1) = promote_type(
+    eltype(p.Z), eltype(p.H), eltype(p.T), eltype(p.R), eltype(p.Q), eltype(a1), eltype(P1))
+
+@inline _filter_eltype(p::KFParms,
+    a1,
+    P1_star,
+    P1_inf) = promote_type(eltype(p.Z), eltype(p.H), eltype(p.T), eltype(p.R),
+    eltype(p.Q), eltype(a1), eltype(P1_star), eltype(P1_inf))
+
 """
     kalman_loglik(p::KFParms, y, a1, P1) -> loglik
 
@@ -85,110 +100,63 @@ function kalman_loglik(
 )
     n = size(y, 2)
     obs_dim = size(y, 1)
+    ET = _filter_eltype(p, a1, P1)
 
-    # Get element type from parameters for AD compatibility
-    T = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1)
-    )
-
-    # Initialize state
-    a = Vector{T}(a1)
-    P = Matrix{T}(P1)
-
-    # Initialize log-likelihood (without constant term)
-    loglik = zero(T)
-
-    # Count non-missing observations for constant term
+    a = Vector{ET}(a1)
+    P = Matrix{ET}(P1)
+    loglik = zero(ET)
     n_obs = 0
 
     for t in 1:n
         y_t = y[:, t]
 
-        # Check for missing observation
         if _has_missing(y_t)
-            # Missing: skip update, just propagate state
             a = p.T * a
             P = p.T * P * p.T' + p.R * p.Q * p.R'
             continue
         end
 
-        # Observation is present
         n_obs += 1
-
-        # Innovation
         v = y_t - p.Z * a
-
-        # Innovation covariance
         F = p.Z * P * p.Z' + p.H
 
-        # For numerical stability with scalars
         if obs_dim == 1
             F_val = F[1, 1]
-            # Check for non-positive variance
-            if F_val <= zero(T)
-                return T(-Inf)
+            if F_val <= zero(ET)
+                return ET(-Inf)
             end
-            Finv = one(T) / F_val
+            Finv = fill(one(ET) / F_val, 1, 1)
             logdetF = log(F_val)
-            quad_form = v[1]^2 * Finv
         else
-            # For multivariate case, use Cholesky for stability
-            F_sym = Symmetric((F + F') / 2)  # Ensure symmetry
+            F_sym = Symmetric((F + F') / 2)
             chol_result = cholesky(F_sym; check = false)
             if !issuccess(chol_result)
-                # F is not positive definite - return -Inf
-                return T(-Inf)
+                return ET(-Inf)
             end
             Finv = inv(chol_result)
             logdetF = 2 * sum(log.(diag(chol_result.U)))
-            quad_form = dot(v, Finv * v)
         end
 
-        # Log-likelihood contribution
-        loglik += -T(0.5) * (logdetF + quad_form)
+        quad_form = dot(v, Finv * v)
+        loglik += -ET(0.5) * (logdetF + quad_form)
 
-        # Check for NaN/Inf
         if !isfinite(loglik)
-            return T(-Inf)
+            return ET(-Inf)
         end
 
-        # Kalman gain
         K = p.T * P * p.Z' * Finv
-
-        # State update (predicted state for next period)
         a = p.T * a + K * v
-
-        # Covariance update
-        # P = T * P * T' + R * Q * R' - K * Z * P * T'
-        # More numerically stable form:
         L = p.T - K * p.Z
         P = L * P * p.T' + p.R * p.Q * p.R'
     end
 
-    # Constant term based on actual observations
-    const_term = -obs_dim * n_obs * log(T(2π)) / 2
-
+    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
     return loglik + const_term
 end
 
 # ============================================
 # Static specialization for kalman_loglik
 # ============================================
-
-"""
-    _is_static_kfparms(p::KFParms) -> Bool
-
-Check if all KFParms matrices are StaticArrays.
-"""
-@inline _is_static_kfparms(::KFParms{
-    <:SMatrix, <:SMatrix, <:SMatrix, <:SMatrix, <:SMatrix}) = true
-@inline _is_static_kfparms(::KFParms) = false
 
 """
     kalman_loglik(p::KFParms{<:SMatrix,...}, y, a1::SVector, P1::SMatrix) -> loglik
@@ -215,17 +183,7 @@ function kalman_loglik(
         P1::SMatrix{M, M}
 ) where {P, M, R}
     n = size(y, 2)
-
-    # Get element type for AD compatibility
-    ET = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1)
-    )
+    ET = _filter_eltype(p, a1, P1)
 
     # Initialize state as static types
     a = SVector{M, ET}(a1)
@@ -331,27 +289,18 @@ function kalman_loglik_scalar(
         y::AbstractVector
 )
     n = length(y)
-    T = promote_type(
-        typeof(Z),
-        typeof(H),
-        typeof(Tmat),
-        typeof(R),
-        typeof(Q),
-        typeof(a1),
-        typeof(P1)
-    )
+    ET = promote_type(
+        typeof(Z), typeof(H), typeof(Tmat), typeof(R), typeof(Q), typeof(a1), typeof(P1))
 
-    a = convert(T, a1)
-    P = convert(T, P1)
-    loglik = zero(T)
+    a = convert(ET, a1)
+    P = convert(ET, P1)
+    loglik = zero(ET)
     n_obs = 0
 
     for t in 1:n
         y_t = y[t]
 
-        # Check for missing observation
         if _has_missing(y_t)
-            # Missing: skip update, just propagate state
             a = Tmat * a
             P = Tmat * P * Tmat + R * Q * R
             continue
@@ -362,17 +311,15 @@ function kalman_loglik_scalar(
         v = y_t - Z * a
         F = Z * P * Z + H
 
-        # Check for non-positive variance
-        if F <= zero(T)
-            return T(-Inf)
+        if F <= zero(ET)
+            return ET(-Inf)
         end
 
-        Finv = one(T) / F
-        loglik += -T(0.5) * (log(F) + v^2 * Finv)
+        Finv = one(ET) / F
+        loglik += -ET(0.5) * (log(F) + v^2 * Finv)
 
-        # Check for NaN/Inf
         if !isfinite(loglik)
-            return T(-Inf)
+            return ET(-Inf)
         end
 
         K = Tmat * P * Z * Finv
@@ -381,53 +328,8 @@ function kalman_loglik_scalar(
         P = L * P * Tmat + R * Q * R
     end
 
-    const_term = -n_obs * log(T(2π)) / 2
+    const_term = -n_obs * log(ET(2π)) / 2
     return loglik + const_term
-end
-
-# ============================================
-# Convenience wrapper for automatic static conversion
-# ============================================
-
-"""
-    kalman_loglik_static(p::KFParms, y, a1, P1) -> loglik
-
-Compute log-likelihood using StaticArrays if dimensions are small enough.
-
-Automatically converts inputs to StaticArrays when dimensions ≤ STATIC_THRESHOLD,
-then dispatches to the appropriate specialized method.
-
-# Example
-```julia
-# These will use static inner loop if dimensions are small:
-ll = kalman_loglik_static(p, y, a1, P1)
-
-# Equivalent to manually converting:
-p_static = KFParms_static(p.Z, p.H, p.T, p.R, p.Q)
-a1_static = SVector{m}(a1)
-P1_static = SMatrix{m,m}(P1)
-ll = kalman_loglik(p_static, y, a1_static, P1_static)
-```
-"""
-function kalman_loglik_static(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix
-)
-    m = length(a1)
-    obs_dim = size(y, 1)
-    r = size(p.Q, 1)
-
-    # Only convert if all dimensions are within threshold
-    if m ≤ STATIC_THRESHOLD && obs_dim ≤ STATIC_THRESHOLD && r ≤ STATIC_THRESHOLD
-        p_static = KFParms_static(p.Z, p.H, p.T, p.R, p.Q)
-        a1_static = to_static_if_small(a1)
-        P1_static = to_static_if_small(P1)
-        return kalman_loglik(p_static, y, a1_static, P1_static)
-    else
-        return kalman_loglik(p, y, a1, P1)
-    end
 end
 
 """
@@ -469,95 +371,79 @@ function kalman_filter(
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
+    ET = _filter_eltype(p, a1, P1)
 
-    ET = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1)
-    )
-
-    # Predicted state storage: n entries (at = a_{t|t-1})
     at_store = Matrix{ET}(undef, state_dim, n)
     Pt_store = Array{ET}(undef, state_dim, state_dim, n)
-
-    # Filtered state storage: n entries (att = a_{t|t})
     att_store = Matrix{ET}(undef, state_dim, n)
     Ptt_store = Array{ET}(undef, state_dim, state_dim, n)
-
-    # Innovation storage: n entries
     vt_store = Matrix{ET}(undef, obs_dim, n)
     Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
     Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
     missing_mask = BitVector(undef, n)
 
-    # Initialize: at[1] = a1, Pt[1] = P1 (initial state is prediction for t=1)
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
-
     loglik = zero(ET)
     n_obs = 0
 
     for t in 1:n
         y_t = y[:, t]
 
-        # Store predicted state (before measurement update)
         at_store[:, t] = a_pred
         Pt_store[:, :, t] = P_pred
 
-        # Check for missing observation
         if _has_missing(y_t)
             missing_mask[t] = true
             vt_store[:, t] .= ET(NaN)
             Ft_store[:, :, t] = p.Z * P_pred * p.Z' + p.H
             Kt_store[:, :, t] .= zero(ET)
-
-            # For missing: filtered = predicted (no update)
             att_store[:, t] = a_pred
             Ptt_store[:, :, t] = P_pred
-
-            # Propagate state without update
             a_pred = p.T * a_pred
             P_pred = p.T * P_pred * p.T' + p.R * p.Q * p.R'
         else
             missing_mask[t] = false
             n_obs += 1
 
-            # Innovation
             v = y_t - p.Z * a_pred
             F = p.Z * P_pred * p.Z' + p.H
 
             if obs_dim == 1
                 F_val = F[1, 1]
+                if F_val <= zero(ET)
+                    return KalmanFilterResult(
+                        p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
+                        vt_store, Ft_store, Kt_store, missing_mask)
+                end
                 Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
             else
-                Finv = inv(F)
-                logdetF = logdet(F)
+                F_sym = Symmetric((F + F') / 2)
+                chol_result = cholesky(F_sym; check = false)
+                if !issuccess(chol_result)
+                    return KalmanFilterResult(
+                        p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
+                        vt_store, Ft_store, Kt_store, missing_mask)
+                end
+                Finv = inv(chol_result)
+                logdetF = 2 * sum(log.(diag(chol_result.U)))
                 quad_form = dot(v, Finv * v)
             end
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            # Kalman gain (for predicting next state: K = T * P * Z' * Finv)
             K = p.T * P_pred * p.Z' * Finv
-
             vt_store[:, t] = v
             Ft_store[:, :, t] = F
             Kt_store[:, :, t] = K
 
-            # Filtered state (measurement update)
             a_filt = a_pred + P_pred * p.Z' * Finv * v
             P_filt = P_pred - P_pred * p.Z' * Finv * p.Z * P_pred
-
             att_store[:, t] = a_filt
             Ptt_store[:, :, t] = P_filt
 
-            # Predict next state
             a_pred = p.T * a_filt
             P_pred = p.T * P_filt * p.T' + p.R * p.Q * p.R'
         end
@@ -603,18 +489,9 @@ function kalman_filter(
         P1::SMatrix{M, M}
 ) where {P, M, R}
     n = size(y, 2)
+    ET = _filter_eltype(p, a1, P1)
 
-    ET = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1)
-    )
-
-    # Output storage (heap-allocated, but filled with static values)
+    # Output storage (heap-allocated, filled with static values)
     at_store = Matrix{ET}(undef, M, n)
     Pt_store = Array{ET}(undef, M, M, n)
     att_store = Matrix{ET}(undef, M, n)
@@ -624,72 +501,40 @@ function kalman_filter(
     Kt_store = Array{ET}(undef, M, P, n)
     missing_mask = BitVector(undef, n)
 
-    # Static system matrices
     Z = SMatrix{P, M, ET}(p.Z)
     H = SMatrix{P, P, ET}(p.H)
     T_mat = SMatrix{M, M, ET}(p.T)
     R_mat = SMatrix{M, R, ET}(p.R)
     Q = SMatrix{R, R, ET}(p.Q)
-
-    # Precompute R*Q*R'
     RQR = R_mat * Q * transpose(R_mat)
 
-    # Initialize state as static
     a_pred = SVector{M, ET}(a1)
     P_pred = SMatrix{M, M, ET}(P1)
-
     loglik = zero(ET)
     n_obs = 0
 
     @inbounds for t in 1:n
-        # Extract observation as SVector
         y_t = SVector{P, ET}(ntuple(i -> ET(y[i, t]), Val(P)))
 
-        # Store predicted state
-        for i in 1:M
-            at_store[i, t] = a_pred[i]
-        end
-        for j in 1:M, i in 1:M
-
-            Pt_store[i, j, t] = P_pred[i, j]
-        end
+        at_store[:, t] .= a_pred
+        Pt_store[:, :, t] .= P_pred
 
         if _has_missing(y_t)
             missing_mask[t] = true
-            for i in 1:P
-                vt_store[i, t] = ET(NaN)
-            end
-            F_miss = Z * P_pred * transpose(Z) + H
-            for j in 1:P, i in 1:P
-
-                Ft_store[i, j, t] = F_miss[i, j]
-            end
-            for j in 1:P, i in 1:M
-
-                Kt_store[i, j, t] = zero(ET)
-            end
-
-            # Filtered = predicted for missing
-            for i in 1:M
-                att_store[i, t] = a_pred[i]
-            end
-            for j in 1:M, i in 1:M
-
-                Ptt_store[i, j, t] = P_pred[i, j]
-            end
-
-            # Propagate
+            vt_store[:, t] .= ET(NaN)
+            Ft_store[:, :, t] .= Z * P_pred * transpose(Z) + H
+            Kt_store[:, :, t] .= zero(ET)
+            att_store[:, t] .= a_pred
+            Ptt_store[:, :, t] .= P_pred
             a_pred = T_mat * a_pred
             P_pred = T_mat * P_pred * transpose(T_mat) + RQR
         else
             missing_mask[t] = false
             n_obs += 1
 
-            # Innovation (static)
             v = y_t - Z * a_pred
             F = Z * P_pred * transpose(Z) + H
 
-            # Inverse and log-det
             if P == 1
                 F_val = F[1, 1]
                 Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
@@ -699,19 +544,9 @@ function kalman_filter(
                 F_sym = Symmetric(SMatrix{P, P, ET}((F + transpose(F)) / 2))
                 chol_result = cholesky(F_sym; check = false)
                 if !issuccess(chol_result)
-                    # Return early with -Inf likelihood
                     return KalmanFilterResult(
-                        p,
-                        ET(-Inf),
-                        at_store,
-                        Pt_store,
-                        att_store,
-                        Ptt_store,
-                        vt_store,
-                        Ft_store,
-                        Kt_store,
-                        missing_mask
-                    )
+                        p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
+                        vt_store, Ft_store, Kt_store, missing_mask)
                 end
                 Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -720,81 +555,24 @@ function kalman_filter(
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            # Kalman gain (static)
             K = T_mat * P_pred * transpose(Z) * Finv
+            vt_store[:, t] .= v
+            Ft_store[:, :, t] .= F
+            Kt_store[:, :, t] .= K
 
-            # Store
-            for i in 1:P
-                vt_store[i, t] = v[i]
-            end
-            for j in 1:P, i in 1:P
-
-                Ft_store[i, j, t] = F[i, j]
-            end
-            for j in 1:P, i in 1:M
-
-                Kt_store[i, j, t] = K[i, j]
-            end
-
-            # Filtered state (static)
             a_filt = a_pred + P_pred * transpose(Z) * Finv * v
             P_filt = P_pred - P_pred * transpose(Z) * Finv * Z * P_pred
+            att_store[:, t] .= a_filt
+            Ptt_store[:, :, t] .= P_filt
 
-            for i in 1:M
-                att_store[i, t] = a_filt[i]
-            end
-            for j in 1:M, i in 1:M
-
-                Ptt_store[i, j, t] = P_filt[i, j]
-            end
-
-            # Predict next
             a_pred = T_mat * a_filt
             P_pred = T_mat * P_filt * transpose(T_mat) + RQR
         end
     end
 
     const_term = -P * n_obs * log(ET(2π)) / 2
-
-    return KalmanFilterResult(
-        p,
-        loglik + const_term,
-        at_store,
-        Pt_store,
-        att_store,
-        Ptt_store,
-        vt_store,
-        Ft_store,
-        Kt_store,
-        missing_mask
-    )
-end
-
-"""
-    kalman_filter_static(p::KFParms, y, a1, P1) -> KalmanFilterResult
-
-Run full Kalman filter using StaticArrays if dimensions are small enough.
-
-Automatically converts inputs to StaticArrays when dimensions ≤ STATIC_THRESHOLD.
-"""
-function kalman_filter_static(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix
-)
-    m = length(a1)
-    obs_dim = size(y, 1)
-    r = size(p.Q, 1)
-
-    if m ≤ STATIC_THRESHOLD && obs_dim ≤ STATIC_THRESHOLD && r ≤ STATIC_THRESHOLD
-        p_static = KFParms_static(p.Z, p.H, p.T, p.R, p.Q)
-        a1_static = to_static_if_small(a1)
-        P1_static = to_static_if_small(P1)
-        return kalman_filter(p_static, y, a1_static, P1_static)
-    else
-        return kalman_filter(p, y, a1, P1)
-    end
+    return KalmanFilterResult(p, loglik + const_term, at_store, Pt_store, att_store,
+        Ptt_store, vt_store, Ft_store, Kt_store, missing_mask)
 end
 
 """
@@ -982,17 +760,7 @@ function kalman_loglik_diffuse(
     n = size(y, 2)
     obs_dim = size(y, 1)
 
-    # Get element type for AD compatibility
-    ET = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1_star),
-        eltype(P1_inf)
-    )
+    ET = _filter_eltype(p, a1, P1_star, P1_inf)
 
     # Initialize state
     a = Vector{ET}(a1)
@@ -1002,7 +770,6 @@ function kalman_loglik_diffuse(
     # Precompute RQR'
     RQR = p.R * p.Q * p.R'
 
-    # Log-likelihood accumulator
     loglik = zero(ET)
     n_obs = 0  # Count non-diffuse, non-missing observations
 
@@ -1043,9 +810,8 @@ function kalman_loglik_diffuse(
                 if F_val <= zero(ET)
                     return ET(-Inf)
                 end
-                Finv = one(ET) / F_val
+                Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
-                quad_form = v[1]^2 * Finv
             else
                 F_sym = Symmetric((F + F') / 2)
                 chol_result = cholesky(F_sym; check = false)
@@ -1054,9 +820,9 @@ function kalman_loglik_diffuse(
                 end
                 Finv = inv(chol_result)
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
-                quad_form = dot(v, Finv * v)
             end
 
+            quad_form = dot(v, Finv * v)
             loglik += -ET(0.5) * (logdetF + quad_form)
 
             if !isfinite(loglik)
@@ -1103,9 +869,8 @@ function kalman_loglik_diffuse(
                     if Fstar_val <= zero(ET)
                         return ET(-Inf)
                     end
-                    Fstar_inv = one(ET) / Fstar_val
+                    Fstar_inv = fill(one(ET) / Fstar_val, 1, 1)
                     logdetFstar = log(Fstar_val)
-                    quad_form = v[1]^2 * Fstar_inv
                 else
                     Fstar_sym = Symmetric((Fstar + Fstar') / 2)
                     chol_result = cholesky(Fstar_sym; check = false)
@@ -1114,9 +879,9 @@ function kalman_loglik_diffuse(
                     end
                     Fstar_inv = inv(chol_result)
                     logdetFstar = 2 * sum(log.(diag(chol_result.U)))
-                    quad_form = dot(v, Fstar_inv * v)
                 end
 
+                quad_form = dot(v, Fstar_inv * v)
                 # This observation contributes to likelihood
                 n_obs += 1
                 loglik += -ET(0.5) * (logdetFstar + quad_form)
@@ -1184,16 +949,7 @@ function kalman_filter_diffuse(
     obs_dim = size(y, 1)
     state_dim = length(a1)
 
-    ET = promote_type(
-        eltype(p.Z),
-        eltype(p.H),
-        eltype(p.T),
-        eltype(p.R),
-        eltype(p.Q),
-        eltype(a1),
-        eltype(P1_star),
-        eltype(P1_inf)
-    )
+    ET = _filter_eltype(p, a1, P1_star, P1_inf)
 
     # Allocate storage
     at_store = Matrix{ET}(undef, state_dim, n)
@@ -1270,12 +1026,22 @@ function kalman_filter_diffuse(
 
             if obs_dim == 1
                 F_val = F[1, 1]
+                if F_val <= zero(ET)
+                    loglik = ET(-Inf)
+                    break
+                end
                 Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
             else
-                Finv = inv(F)
-                logdetF = logdet(F)
+                F_sym = Symmetric((F + F') / 2)
+                chol_result = cholesky(F_sym; check = false)
+                if !issuccess(chol_result)
+                    loglik = ET(-Inf)
+                    break
+                end
+                Finv = inv(chol_result)
+                logdetF = 2 * sum(log.(diag(chol_result.U)))
                 quad_form = dot(v, Finv * v)
             end
 
@@ -1340,12 +1106,22 @@ function kalman_filter_diffuse(
 
                 if obs_dim == 1
                     Fstar_val = Fstar[1, 1]
+                    if Fstar_val <= zero(ET)
+                        loglik = ET(-Inf)
+                        break
+                    end
                     Fstar_inv = fill(one(ET) / Fstar_val, 1, 1)
                     logdetFstar = log(Fstar_val)
                     quad_form = v[1]^2 / Fstar_val
                 else
-                    Fstar_inv = inv(Fstar)
-                    logdetFstar = logdet(Fstar)
+                    Fstar_sym = Symmetric((Fstar + Fstar') / 2)
+                    chol_result = cholesky(Fstar_sym; check = false)
+                    if !issuccess(chol_result)
+                        loglik = ET(-Inf)
+                        break
+                    end
+                    Fstar_inv = inv(chol_result)
+                    logdetFstar = 2 * sum(log.(diag(chol_result.U)))
                     quad_form = dot(v, Fstar_inv * v)
                 end
 

@@ -469,13 +469,6 @@ end
 # Missing data detection
 # ============================================
 
-@inline function _has_missing_vec(y::AbstractVector)
-    @inbounds for i in eachindex(y)
-        isnan(y[i]) && return true
-    end
-    return false
-end
-
 # ============================================
 # In-place Kalman filter
 # ============================================
@@ -531,7 +524,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
         # Check for missing observation
         y_t = view(y, :, t)
-        if _has_missing_vec(y_t)
+        if _has_missing(y_t)
             ws.missing_mask[t] = true
 
             # Store NaN for innovation
@@ -1286,7 +1279,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
         y_t = view(y, :, t)
 
-        if _has_missing_vec(y_t)
+        if _has_missing(y_t)
             base.missing_mask[t] = true
 
             # Store NaN for innovation

@@ -14,8 +14,8 @@ export KFParms, KFParms_static
 export KalmanFilterResult, KalmanFilterResultScalar, SmootherWorkspace
 export DiffuseFilterResult  # Exact diffuse initialization
 export STATIC_THRESHOLD, to_static_if_small, select_backend
-export kalman_loglik, kalman_loglik_scalar, kalman_loglik_static
-export kalman_filter, kalman_filter_scalar, kalman_filter_static
+export kalman_loglik, kalman_loglik_scalar
+export kalman_filter, kalman_filter_scalar
 export kalman_smoother, kalman_smoother_scalar, kalman_filter_and_smooth
 # Exact diffuse initialization (Durbin-Koopman method)
 # Note: Use 5-arg kalman_loglik/kalman_filter for diffuse (P1_inf triggers diffuse)

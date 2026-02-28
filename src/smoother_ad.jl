@@ -174,14 +174,9 @@ function kalman_smoother(
                 P_upd_t = P_pred_t - P_pred_t * Z' * F_inv * Z * P_pred_t
             end
 
-            # J_t = P_{t|t} * T' * inv(P_{t+1|t})
-            # Use regularized inverse for numerical stability
-            P_pred_tp1_reg = Matrix(P_pred_tp1)
-            eps_reg = ET(1e-10) * max(one(ET), tr(P_pred_tp1_reg) / state_dim)
-            for i in 1:state_dim
-                P_pred_tp1_reg[i, i] += eps_reg
-            end
-            J_t = P_upd_t * T' * inv(Symmetric(P_pred_tp1_reg))
+            # J_t = P_{t|t} * T' * inv(P_{t+1|t}), regularized for numerical stability
+            eps_reg = ET(1e-10) * max(one(ET), tr(P_pred_tp1) / state_dim)
+            J_t = P_upd_t * T' * inv(Symmetric(Matrix(P_pred_tp1) + eps_reg * I))
 
             # V_{t+1} is the smoothed covariance at t+1
             V_tp1 = view(V_smooth,:,:,(t + 1))

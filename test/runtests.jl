@@ -25,7 +25,6 @@ const P1_nile = [1e7;;]
     @test p.T == T_nile
     @test p.R == R_nile
     @test p.Q == Q_nile
-    @test size(p) == (1, 1, 1)
 end
 
 @testset "kalman_loglik" begin
