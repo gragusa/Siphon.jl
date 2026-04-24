@@ -492,7 +492,7 @@ function _mstep_full_cov(
     sum_V_full = zeros(ET, m, m)
     sum_V_prev = zeros(ET, m, m)
     @inbounds for t in 1:n
-        Vt = view(V_hat, :, :, t)
+        Vt = view(V_hat,:,:,t)
         @simd for idx in eachindex(sum_V_full)
             sum_V_full[idx] += Vt[idx]
         end
@@ -531,7 +531,7 @@ function _mstep_full_cov(
     # ============================================
     sum_P_cross = zeros(ET, m, m)
     @inbounds for t in 1:(n - 1)
-        Pc = view(P_crosslag, :, :, t)
+        Pc = view(P_crosslag,:,:,t)
         @simd for idx in eachindex(sum_P_cross)
             sum_P_cross[idx] += Pc[idx]
         end
@@ -565,7 +565,7 @@ function _mstep_full_cov(
     SR = state_resids * transpose(state_resids)
 
     # Σ V̂_t for t=2:n = sum_V_full - V̂_1
-    V1 = view(V_hat, :, :, 1)
+    V1 = view(V_hat,:,:,1)
     sum_V_2n = sum_V_full - V1
 
     # Σ T V̂_{t-1} T' = T (Σ V̂_{t-1}) T'
