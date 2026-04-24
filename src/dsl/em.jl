@@ -479,137 +479,114 @@ function _mstep_full_cov(
         V_hat::AbstractArray,
         P_crosslag::AbstractArray
 )
+    ET = promote_type(eltype(Z), eltype(T), eltype(y), eltype(alpha_hat),
+        eltype(V_hat), eltype(P_crosslag))
     p, n = size(y)
     m = size(alpha_hat, 1)
     r = size(R, 2)
 
     # ============================================
-    # Update Z (observation matrix)
+    # Σ V̂_t over t=1:n and over t=1:n-1 (reused by Z, T, H, Q updates).
+    # Keep V̂ around as an Array so we can view 2D slices and use mul!.
     # ============================================
-    # Z_new = (Σₜ yₜ α̂ₜ') * (Σₜ (α̂ₜα̂ₜ' + V̂ₜ))⁻¹
-    sum_y_alpha = zeros(p, m)
-    sum_alpha_alpha = zeros(m, m)
+    sum_V_full = zeros(ET, m, m)
+    sum_V_prev = zeros(ET, m, m)
     @inbounds for t in 1:n
-        for i in 1:p, j in 1:m
-
-            sum_y_alpha[i, j] += y[i, t] * alpha_hat[j, t]
+        Vt = view(V_hat, :, :, t)
+        @simd for idx in eachindex(sum_V_full)
+            sum_V_full[idx] += Vt[idx]
         end
-        for i in 1:m, j in 1:m
-
-            sum_alpha_alpha[i, j] += alpha_hat[i, t] * alpha_hat[j, t] + V_hat[i, j, t]
+        if t < n
+            @simd for idx in eachindex(sum_V_prev)
+                sum_V_prev[idx] += Vt[idx]
+            end
         end
     end
+
+    # α̂ α̂' sums via BLAS. alpha_hat[:, 1:n-1] and alpha_hat[:, 2:n] are views.
+    # S_αα_all = α_all * α_all', S_αα_prev = α_{1..n-1} * α_{1..n-1}',
+    # S_αα_next = α_{2..n} * α_{2..n}', S_cross = α_{2..n} * α_{1..n-1}'.
+    α_all = alpha_hat
+    α_prev = view(alpha_hat, :, 1:(n - 1))
+    α_next = view(alpha_hat, :, 2:n)
+
+    S_αα_all = α_all * transpose(α_all)
+    S_αα_prev = α_prev * transpose(α_prev)
+    S_αα_next = α_next * transpose(α_next)
+    S_cross = α_next * transpose(α_prev)
+
+    sum_alpha_alpha = S_αα_all + sum_V_full
+    sum_alpha_alpha_prev = S_αα_prev + sum_V_prev
+    # ============================================
+    # Update Z: Z_new = (Σ y_t α̂_t') * (Σ α̂_t α̂_t' + V̂_t)^{-1}
+    # S_yα = y * α̂' via one matmul.
+    # ============================================
+    sum_y_alpha = y * transpose(alpha_hat)
     Z_new = sum_y_alpha / sum_alpha_alpha
 
     # ============================================
-    # Update T (transition matrix)
+    # Update T: T_new = (Σ_{t≥2} α̂_t α̂_{t-1}' + P̂_{t,t-1}) * S_αα_prev_full^{-1}
+    # where S_αα_prev_full includes V̂_{t-1}.
+    # Sum the cross-lag covariances with one contiguous reduction.
     # ============================================
-    # T_new = (Σₜ₌₂ⁿ (α̂ₜα̂ₜ₋₁' + P̂ₜ,ₜ₋₁)) * (Σₜ₌₂ⁿ (α̂ₜ₋₁α̂ₜ₋₁' + V̂ₜ₋₁))⁻¹
-    sum_alpha_alpha_lag = zeros(m, m)
-    sum_alpha_alpha_prev = zeros(m, m)
-    @inbounds for t in 2:n
-        for i in 1:m, j in 1:m
-
-            sum_alpha_alpha_lag[i, j] += alpha_hat[i, t] * alpha_hat[j, t - 1] +
-                                         P_crosslag[i, j, t - 1]
-            sum_alpha_alpha_prev[i, j] += alpha_hat[i, t - 1] * alpha_hat[j, t - 1] +
-                                          V_hat[i, j, t - 1]
+    sum_P_cross = zeros(ET, m, m)
+    @inbounds for t in 1:(n - 1)
+        Pc = view(P_crosslag, :, :, t)
+        @simd for idx in eachindex(sum_P_cross)
+            sum_P_cross[idx] += Pc[idx]
         end
     end
+    sum_alpha_alpha_lag = S_cross + sum_P_cross
     T_new = sum_alpha_alpha_lag / sum_alpha_alpha_prev
 
     # ============================================
-    # Update H (full observation covariance)
+    # Update H.
+    # H_new = (1/n) [ (Y - Z α̂)(Y - Z α̂)' + Z (Σ V̂_t) Z' ]
+    # The residual sum of squares is one matmul; Σ V̂_t was already accumulated.
     # ============================================
-    # H_new = (1/n) Σₜ [(yₜ - Zα̂ₜ)(yₜ - Zα̂ₜ)' + Z V̂ₜ Z']
-    # Use current Z (not Z_new) to maintain EM monotonicity
-    H_new = zeros(p, p)
-    @inbounds for t in 1:n
-        # Compute residual: y_t - Z * alpha_hat[:, t]
-        residual = Vector{Float64}(undef, p)
-        for i in 1:p
-            residual[i] = y[i, t]
-            for k in 1:m
-                residual[i] -= Z[i, k] * alpha_hat[k, t]
-            end
-        end
-        # Outer product: residual * residual'
-        for i in 1:p, j in 1:p
-
-            H_new[i, j] += residual[i] * residual[j]
-        end
-        # Variance contribution: Z * V_hat[:, :, t] * Z'
-        for i in 1:p, j in 1:p
-
-            for k1 in 1:m, k2 in 1:m
-
-                H_new[i, j] += Z[i, k1] * V_hat[k1, k2, t] * Z[j, k2]
-            end
-        end
-    end
+    # residuals = Y - Z * α̂   (p × n)
+    residuals = y - Z * alpha_hat
+    # H_new = residuals * residuals' + Z * sum_V_full * Z'
+    H_new = residuals * transpose(residuals)
+    ZSV = Z * sum_V_full          # p × m
+    mul!(H_new, ZSV, transpose(Z), one(ET), one(ET))  # H_new += Z*sum_V*Z'
     H_new ./= n
-    # Ensure exact symmetry
-    H_new = (H_new + H_new') / 2
+    H_new = (H_new + transpose(H_new)) / 2
 
     # ============================================
-    # Update Q (full state covariance)
+    # Update Q.
+    # Q_new = (1/(n-1)) R⁺ [ Σ_{t≥2} (state residual)(state residual)'
+    #                      + Σ (V̂_t + T V̂_{t-1} T' - P̂_{t,t-1} T' - T P̂'_{t,t-1}) ]
+    #           R⁺'
+    # Aggregate the sums and do the R⁺ sandwich once.
     # ============================================
-    # Q_new = (1/(n-1)) Σₜ₌₂ⁿ E[(ηₜ)(ηₜ)' | Y]
-    # where ηₜ = R⁺(αₜ - T αₜ₋₁)
-    # Use current T (not T_new) to maintain EM monotonicity
-    Q_new = zeros(r, r)
-    R_pinv = pinv(R)
+    # State residuals matrix: resid[:, t] = α̂_{t+1} - T α̂_t for t = 1:n-1.
+    state_resids = α_next - T * α_prev       # m × (n-1)
+    SR = state_resids * transpose(state_resids)
 
-    @inbounds for t in 2:n
-        # State residual: α̂ₜ - T α̂ₜ₋₁
-        state_resid = Vector{Float64}(undef, m)
-        for i in 1:m
-            state_resid[i] = alpha_hat[i, t]
-            for k in 1:m
-                state_resid[i] -= T[i, k] * alpha_hat[k, t - 1]
-            end
-        end
+    # Σ V̂_t for t=2:n = sum_V_full - V̂_1
+    V1 = view(V_hat, :, :, 1)
+    sum_V_2n = sum_V_full - V1
 
-        # η̂ₜ = R⁺ * state_resid
-        eta_hat = R_pinv * state_resid
+    # Σ T V̂_{t-1} T' = T (Σ V̂_{t-1}) T'
+    TV = T * sum_V_prev           # m × m
+    TVT = TV * transpose(T)
 
-        # Outer product contribution: η̂ₜ η̂ₜ'
-        for i in 1:r, j in 1:r
+    # Σ P̂_{t,t-1} T' and its transpose.
+    PT = sum_P_cross * transpose(T)
 
-            Q_new[i, j] += eta_hat[i] * eta_hat[j]
-        end
+    V_contrib_sum = sum_V_2n + TVT - PT - transpose(PT)
 
-        # Variance contribution: R⁺ * V_contrib * R⁺'
-        # V_contrib = V̂ₜ + T V̂ₜ₋₁ T' - P̂ₜ,ₜ₋₁ T' - T P̂'ₜ,ₜ₋₁
-        V_contrib = zeros(m, m)
-        for i in 1:m, j in 1:m
-
-            V_contrib[i, j] = V_hat[i, j, t]
-            # + T V̂ₜ₋₁ T'
-            for k1 in 1:m, k2 in 1:m
-
-                V_contrib[i, j] += T[i, k1] * V_hat[k1, k2, t - 1] * T[j, k2]
-            end
-            # - P̂ₜ,ₜ₋₁ T'
-            for k in 1:m
-                V_contrib[i, j] -= P_crosslag[i, k, t - 1] * T[j, k]
-            end
-            # - T P̂'ₜ,ₜ₋₁
-            for k in 1:m
-                V_contrib[i, j] -= T[i, k] * P_crosslag[j, k, t - 1]
-            end
-        end
-
-        # R⁺ * V_contrib * R⁺'
-        RVR = R_pinv * V_contrib * R_pinv'
-        for i in 1:r, j in 1:r
-
-            Q_new[i, j] += RVR[i, j]
-        end
+    inner = SR + V_contrib_sum    # m × m
+    # R⁺ * inner * R⁺'
+    if r == m && R == I
+        Q_new = inner
+    else
+        R_pinv = pinv(R)
+        Q_new = R_pinv * inner * transpose(R_pinv)
     end
     Q_new ./= (n - 1)
-    # Ensure exact symmetry
-    Q_new = (Q_new + Q_new') / 2
+    Q_new = (Q_new + transpose(Q_new)) / 2
 
     return (Z_new, T_new, H_new, Q_new)
 end

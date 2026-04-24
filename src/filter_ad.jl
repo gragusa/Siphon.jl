@@ -104,50 +104,73 @@ function kalman_loglik(
 
     a = Vector{ET}(a1)
     P = Matrix{ET}(P1)
+    # RQR' is constant across iterations.
+    RQR = p.R * p.Q * transpose(p.R)
+    Tt = transpose(p.T)
+    Zt = transpose(p.Z)
     loglik = zero(ET)
     n_obs = 0
 
     for t in 1:n
-        y_t = y[:, t]
+        y_t = view(y, :, t)
 
         if _has_missing(y_t)
             a = p.T * a
-            P = p.T * P * p.T' + p.R * p.Q * p.R'
+            P = p.T * P * Tt + RQR
             continue
         end
 
         n_obs += 1
         v = y_t - p.Z * a
-        F = p.Z * P * p.Z' + p.H
+        F = p.Z * P * Zt + p.H
 
         if obs_dim == 1
             F_val = F[1, 1]
             if F_val <= zero(ET)
                 return ET(-Inf)
             end
-            Finv = fill(one(ET) / F_val, 1, 1)
+            Finv_val = one(ET) / F_val
             logdetF = log(F_val)
+            quad_form = v[1]^2 * Finv_val
+            loglik += -ET(0.5) * (logdetF + quad_form)
+            if !isfinite(loglik)
+                return ET(-Inf)
+            end
+            PZt = P * Zt
+            K = p.T * PZt * Finv_val
+            a = p.T * a + K * v
+            # P_filt = P - PZt * Finv_val * (PZt)'
+            P = p.T * (P - PZt * (Finv_val * transpose(PZt))) * Tt + RQR
         else
-            F_sym = Symmetric((F + F') / 2)
+            F_sym = Symmetric(F, :L)
             chol_result = cholesky(F_sym; check = false)
             if !issuccess(chol_result)
                 return ET(-Inf)
             end
-            Finv = inv(chol_result)
-            logdetF = 2 * sum(log.(diag(chol_result.U)))
+            # log|F| = 2 Σ log L[i,i]; avoid diag() allocation.
+            logdetF = zero(ET)
+            L_tri = chol_result.L
+            @inbounds for i in 1:obs_dim
+                logdetF += log(L_tri[i, i])
+            end
+            logdetF += logdetF
+
+            # Solve Finv*v once via Cholesky — no dense inverse.
+            Finv_v = chol_result \ v
+            quad_form = dot(v, Finv_v)
+            loglik += -ET(0.5) * (logdetF + quad_form)
+            if !isfinite(loglik)
+                return ET(-Inf)
+            end
+
+            # M = P * Z' * F^{-1} (m×p) from Cholesky solves on Z*P.
+            PZt = P * Zt
+            M = transpose(chol_result \ transpose(PZt))
+            K = p.T * M
+            a = p.T * a + K * v
+            # P_filt = P - M * (Z*P)
+            P = p.T * (P - M * (p.Z * P)) * Tt + RQR
         end
-
-        quad_form = dot(v, Finv * v)
-        loglik += -ET(0.5) * (logdetF + quad_form)
-
-        if !isfinite(loglik)
-            return ET(-Inf)
-        end
-
-        K = p.T * P * p.Z' * Finv
-        a = p.T * a + K * v
-        L = p.T - K * p.Z
-        P = L * P * p.T' + p.R * p.Q * p.R'
     end
 
     const_term = -obs_dim * n_obs * log(ET(2π)) / 2
