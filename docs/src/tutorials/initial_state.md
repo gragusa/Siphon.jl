@@ -63,37 +63,41 @@ spec = custom_ssm(
 Both estimation paths consume whatever `(a₁, P₁)` the spec encodes.
 **Neither `fit!(EM, ...)` nor `fit!(MLE, ...)` accepts `tinitx`, `V0`,
 `x0`, or `update_initial_state` keyword arguments.** The spec is the
-single source of truth.
+single source of truth: cells declared `FixedValue` stay fixed,
+cells declared `FreeParam` are estimated.
 
 ### `fit!(MLE(), model, y)`
 
 `(a₁, P₁)` are rebuilt from the parameter vector at every objective call.
 
-- If `a1` / `P1` cells are `FixedValue`s (the template default), they
-  stay constant across the optimization.
-- If any cell is a `FreeParam`, it is treated as a model parameter and
-  is **optimized jointly with `Z, H, T, R, Q`**.
-
-So MLE *can* fit the initial state — you just have to declare it as
-free at spec time. There's no separate switch.
+- `FixedValue` cells stay constant across the optimization.
+- `FreeParam` cells are treated as model parameters and **optimized
+  jointly with `Z, H, T, R, Q`** by LBFGS.
 
 ### `fit!(EM(), model, y)`
 
-`(a₁, P₁)` are copied into the in-place workspace once, before the EM
-loop, and held **fixed for every iteration**. Even when `a1` / `P1`
-contain `FreeParam`s, the EM M-step does *not* currently update them.
+`(a₁, P₁)` are loaded from the spec once. After each E-step the M-step
+updates `FreeParam` cells in `a1` / `P1` to the smoother's
+`E[α₁ | y₁:n]` and `Var[α₁ | y₁:n]` respectively (the standard
+Shumway–Stoffer / MARSS closed forms). `FixedValue` cells stay constant
+throughout, just like in MLE.
 
-This is the simplest correct behaviour: with a diffuse prior the
-initial state has negligible effect, and with a spec-specified informative
-prior you presumably want it respected. If you need MARSS's
-"update `(a₁, P₁)` from the smoother every iteration" behaviour, use
-`fit!(MLE())` with `a1`/`P1` declared free, or fall back to the lower-level
-`em_estimate!` and update the workspace's `a1`/`P1` between calls.
+Templates (`local_level`, `ar1`, …) declare `a1` and `P1` as
+`FixedValue`s, so they behave identically to the prior fixed-prior
+implementation. Only specs that explicitly use `FreeParam` in `a1`/`P1`
+see EM update those cells — and in that case the user has asked for it.
 
 | Method | Initial state behaviour |
 |---|---|
-| `fit!(MLE(), m, y)` | Re-evaluates spec each call. `FreeParam` cells in `a1`/`P1` → optimized. `FixedValue` cells → constant. |
-| `fit!(EM(), m, y)` | Loaded from spec once. **Held fixed** through all EM iterations regardless of `FreeParam`/`FixedValue`. |
+| `fit!(MLE(), m, y)` | Re-evaluates spec each call. `FreeParam` cells in `a1`/`P1` → optimized jointly. `FixedValue` cells → constant. |
+| `fit!(EM(), m, y)` | Loaded from spec once. `FreeParam` cells in `a1`/`P1` → updated to the smoothed `E[α₁ y]` / `Var[α₁ y]` each iteration. `FixedValue` cells → constant. |
+
+For a partial-free `P1` (some entries free, others fixed) the EM update
+writes the smoothed covariance into the free cells and leaves the rest
+alone, then symmetrises off-diagonals defensively. This is valid when
+the free pattern is consistent with positive-definiteness; pathological
+patterns (e.g., a single off-diagonal free with the corresponding
+diagonal fixed at zero) are the user's responsibility.
 
 ## Migrating from MARSS
 
@@ -154,15 +158,25 @@ spec = custom_ssm(...; a1 = [100.0], P1 = [25.0])
 fit!(MLE(), StateSpaceModel(spec, n), y)
 ```
 
-**Estimate the initial state by MLE** (treats `α₁` as a model parameter):
+**Estimate the initial state** (treats `α₁` as a model parameter, works
+with both `MLE()` and `EM()`):
 
 ```julia
 spec = custom_ssm(...;
     a1 = [FreeParam(:μ₀, init=0.0)],
     P1 = [FreeParam(:p₀, init=1.0, lower=0.0)])
-fit!(MLE(), StateSpaceModel(spec, n), y)
-parameters(model).μ₀   # estimated initial mean
-parameters(model).p₀   # estimated initial variance
+
+# Either path estimates μ₀ and p₀ jointly with the rest of the parameters.
+model = StateSpaceModel(spec, n)
+fit!(EM(), model, y)          # closed-form M-step: μ₀ → E[α₁|y], p₀ → Var[α₁|y]
+# fit!(MLE(), model, y)       # LBFGS: μ₀, p₀ optimised jointly with Z/H/T/Q
+parameters(model).μ₀          # estimated initial mean
+parameters(model).p₀          # estimated initial variance
 ```
 
-(EM cannot estimate the initial state today — see the table above.)
+EM and MLE can give numerically different point estimates for `(μ₀, p₀)`
+because EM's closed form puts `p₀` at the smoothed posterior variance
+`Var[α₁ | y₁:n]`, which is generally smaller than the MLE-optimised
+prior variance. Both are valid stationary points of the joint
+likelihood; they're not the same problem unless you also profile `p₀`
+analytically out of the MLE objective.

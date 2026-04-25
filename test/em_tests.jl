@@ -751,6 +751,153 @@ end
 end
 
 # ============================================
+# EM updates a1 / P1 only when spec marks them free
+# ============================================
+
+@testset "fit!(EM) leaves spec-fixed (a1, P1) untouched" begin
+    # local_level uses FixedValue everywhere in a1 / P1, so EM must not
+    # change them — even after the M-step now calls update_initial_state!.
+    Random.seed!(20260425)
+    n = 200
+    y = zeros(1, n)
+    states = zeros(n)
+    for t in 2:n
+        states[t] = states[t - 1] + 5 * randn()
+    end
+    for t in 1:n
+        y[1, t] = states[t] + 10 * randn()
+    end
+
+    spec = local_level()                 # diffuse=true → P1 = 1e7
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 50, tol = 1e-8)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.a1[1] == 0.0
+    @test kf_ws.P1[1, 1] == 1e7
+end
+
+@testset "fit!(EM) estimates FreeParam a1 / P1" begin
+    # Local-level model where the user marks both the initial mean and
+    # variance as free. EM should converge and produce values consistent
+    # with the smoothed t=1 distribution.
+    Random.seed!(20260425)
+    n = 250
+    states = zeros(n)
+    states[1] = 5.0
+    for t in 2:n
+        states[t] = states[t - 1] + 1.0 * randn()
+    end
+    y = Matrix{Float64}(undef, 1, n)
+    for t in 1:n
+        y[1, t] = states[t] + 2.0 * randn()
+    end
+
+    spec = custom_ssm(
+        Z = [1.0;;],
+        H = [FreeParam(:var_obs, init = 4.0, lower = 0.0);;],
+        T = [1.0;;], R = [1.0;;],
+        Q = [FreeParam(:var_level, init = 1.0, lower = 0.0);;],
+        a1 = [FreeParam(:mu0, init = 0.0)],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;],
+    )
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 200, tol = 1e-10)
+
+    nm = param_names(spec)
+    θ = parameters(model)
+    @test isfinite(loglikelihood(model))
+    @test :mu0 in nm && :p0 in nm
+
+    # mu0 is the smoothed mean at t=1; with a long enough series it should
+    # be in the neighbourhood of the true initial state (5.0). Loose check
+    # because p0 → small inflates posterior precision.
+    @test abs(θ.mu0 - 5.0) < 3.0
+    @test θ.p0 ≥ 0.0   # variance non-negative
+
+    # The fitted (a1, P1) in the workspace match what _find_param_value
+    # returns to the model's theta_values — i.e., the fix that lets EM
+    # actually surface FreeParams in a1/P1 is wired through.
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.a1[1] ≈ θ.mu0
+    @test kf_ws.P1[1, 1] ≈ θ.p0
+
+    # At an exact EM fixed point the closed-form M-step gives
+    # a1 = αs[:, 1] and P1 = Vs[:, :, 1]; with finite maxiter the two are
+    # close but not bit-equal because em_estimate! refreshes the smoother
+    # after the last M-step. Verify they're close in relative terms.
+    @test kf_ws.a1[1] ≈ kf_ws.αs[1, 1] rtol = 1e-3
+    @test kf_ws.P1[1, 1] ≈ kf_ws.Vs[1, 1, 1] rtol = 1e-2
+end
+
+@testset "fit!(EM) preserves loglik monotonicity with free a1 / P1" begin
+    # Closed-form M-step including a1/P1 should still produce a non-
+    # decreasing loglik trajectory.
+    Random.seed!(123)
+    n = 80
+    y = reshape(cumsum(0.5 .* randn(n)) .+ 0.3 .* randn(n), 1, n)
+
+    spec = custom_ssm(
+        Z = [1.0;;],
+        H = [FreeParam(:h, init = 0.5, lower = 0.0);;],
+        T = [1.0;;], R = [1.0;;],
+        Q = [FreeParam(:q, init = 0.5, lower = 0.0);;],
+        a1 = [FreeParam(:mu0, init = 0.0)],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;],
+    )
+
+    # Drive em_estimate! directly to capture the loglik history.
+    theta_init = [p.init for p in spec.params]
+    names_t = Tuple(p.name for p in spec.params)
+    theta_nt = NamedTuple{names_t}(Tuple(theta_init))
+    kfp = Siphon.build_kfparms(spec, theta_nt)
+    a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
+    kf_ws = KalmanWorkspace(kfp.Z, kfp.H, kfp.T, kfp.R, kfp.Q, a1_init, P1_init, n)
+    em_ws = Siphon.EMWorkspace(kf_ws)
+    Siphon._set_em_masks_from_spec!(em_ws, spec)
+    result = em_estimate!(kf_ws, em_ws, y; maxiter = 50, tol = 0.0, verbose = false)
+
+    @test all(diff(result.loglik_history) .>= -1e-8)
+end
+
+@testset "fit!(EM) partial-free P1 stays symmetric" begin
+    # 2-state model with one FreeParam in P1[1,1] and FixedValues elsewhere.
+    # The update should respect the fixed entries.
+    Random.seed!(0)
+    n = 100
+    α = zeros(2, n)
+    for t in 2:n
+        α[1, t] = α[1, t - 1] + 0.5 * randn()
+        α[2, t] = α[2, t - 1] + 0.5 * randn()
+    end
+    y = α[1:1, :] + 0.5 .* randn(1, n)
+
+    spec = custom_ssm(
+        Z = [1.0 0.0],
+        H = [FreeParam(:h, init = 0.25, lower = 0.0);;],
+        T = [1.0 0.0; 0.0 1.0],
+        R = Matrix(I, 2, 2),
+        Q = [FreeParam(:q1, init = 0.25, lower = 0.0)  0.0;
+             0.0  FreeParam(:q2, init = 0.25, lower = 0.0)],
+        # P1[1,1] is free; off-diagonals and P1[2,2] are fixed.
+        a1 = [0.0, 0.0],
+        P1 = [FreeParam(:p11, init = 1.0, lower = 0.0)  0.0;
+              0.0  10.0],
+    )
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 30, tol = 0.0)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    # Fixed cells unchanged
+    @test kf_ws.P1[2, 2] == 10.0
+    @test kf_ws.P1[1, 2] == 0.0
+    @test kf_ws.P1[2, 1] == 0.0
+    # Free cell estimated (positive, finite)
+    @test kf_ws.P1[1, 1] > 0
+    @test isfinite(kf_ws.P1[1, 1])
+end
+
+# ============================================
 # DynamicFactorModel Identification Tests
 # ============================================
 

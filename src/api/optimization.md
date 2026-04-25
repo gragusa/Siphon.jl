@@ -132,8 +132,8 @@ use `FixedValue`s, so the initial state is structurally fixed.
 
 | Path | Initial state behaviour |
 |---|---|
-| `fit!(EM(), model, y)` | `(a₁, P₁)` from the spec are copied into the workspace once and held **fixed** for every EM iteration. `FreeParam`s in `a1`/`P1` are *not* updated by EM. |
-| `fit!(MLE(), model, y)` | `(a₁, P₁)` are rebuilt from the parameter vector at every objective call. **`FreeParam`s inside `a1` / `P1` are estimated** alongside `Z, H, T, Q` parameters. |
+| `fit!(EM(), model, y)` | `(a₁, P₁)` are loaded from the spec once. `FreeParam` cells are updated each iteration via the closed-form M-step (`a₁ ← E[α₁\|y]`, `P₁ ← Var[α₁\|y]`). `FixedValue` cells stay constant. |
+| `fit!(MLE(), model, y)` | `(a₁, P₁)` are rebuilt from the parameter vector at every objective call. `FreeParam`s inside `a1` / `P1` are optimised jointly with `Z, H, T, Q`; `FixedValue` cells stay constant. |
 
 ### Migrating from MARSS
 

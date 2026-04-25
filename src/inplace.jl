@@ -1636,6 +1636,13 @@ mutable struct EMWorkspace{T <: Real}
     H_diag_only::Bool      # If true, H is diagonal
     T_free::BitMatrix      # m × m: which T elements to estimate
     Q_free::BitMatrix      # r × r: which Q elements to estimate
+
+    # Initial-state masks. Closed-form M-step updates a₁ ← E[α₁|y] and
+    # P₁ ← Var[α₁|y] from the smoother. Default-false (do nothing) preserves
+    # the prior fixed-prior behaviour; _set_em_masks_from_spec! turns these on
+    # for cells that the spec marks as ParameterRef.
+    a1_free::BitVector     # m: which a1 entries to estimate
+    P1_free::BitMatrix     # m × m: which P1 entries to estimate
 end
 
 """
@@ -1668,7 +1675,12 @@ function EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T} = Float64) where 
         trues(p, m),     # Z_free
         false,           # H_diag_only
         trues(m, m),     # T_free
-        trues(r, r)      # Q_free
+        trues(r, r),     # Q_free
+        # Default: do not update initial state. The high-level fit!(EM)
+        # path turns these on per-cell from the SSMSpec via
+        # _set_em_masks_from_spec!.
+        falses(m),       # a1_free
+        falses(m, m)     # P1_free
     )
 end
 
@@ -2016,6 +2028,58 @@ function update_Q!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
     return nothing
 end
 
+"""
+    update_initial_state!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace)
+
+M-step update for the initial-state distribution `(a₁, P₁)`.
+
+For a linear-Gaussian state-space model the closed-form M-step gives
+    a₁_new = E[α₁ | y₁:n]      (= `kf_ws.αs[:, 1]`)
+    P₁_new = Var[α₁ | y₁:n]    (= `kf_ws.Vs[:, :, 1]`).
+
+Only entries marked as free in `em_ws.a1_free` / `em_ws.P1_free` are
+written; entries flagged false retain their value, mirroring the way
+`update_Z!` / `update_T!` / `update_Q!` honour their per-cell masks.
+
+Assumes `kalman_smoother!(kf_ws)` has populated the workspace's smoothed
+state mean and covariance.
+"""
+function update_initial_state!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
+    m = em_ws.state_dim
+
+    @inbounds for i in 1:m
+        if em_ws.a1_free[i]
+            kf_ws.a1[i] = kf_ws.αs[i, 1]
+        end
+    end
+
+    # Updating individual P₁ cells from a generally-non-PSD subset would risk
+    # producing a non-PSD P₁ and breaking the next iteration's Cholesky. When
+    # any cell is free, snapshot the smoothed Var[α₁|y] (which is PSD by
+    # construction) into the free cells; symmetry is preserved because Vs is
+    # symmetric.
+    if any(em_ws.P1_free)
+        @inbounds for j in 1:m, i in 1:m
+            if em_ws.P1_free[i, j]
+                kf_ws.P1[i, j] = kf_ws.Vs[i, j, 1]
+            end
+        end
+        # Defensive symmetrisation — if the user supplies an asymmetric mask
+        # (free upper triangle but fixed lower triangle, etc.) without ties,
+        # the lower/upper halves can drift apart by 1 ULP. Average the off-
+        # diagonals so subsequent Cholesky factorizations stay numerical.
+        @inbounds for j in 1:m
+            for i in 1:(j - 1)
+                avg = (kf_ws.P1[i, j] + kf_ws.P1[j, i]) / 2
+                kf_ws.P1[i, j] = avg
+                kf_ws.P1[j, i] = avg
+            end
+        end
+    end
+
+    return nothing
+end
+
 # ============================================
 # Main EM Algorithm
 # ============================================
@@ -2040,7 +2104,8 @@ end
     em_estimate!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace, y::AbstractMatrix;
                  maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false,
                  estimate_Z::Bool=true, estimate_H::Bool=true,
-                 estimate_T::Bool=true, estimate_Q::Bool=true) -> EMResult
+                 estimate_T::Bool=true, estimate_Q::Bool=true,
+                 estimate_initial::Bool=true) -> EMResult
 
 Run EM algorithm to estimate state-space model parameters.
 
@@ -2057,6 +2122,12 @@ Run EM algorithm to estimate state-space model parameters.
 - `estimate_H`: Update observation covariance H (default: true)
 - `estimate_T`: Update transition matrix T (default: true)
 - `estimate_Q`: Update state covariance Q (default: true)
+- `estimate_initial`: Update `(a₁, P₁)` from the smoother whenever
+  `em_ws.a1_free` / `em_ws.P1_free` mark cells as free (default: true).
+  Cells with `a1_free[i] == false` (or `P1_free[i,j] == false`) stay
+  fixed at their initial value. The default-constructed `EMWorkspace`
+  has both masks all-false, so this is a no-op unless the user (or
+  `_set_em_masks_from_spec!`) opts cells in.
 
 # Returns
 - `EMResult` containing convergence info and estimated parameters
@@ -2071,7 +2142,8 @@ function em_estimate!(
         estimate_Z::Bool = true,
         estimate_H::Bool = true,
         estimate_T::Bool = true,
-        estimate_Q::Bool = true
+        estimate_Q::Bool = true,
+        estimate_initial::Bool = true
 ) where {T}
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
@@ -2123,6 +2195,9 @@ function em_estimate!(
         end
         if estimate_Q
             update_Q!(kf_ws, em_ws)
+        end
+        if estimate_initial
+            update_initial_state!(kf_ws, em_ws)
         end
     end
 
@@ -3222,6 +3297,8 @@ function _set_em_masks_from_spec!(em_ws::EMWorkspace, spec::SSMSpec)
     fill!(em_ws.Z_free, false)
     fill!(em_ws.T_free, false)
     fill!(em_ws.Q_free, false)
+    fill!(em_ws.a1_free, false)
+    fill!(em_ws.P1_free, false)
 
     for ((i, j), elem) in spec.Z.elements
         if elem isa ParameterRef
@@ -3236,6 +3313,18 @@ function _set_em_masks_from_spec!(em_ws::EMWorkspace, spec::SSMSpec)
     for ((i, j), elem) in spec.Q.elements
         if elem isa ParameterRef
             em_ws.Q_free[i, j] = true
+        end
+    end
+
+    # a1: spec.a1 is a Vector{MatrixElement}; ParameterRef means estimate it.
+    for (i, elem) in enumerate(spec.a1)
+        if elem isa ParameterRef
+            em_ws.a1_free[i] = true
+        end
+    end
+    for ((i, j), elem) in spec.P1.elements
+        if elem isa ParameterRef
+            em_ws.P1_free[i, j] = true
         end
     end
 
@@ -3314,6 +3403,18 @@ function _find_param_value(name::Symbol, spec::SSMSpec, kf_ws::KalmanWorkspace{T
     for ((row, col), elem) in spec.Q.elements
         if elem isa ParameterRef && elem.name == name
             return kf_ws.Q[row, col]
+        end
+    end
+    # Check a1 (initial-state mean)
+    for (i, elem) in enumerate(spec.a1)
+        if elem isa ParameterRef && elem.name == name
+            return kf_ws.a1[i]
+        end
+    end
+    # Check P1 (initial-state covariance)
+    for ((row, col), elem) in spec.P1.elements
+        if elem isa ParameterRef && elem.name == name
+            return kf_ws.P1[row, col]
         end
     end
 

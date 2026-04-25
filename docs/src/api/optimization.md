@@ -190,8 +190,8 @@ any `tinitx`, `V0`, `x0`, or `update_initial_state` keyword.
 
 | Path | Initial state behaviour |
 |---|---|
-| `fit!(EM(), model, y)` | `(a₁, P₁)` from the spec are copied into the workspace once and held **fixed** for every EM iteration. Even if `a1` or `P1` contain `FreeParam`s, the EM M-step does not currently update them. |
-| `fit!(MLE(), model, y)` | `(a₁, P₁)` are rebuilt from the parameter vector at every objective call. So **`FreeParam`s inside `a1` / `P1` are estimated** alongside `Z, H, T, Q` parameters. |
+| `fit!(EM(), model, y)` | `(a₁, P₁)` are loaded from the spec once. `FreeParam` cells are updated each iteration via the closed-form M-step (`a₁ ← E[α₁\|y]`, `P₁ ← Var[α₁\|y]`). `FixedValue` cells stay constant. |
+| `fit!(MLE(), model, y)` | `(a₁, P₁)` are rebuilt from the parameter vector at every objective call. `FreeParam`s inside `a1` / `P1` are optimised jointly with `Z, H, T, Q`; `FixedValue` cells stay constant. |
 
 ### Migrating from MARSS
 
