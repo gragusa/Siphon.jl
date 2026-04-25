@@ -799,7 +799,7 @@ end
         T = [1.0;;], R = [1.0;;],
         Q = [FreeParam(:var_level, init = 1.0, lower = 0.0);;],
         a1 = [FreeParam(:mu0, init = 0.0)],
-        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;]
     )
     model = StateSpaceModel(spec, n)
     fit!(EM(), model, y; maxiter = 200, tol = 1e-10)
@@ -843,7 +843,7 @@ end
         T = [1.0;;], R = [1.0;;],
         Q = [FreeParam(:q, init = 0.5, lower = 0.0);;],
         a1 = [FreeParam(:mu0, init = 0.0)],
-        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;]
     )
 
     # Drive em_estimate! directly to capture the loglik history.
@@ -877,12 +877,12 @@ end
         H = [FreeParam(:h, init = 0.25, lower = 0.0);;],
         T = [1.0 0.0; 0.0 1.0],
         R = Matrix(I, 2, 2),
-        Q = [FreeParam(:q1, init = 0.25, lower = 0.0)  0.0;
-             0.0  FreeParam(:q2, init = 0.25, lower = 0.0)],
+        Q = [FreeParam(:q1, init = 0.25, lower = 0.0) 0.0;
+             0.0 FreeParam(:q2, init = 0.25, lower = 0.0)],
         # P1[1,1] is free; off-diagonals and P1[2,2] are fixed.
         a1 = [0.0, 0.0],
-        P1 = [FreeParam(:p11, init = 1.0, lower = 0.0)  0.0;
-              0.0  10.0],
+        P1 = [FreeParam(:p11, init = 1.0, lower = 0.0) 0.0;
+              0.0 10.0]
     )
     model = StateSpaceModel(spec, n)
     fit!(EM(), model, y; maxiter = 30, tol = 0.0)

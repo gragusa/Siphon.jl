@@ -2060,6 +2060,7 @@ function update_initial_state!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T})
     # symmetric.
     if any(em_ws.P1_free)
         @inbounds for j in 1:m, i in 1:m
+
             if em_ws.P1_free[i, j]
                 kf_ws.P1[i, j] = kf_ws.Vs[i, j, 1]
             end
