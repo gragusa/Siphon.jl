@@ -323,6 +323,7 @@ function block_diag(blocks...)
     @inbounds for m in mats
         nr, nc = size(m)
         for j in 1:nc, i in 1:nr
+
             out[row_offset + i, col_offset + j] = m[i, j]
         end
         row_offset += nr

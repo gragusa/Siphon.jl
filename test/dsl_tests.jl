@@ -231,7 +231,7 @@ end
 @testset "block_diag rectangular blocks" begin
     # Independent column-vector loadings for two factor groups
     Z = block_diag([FreeParam(:λ1); FreeParam(:λ2)],
-                   [FreeParam(:λ3); FreeParam(:λ4); FreeParam(:λ5)])
+        [FreeParam(:λ3); FreeParam(:λ4); FreeParam(:λ5)])
     @test size(Z) == (5, 2)
     @test Z[1, 1].name == :λ1
     @test Z[2, 1].name == :λ2
@@ -245,7 +245,7 @@ end
 @testset "block_diag scalar and FreeParam blocks" begin
     # Scalars and a single FreeParam are treated as 1×1 blocks
     B = block_diag(2.0, FreeParam(:ρ; init = 0.5),
-                   diag_free([:σ]))
+        diag_free([:σ]))
     @test size(B) == (3, 3)
     @test B[1, 1] == 2.0
     @test B[2, 2] isa FreeParam && B[2, 2].name == :ρ
@@ -265,7 +265,7 @@ end
     # Uses block_diag for both T and Q in a 2-state, 1-obs SSM made of two
     # independent AR(1) components.
     T = block_diag(FreeParam(:ρ1; init = 0.5, lower = -0.99, upper = 0.99),
-                   FreeParam(:ρ2; init = 0.3, lower = -0.99, upper = 0.99))
+        FreeParam(:ρ2; init = 0.3, lower = -0.99, upper = 0.99))
     Q = block_diag(diag_free([:q1, :q2], init = 1.0))
     spec = custom_ssm(
         Z = [1.0 1.0],
