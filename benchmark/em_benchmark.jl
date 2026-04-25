@@ -8,7 +8,7 @@ Run with: julia --project benchmark/em_benchmark.jl
 """
 
 using Siphon
-using Siphon.DSL: _em_general_ssm
+using Siphon.DSL: em_ssm_diagonal
 using LinearAlgebra
 using Statistics
 using Printf
@@ -142,7 +142,7 @@ function run_julia_em(y::Matrix{Float64}; maxiter = 100, tol_ll = 1e-8, tol_para
     H_free = trues(p)
     Q_free = trues(r)
 
-    result = _em_general_ssm(
+    result = em_ssm_diagonal(
         Z_init,
         T_init,
         R_mat,

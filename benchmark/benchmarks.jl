@@ -98,9 +98,12 @@ const SUITE = BenchmarkGroup()
 
 SUITE["dsl"] = BenchmarkGroup()
 
-SUITE["dsl"]["local_level"] = @benchmarkable local_level(var_obs_init = 225.0)
+# Spec construction benchmarks. Templates take ParamSpec kwargs:
+# `:free`, a fixed Real, or a NamedTuple `(init=, lower=, upper=)` for a
+# free parameter with a custom starting point.
+SUITE["dsl"]["local_level"] = @benchmarkable local_level(var_obs = (init = 225.0,))
 SUITE["dsl"]["local_linear_trend"] = @benchmarkable local_linear_trend()
-SUITE["dsl"]["ar1"] = @benchmarkable ar1(rho_init = 0.9)
+SUITE["dsl"]["ar1"] = @benchmarkable ar1(ρ = (init = 0.9, lower = -0.99, upper = 0.99))
 SUITE["dsl"]["dynamic_factor_10obs_3factors"] = @benchmarkable dynamic_factor(10, 3; factor_lags = 2)
 
 # ----------------------------------------------------------------------------
@@ -112,7 +115,7 @@ SUITE["loglik"] = BenchmarkGroup()
 # Local level model
 let rng = StableRNG(DEFAULT_SEED)
     y = generate_local_level_data(rng, 500)
-    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    spec = local_level()
     θ = (var_obs = 225.0, var_level = 100.0)
     model = StateSpaceModel(spec, θ, size(y, 2))
 
@@ -121,7 +124,7 @@ end
 
 let rng = StableRNG(DEFAULT_SEED + 1)
     y = generate_local_level_data(rng, 2000)
-    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    spec = local_level()
     θ = (var_obs = 225.0, var_level = 100.0)
     model = StateSpaceModel(spec, θ, size(y, 2))
 
@@ -146,7 +149,7 @@ SUITE["filter"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 10)
     y = generate_local_level_data(rng, 1000)
-    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    spec = local_level()
     θ = (var_obs = 225.0, var_level = 100.0)
     model = StateSpaceModel(spec, θ, size(y, 2))
 
@@ -166,7 +169,7 @@ SUITE["smoother"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 20)
     y = generate_local_level_data(rng, 1000)
-    spec = local_level(var_obs_init = 225.0, var_level_init = 100.0)
+    spec = local_level()
     θ = (var_obs = 225.0, var_level = 100.0)
     model = StateSpaceModel(spec, θ, size(y, 2))
     kalman_filter!(model, y)
@@ -192,7 +195,7 @@ SUITE["mle"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 30)
     y = generate_local_level_data(rng, 200)
-    spec = local_level(var_obs_init = 100.0, var_level_init = 50.0)
+    spec = local_level(var_obs = (init = 100.0,), var_level = (init = 50.0,))
 
     SUITE["mle"]["local_level_n200"] = @benchmarkable begin
         m = StateSpaceModel($spec, size($y, 2))
@@ -218,7 +221,7 @@ SUITE["em"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 40)
     y = generate_local_level_data(rng, 200)
-    spec = local_level(var_obs_init = 100.0, var_level_init = 50.0)
+    spec = local_level(var_obs = (init = 100.0,), var_level = (init = 50.0,))
 
     SUITE["em"]["local_level_n200_iter50"] = @benchmarkable begin
         m = StateSpaceModel($spec, size($y, 2))

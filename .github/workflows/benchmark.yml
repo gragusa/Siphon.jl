@@ -23,3 +23,9 @@ jobs:
           julia-version: '1'
           tune: 'false'
           extra_pkg: LinearAlgebra, Random, StableRNGs
+          # Freeze the benchmark script to the candidate (PR HEAD) so the
+          # baseline rev runs the same benchmarks.jl. Without this,
+          # AirspeedVelocity loads benchmarks.jl from each rev's source
+          # tree, and any change to the benchmark API in the PR can crash
+          # the baseline run if main hasn't seen the matching update yet.
+          bench-on: ${{ github.event.pull_request.head.sha }}

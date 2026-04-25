@@ -159,91 +159,55 @@ Siphon.DSL.ProfileEMResult
 
 ## Initial State Conventions and MARSS Compatibility
 
-Siphon.jl internally uses the `tinitx=1` convention where `(a₁, P₁)` represents the initial state distribution at time t=1. Both `profile_em_ssm` and `DynamicFactorModel` support the `tinitx` parameter to control how the initial state covariance is computed.
+Siphon.jl uses what MARSS calls the **`tinitx = 1`** convention: the pair
+`(a₁, P₁)` is the prior distribution of the state at the *first observation
+time*, so the first measurement update is `y₁ - Z·a₁`.
 
-For a comprehensive explanation of initial state conventions, see the [Initial State Tutorial](../tutorials/initial_state.md).
+For a longer treatment with worked examples, see the
+[Initial State Tutorial](../tutorials/initial_state.md).
 
-### The `tinitx` Parameter
+### How `(a₁, P₁)` are set
 
-The `tinitx` parameter controls when the initial state covariance `V0` is defined:
+You never pass `a1`/`P1` to `fit!`. They are part of the spec, and the
+spec carries them into the model:
 
-| Setting | V0 Interpretation | P1 Computation |
-|---------|------------------|----------------|
-| `tinitx=0` (default) | Covariance at t=0 | `P1 = T × V0 × T' + R × Q × R'` |
-| `tinitx=1` | Covariance at t=1 | `P1 = V0` (no transformation) |
+| Spec source | `a₁` | `P₁` |
+|---|---|---|
+| `local_level()`, `ar1()` (default `diffuse=true`) | `[0]` | `[1e7]` |
+| `local_level(diffuse=false)` etc. | `[0]` | `[1e4]` |
+| `local_level(diffuse=:exact)` etc. | `[0]` | `P₁_star = 0`, `P₁_inf = 1` |
+| `local_linear_trend()`, `arma(p,q)` (default) | zeros | `1e7 · I` |
+| `custom_ssm(...; a1, P1)` | required argument | required argument |
 
-With `tinitx=0`, the initial covariance incorporates one step of state dynamics, matching MARSS's default behavior.
+If a `FreeParam` appears inside `a1` or `P1` of a `custom_ssm`, that
+element becomes a free parameter of the model. By default the templates
+use `FixedValue`s, so the initial state is structurally fixed.
 
-### The `V0` Parameter
+### Behaviour under `fit!`
 
-The `V0` parameter specifies the initial state covariance value:
+Both estimation paths consume the spec's `(a₁, P₁)`. They do *not* expose
+any `tinitx`, `V0`, `x0`, or `update_initial_state` keyword.
 
-- **Scalar:** `V0=100.0` creates `V0 × I` (identity scaled by V0)
-- **Matrix:** Can also pass a full covariance matrix (for `profile_em_ssm`)
+| Path | Initial state behaviour |
+|---|---|
+| `fit!(EM(), model, y)` | `(a₁, P₁)` are loaded from the spec once. `FreeParam` cells are updated each iteration via the closed-form M-step (`a₁ ← E[α₁\|y]`, `P₁ ← Var[α₁\|y]`). `FixedValue` cells stay constant. |
+| `fit!(MLE(), model, y)` | `(a₁, P₁)` are rebuilt from the parameter vector at every objective call. `FreeParam`s inside `a1` / `P1` are optimised jointly with `Z, H, T, Q`; `FixedValue` cells stay constant. |
 
-**Default:** `V0=100.0` (MARSS default)
+### Migrating from MARSS
 
-### Usage Examples
-
-```julia
-# DNS models via profile_em_ssm
-result = profile_em_ssm(spec, y; tinitx=0, V0=100.0)  # Default: MARSS-style
-result = profile_em_ssm(spec, y; tinitx=1, V0=1e7)    # Diffuse prior at t=1
-
-# Dynamic Factor Models
-model = DynamicFactorModel(N, k, n; tinitx=0, V0=100.0)  # Default: MARSS-style
-model = DynamicFactorModel(N, k, n; tinitx=1, V0=1e7)    # Diffuse prior at t=1
-```
-
-### Choosing `tinitx` and `V0`
-
-| Use Case | Recommended Setting |
-|----------|---------------------|
-| Match MARSS default | `tinitx=0, V0=100.0` |
-| Diffuse prior (large uncertainty) | `tinitx=1, V0=1e7` |
-| Informative prior at t=1 | `tinitx=1, V0=<your value>` |
-| Short time series | `tinitx=0` (accounts for dynamics) |
-
-**Note:** With `tinitx=0`, very large `V0` values (e.g., 1e7) may cause numerical instability because the transformation `T × V0 × T'` amplifies values. Use `tinitx=1` with large `V0` for diffuse priors.
-
-### Initial State Updating in EM (`update_initial_state`)
-
-By default, `(a₁, P₁)` remains **fixed** throughout EM iterations. Set `update_initial_state=true` to update them at each M-step using smoothed state estimates:
+MARSS specifies `(x₀, V₀)` at time `t = 0` by default (`tinitx = 0`). To get
+the same prior at `t = 1` in Siphon, propagate one step manually before
+constructing the spec:
 
 ```julia
-# For profile EM (DNS models)
-result = profile_em_ssm(spec, y; update_initial_state=true)
+# MARSS tinitx=0 with x0, V0:
+a1 = T_init * x0
+P1 = T_init * V0 * T_init' + R * Q_init * R'
 
-# For high-level API
-fit!(EM(), model, y; update_initial_state=true)
+spec = custom_ssm(Z=..., H=..., T=T_init, R=R, Q=Q_init, a1=a1, P1=P1)
 ```
 
-**How it works:**
-
-| EM Iteration | With `update_initial_state=false` (default) | With `update_initial_state=true` |
-|--------------|---------------------------------------------|----------------------------------|
-| 0 (start)    | `a1`, `P1` from `tinitx`/`V0` | `a1`, `P1` from `tinitx`/`V0` |
-| 1            | Same `a1`, `P1` | Updated from smoother |
-| 2            | Same `a1`, `P1` | Updated from smoother |
-| ...          | Same `a1`, `P1` | Updated from smoother |
-
-When `update_initial_state=true`, after each E-step:
-```
-a₁_new = E[α₁ | y₁:n]      (smoothed state mean at t=1)
-P₁_new = Var[α₁ | y₁:n]    (smoothed state covariance at t=1)
-```
-
-**When to use `update_initial_state=true`:**
-- Short time series where t=1 significantly affects the likelihood
-- Comparing results with MARSS R package
-- Estimating the unconditional mean/variance of the state process
-
-**When to keep fixed (default):**
-- Using a diffuse prior
-- Long time series where initial state has negligible effect
-- Numerical stability concerns
-
-The final initial state estimates are returned in `EMResult.a1` and `EMResult.P1`.
+For `tinitx = 1` (MARSS's other mode), `a1 = x0` and `P1 = V0` directly.
 
 ## Parameter Transformations
 
