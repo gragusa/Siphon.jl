@@ -543,6 +543,101 @@ end
     @test size(T_new) == (m, m)
 end
 
+@testset "block_diag matches manual block-diagonal spec under EM" begin
+    # Build the same 3-state, 2-observation, 2-shock state-space model two
+    # ways: once by writing every cell of T/H/Q by hand, and once via
+    # block_diag. The model has an AR(2) block and an independent AR(1)
+    # block. Running EM with the same data, starting values, and iteration
+    # count should produce identical parameter estimates and log-likelihood.
+
+    # ---- DSL spec via block_diag ----
+    T_dsl = block_diag(
+        companion_mat(2, :φ),
+        FreeParam(:ρ; init = 0.5, lower = -0.99, upper = 0.99)
+    )
+    H_dsl = block_diag(
+        FreeParam(:h1; init = 1.0, lower = 0.0),
+        FreeParam(:h2; init = 1.0, lower = 0.0)
+    )
+    Q_dsl = block_diag(
+        FreeParam(:q1; init = 1.0, lower = 0.0),
+        FreeParam(:q2; init = 1.0, lower = 0.0)
+    )
+
+    # ---- Manual spec, cell by cell ----
+    # companion_mat(2, :φ) puts FreeParam(:φ_1, init=0.5) at (1,1) and
+    # FreeParam(:φ_2, init=0.25) at (2,1) (init/i convention), with a 1.0
+    # on the superdiagonal and zeros everywhere else.
+    T_manual = Any[FreeParam(:φ_1, init = 0.5, lower = -Inf, upper = Inf) 1.0 0.0;
+                   FreeParam(:φ_2, init = 0.25, lower = -Inf, upper = Inf) 0.0 0.0;
+                   0.0 0.0 FreeParam(:ρ, init = 0.5, lower = -0.99, upper = 0.99)]
+    H_manual = Any[FreeParam(:h1, init = 1.0, lower = 0.0) 0.0;
+                   0.0 FreeParam(:h2, init = 1.0, lower = 0.0)]
+    Q_manual = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0;
+                   0.0 FreeParam(:q2, init = 1.0, lower = 0.0)]
+
+    # Observation, selection, initial state are identical and fixed.
+    Z = [1.0 0.0 0.0;
+         0.0 0.0 1.0]            # obs 1 ← state 1, obs 2 ← state 3
+    R = [1.0 0.0;
+         0.0 0.0;
+         0.0 1.0]                # shock 1 → state 1, shock 2 → state 3
+    a1 = [0.0, 0.0, 0.0]
+    P1 = Matrix(1e6I, 3, 3)
+
+    spec_dsl = custom_ssm(Z = Z, H = H_dsl, T = T_dsl, R = R, Q = Q_dsl,
+        a1 = a1, P1 = P1, name = :BlockDiagDSL)
+    spec_manual = custom_ssm(Z = Z, H = H_manual, T = T_manual, R = R,
+        Q = Q_manual, a1 = a1, P1 = P1, name = :BlockDiagManual)
+
+    # The two specs should expose the same parameter list in the same order
+    # with the same initial values and bounds — that's the precondition for
+    # EM giving identical answers.
+    @test param_names(spec_dsl) == param_names(spec_manual)
+    @test initial_values(spec_dsl) == initial_values(spec_manual)
+    @test param_bounds(spec_dsl) == param_bounds(spec_manual)
+
+    # ---- Generate synthetic data ----
+    n = 120
+    Random.seed!(20260425)
+    # Truth: AR(2) with φ = (0.6, -0.2), AR(1) with ρ = 0.7
+    φ_true = (0.6, -0.2)
+    ρ_true = 0.7
+    σ_q1, σ_q2 = sqrt(0.5), sqrt(0.3)
+    σ_h1, σ_h2 = sqrt(0.4), sqrt(0.2)
+
+    α = zeros(3, n)
+    for t in 2:n
+        α[1, t] = φ_true[1] * α[1, t - 1] + φ_true[2] * α[2, t - 1] + σ_q1 * randn()
+        α[2, t] = α[1, t - 1]
+        α[3, t] = ρ_true * α[3, t - 1] + σ_q2 * randn()
+    end
+    y = Matrix{Float64}(undef, 2, n)
+    for t in 1:n
+        y[1, t] = α[1, t] + σ_h1 * randn()
+        y[2, t] = α[3, t] + σ_h2 * randn()
+    end
+
+    # ---- Run EM on both ----
+    model_dsl = StateSpaceModel(spec_dsl, n)
+    model_manual = StateSpaceModel(spec_manual, n)
+
+    fit!(EM(), model_dsl, y; maxiter = 60, verbose = false)
+    fit!(EM(), model_manual, y; maxiter = 60, verbose = false)
+
+    # ---- Compare ----
+    # EM is deterministic given the same starting values; equivalent specs
+    # should match to machine precision.
+    @test loglikelihood(model_dsl) ≈ loglikelihood(model_manual) atol = 1e-10
+    @test model_dsl.theta_values ≈ model_manual.theta_values atol = 1e-10
+    # The estimates should also be roughly close to the truth (loose check —
+    # this is a small-sample EM, not a consistency proof).
+    names = param_names(spec_dsl)
+    θ = model_dsl.theta_values
+    @test isapprox(θ[findfirst(==(:φ_1), names)], φ_true[1], atol = 0.25)
+    @test isapprox(θ[findfirst(==(:ρ), names)], ρ_true, atol = 0.25)
+end
+
 # ============================================
 # DynamicFactorModel Identification Tests
 # ============================================

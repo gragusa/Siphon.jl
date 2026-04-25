@@ -63,6 +63,7 @@ export identity_mat, zeros_mat, ones_mat
 export lower_triangular_free, symmetric_free
 export selection_mat, companion_mat
 export cov_free, CovFree, CovMatrixExpr
+export block_diag
 
 # Functional expressions (for DNS, Svensson, etc.)
 export ParamExpr, MatrixExpr

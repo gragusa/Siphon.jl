@@ -209,6 +209,90 @@ end
     @test S[1, 2].name == :Σ_2_1
 end
 
+@testset "block_diag basic shapes" begin
+    # Two diagonal blocks of free params
+    B = block_diag(diag_free([:a, :b]), diag_free([:c]))
+    @test size(B) == (3, 3)
+    @test B[1, 1] isa FreeParam && B[1, 1].name == :a
+    @test B[2, 2] isa FreeParam && B[2, 2].name == :b
+    @test B[3, 3] isa FreeParam && B[3, 3].name == :c
+    # Off-block entries are zero (not FreeParam)
+    @test B[1, 2] == 0.0 && B[1, 3] == 0.0
+    @test B[2, 1] == 0.0 && B[2, 3] == 0.0
+    @test B[3, 1] == 0.0 && B[3, 2] == 0.0
+
+    # Free + fixed mix
+    B2 = block_diag(diag_free([:q1, :q2]), [3.0;;])
+    @test size(B2) == (3, 3)
+    @test B2[3, 3] == 3.0
+    @test B2[1, 3] == 0.0
+end
+
+@testset "block_diag rectangular blocks" begin
+    # Independent column-vector loadings for two factor groups
+    Z = block_diag([FreeParam(:λ1); FreeParam(:λ2)],
+        [FreeParam(:λ3); FreeParam(:λ4); FreeParam(:λ5)])
+    @test size(Z) == (5, 2)
+    @test Z[1, 1].name == :λ1
+    @test Z[2, 1].name == :λ2
+    @test Z[3, 2].name == :λ3
+    @test Z[4, 2].name == :λ4
+    @test Z[5, 2].name == :λ5
+    @test Z[1, 2] == 0.0
+    @test Z[3, 1] == 0.0
+end
+
+@testset "block_diag scalar and FreeParam blocks" begin
+    # Scalars and a single FreeParam are treated as 1×1 blocks
+    B = block_diag(2.0, FreeParam(:ρ; init = 0.5),
+        diag_free([:σ]))
+    @test size(B) == (3, 3)
+    @test B[1, 1] == 2.0
+    @test B[2, 2] isa FreeParam && B[2, 2].name == :ρ
+    @test B[3, 3] isa FreeParam && B[3, 3].name == :σ
+end
+
+@testset "block_diag preserves shared FreeParam refs" begin
+    # symmetric_free ties the (i,j)/(j,i) cells via identical FreeParam objects;
+    # block_diag must keep that identity intact.
+    S = symmetric_free(2, :Σ)
+    B = block_diag([1.0;;], S)
+    @test B[2, 3] === B[3, 2]
+    @test B[2, 3] === S[1, 2]
+end
+
+@testset "block_diag with custom_ssm" begin
+    # Uses block_diag for both T and Q in a 2-state, 1-obs SSM made of two
+    # independent AR(1) components.
+    T = block_diag(FreeParam(:ρ1; init = 0.5, lower = -0.99, upper = 0.99),
+        FreeParam(:ρ2; init = 0.3, lower = -0.99, upper = 0.99))
+    Q = block_diag(diag_free([:q1, :q2], init = 1.0))
+    spec = custom_ssm(
+        Z = [1.0 1.0],
+        H = [FreeParam(:h; init = 1.0, lower = 0.0)],
+        T = T,
+        R = identity_mat(2),
+        Q = Q,
+        a1 = [0.0, 0.0],
+        P1 = [10.0 0.0; 0.0 10.0],
+        name = :TwoAR1
+    )
+    @test n_params(spec) == 5  # ρ1, ρ2, h, q1, q2
+    names = param_names(spec)
+    @test :ρ1 in names && :ρ2 in names
+    @test :q1 in names && :q2 in names
+    @test :h in names
+    @test spec.n_states == 2
+    @test spec.n_obs == 1
+end
+
+@testset "block_diag errors" begin
+    @test_throws ArgumentError block_diag()
+    @test_throws ArgumentError block_diag("not a matrix")
+    # CovFree / MatrixExpr explicitly unsupported (clearer error)
+    @test_throws ArgumentError block_diag(cov_free(2, :Σ), [1.0;;])
+end
+
 # ============================================
 # MatrixExpr Tests
 # ============================================

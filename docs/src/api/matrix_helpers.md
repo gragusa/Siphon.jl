@@ -38,3 +38,9 @@ Siphon.DSL.symmetric_free
 Siphon.DSL.selection_mat
 Siphon.DSL.companion_mat
 ```
+
+## Combining Blocks
+
+```@docs
+Siphon.DSL.block_diag
+```

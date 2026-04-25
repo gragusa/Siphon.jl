@@ -7,6 +7,7 @@ Syntactic sugar for common state-space matrix structures.
 export diag_free, scalar_free, identity_mat, zeros_mat, ones_mat
 export lower_triangular_free, symmetric_free
 export cov_free
+export block_diag
 
 """
     diag_free(names; init=1.0, lower=0.0, upper=Inf)
@@ -265,6 +266,88 @@ end
 # Helper to broadcast scalar to vector
 _to_vec(x::Real, n::Int) = fill(x, n)
 _to_vec(x::AbstractVector, n::Int) = (@assert length(x) == n; x)
+
+"""
+    block_diag(blocks...) -> Matrix{Any}
+
+Combine matrices into a block-diagonal layout, splicing free parameters and
+fixed values from each block.
+
+Each `block` may be:
+
+- An `AbstractMatrix` of `Real`, `FreeParam`, or mixed (`Matrix{Any}` from
+  helpers like [`diag_free`](@ref), [`companion_mat`](@ref),
+  [`symmetric_free`](@ref), [`lower_triangular_free`](@ref)).
+- An `AbstractVector` (treated as a column-vector block of size `length × 1`).
+- A `Real` (treated as a 1×1 fixed block).
+- A `FreeParam` (treated as a 1×1 free-parameter block).
+
+The result is a `Matrix{Any}` of size
+`(Σ size(b, 1), Σ size(b, 2))`, with each block placed on the diagonal and
+zeros elsewhere. The result is accepted directly by [`custom_ssm`](@ref) for
+any of `Z`, `T`, `H`, `Q`, `R`, `P1`.
+
+`FreeParam` identity is preserved: if two cells inside an input block reference
+the same `FreeParam` object, the corresponding cells in the output remain
+tied. This matters for blocks built with [`symmetric_free`](@ref).
+
+`CovFree` and `MatrixExpr` blocks are not supported here — wrap their parameters
+into `custom_ssm` directly when you need them inside a block-diagonal layout.
+
+# Examples
+
+```julia
+# Q with two independent free shocks plus a fixed third shock
+Q = block_diag(diag_free([:q1, :q2]), [3.0;;])
+# 3×3, free on (1,1)/(2,2), fixed 3.0 on (3,3), zeros elsewhere
+
+# T as block-diagonal: AR(2) companion plus a stationary AR(1)
+T = block_diag(companion_mat(2, :φ),
+               FreeParam(:ρ; init=0.9, lower=-0.99, upper=0.99))
+
+# Rectangular Z: independent loadings for two factor groups
+Z = block_diag([FreeParam(:λ1); FreeParam(:λ2)],
+               [FreeParam(:λ3); FreeParam(:λ4); FreeParam(:λ5)])
+# size(Z) == (5, 2)
+```
+"""
+function block_diag(blocks...)
+    isempty(blocks) && throw(ArgumentError("block_diag requires at least one block"))
+    mats = map(_block_to_matrix, blocks)
+    n_rows = sum(size(m, 1) for m in mats)
+    n_cols = sum(size(m, 2) for m in mats)
+    out = Matrix{Any}(undef, n_rows, n_cols)
+    fill!(out, 0.0)
+    row_offset = 0
+    col_offset = 0
+    @inbounds for m in mats
+        nr, nc = size(m)
+        for j in 1:nc, i in 1:nr
+
+            out[row_offset + i, col_offset + j] = m[i, j]
+        end
+        row_offset += nr
+        col_offset += nc
+    end
+    return out
+end
+
+# Block normalisation. CovFree / MatrixExpr inputs are special-cased so the
+# error is informative instead of "got typeof(x)" from a missing method.
+_block_to_matrix(x::AbstractMatrix) = x
+_block_to_matrix(x::AbstractVector) = reshape(collect(x), :, 1)
+_block_to_matrix(x::Real) = fill(Float64(x), 1, 1)
+_block_to_matrix(x::FreeParam) = fill(x, 1, 1)
+function _block_to_matrix(x)
+    if _is_cov_free(x) || _is_matrix_expr(x)
+        throw(ArgumentError(
+            "block_diag does not yet support CovFree or MatrixExpr blocks; " *
+            "got $(typeof(x)). Place these matrices directly in custom_ssm instead."))
+    end
+    throw(ArgumentError(
+        "block_diag block must be an AbstractMatrix, AbstractVector, Real, " *
+        "or FreeParam; got $(typeof(x))."))
+end
 
 """
     cov_free(n, prefix; init_σ=1.0)

@@ -501,237 +501,135 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
 
-    # Initialize state: a = a1, P = P1
-    # We use tmp_m1 for current state, tmp_mm1 for current covariance
+    # Working state/covariance held in scratch space (tmp_m1 / tmp_mm1).
     a_curr = ws.tmp_m1
     P_curr = ws.tmp_mm1
     copyto!(a_curr, ws.a1)
     copyto!(P_curr, ws.P1)
 
-    # Precompute constant for log-likelihood
     log2pi = log(T(2π))
+    Zt = transpose(ws.Z)
+    Tt = transpose(ws.Tmat)
 
     @inbounds for t in 1:n
-        # Store predicted state: at[:, t] = a_curr
-        for i in 1:m
-            ws.at[i, t] = a_curr[i]
-        end
-        # Store predicted covariance: Pt[:, :, t] = P_curr
-        for j in 1:m, i in 1:m
+        # Store predicted state/covariance. `copyto!` is contiguous-safe.
+        copyto!(view(ws.at, :, t), a_curr)
+        copyto!(view(ws.Pt,:,:,t), P_curr)
 
-            ws.Pt[i, j, t] = P_curr[i, j]
-        end
-
-        # Check for missing observation
         y_t = view(y, :, t)
         if _has_missing(y_t)
             ws.missing_mask[t] = true
 
-            # Store NaN for innovation
-            for i in 1:p
-                ws.vt[i, t] = T(NaN)
-            end
+            # Mark innovations / gain as missing without wasted matmuls.
+            fill!(view(ws.vt, :, t), T(NaN))
+            fill!(view(ws.Ft,:,:,t), T(NaN))
+            fill!(view(ws.Ft_L,:,:,t), zero(T))
+            fill!(view(ws.Kt,:,:,t), zero(T))
 
-            # Compute and store F = Z * P * Z' + H (for completeness)
-            # F = Z * P_curr * Z' + H
-            mul!(ws.tmp_pm, ws.Z, P_curr)           # tmp_pm = Z * P
-            mul!(ws.tmp_pp1, ws.tmp_pm, ws.Z')      # tmp_pp1 = Z * P * Z'
-            for j in 1:p, i in 1:p
+            # Filtered = predicted for missing observations.
+            copyto!(view(ws.att, :, t), a_curr)
+            copyto!(view(ws.Ptt,:,:,t), P_curr)
 
-                ws.Ft[i, j, t] = ws.tmp_pp1[i, j] + ws.H[i, j]
-                ws.Ft_L[i, j, t] = zero(T)          # Invalid Cholesky
-            end
-
-            # K = 0 for missing
-            for j in 1:p, i in 1:m
-
-                ws.Kt[i, j, t] = zero(T)
-            end
-
-            # Filtered = predicted for missing
-            for i in 1:m
-                ws.att[i, t] = a_curr[i]
-            end
-            for j in 1:m, i in 1:m
-
-                ws.Ptt[i, j, t] = P_curr[i, j]
-            end
-
-            # Propagate state: a = T * a
+            # Propagate: a = T * a, P = T * P * T' + RQR
             mul!(ws.tmp_m2, ws.Tmat, a_curr)
             copyto!(a_curr, ws.tmp_m2)
 
-            # Propagate covariance: P = T * P * T' + RQR
-            mul!(ws.tmp_mm2, ws.Tmat, P_curr)       # tmp_mm2 = T * P
-            mul!(ws.tmp_mm3, ws.tmp_mm2, ws.Tmat')  # tmp_mm3 = T * P * T'
-            for j in 1:m, i in 1:m
-
-                P_curr[i, j] = ws.tmp_mm3[i, j] + ws.RQR[i, j]
+            mul!(ws.tmp_mm2, ws.Tmat, P_curr)
+            mul!(ws.tmp_mm3, ws.tmp_mm2, Tt)
+            @inbounds for idx in eachindex(P_curr)
+                P_curr[idx] = ws.tmp_mm3[idx] + ws.RQR[idx]
             end
         else
             ws.missing_mask[t] = false
             ws.n_obs_valid += 1
 
             # Innovation: v = y - Z * a
-            mul!(ws.tmp_p1, ws.Z, a_curr)           # tmp_p1 = Z * a
-            for i in 1:p
-                ws.vt[i, t] = y_t[i] - ws.tmp_p1[i]
-            end
+            mul!(ws.tmp_p1, ws.Z, a_curr)
             v_t = view(ws.vt, :, t)
-
-            # Innovation covariance: F = Z * P * Z' + H
-            mul!(ws.tmp_pm, ws.Z, P_curr)           # tmp_pm = Z * P
-            mul!(ws.tmp_pp1, ws.tmp_pm, ws.Z')      # tmp_pp1 = Z * P * Z'
-            for j in 1:p, i in 1:p
-
-                ws.tmp_pp1[i, j] += ws.H[i, j]
-                ws.Ft[i, j, t] = ws.tmp_pp1[i, j]
+            @inbounds for i in 1:p
+                v_t[i] = y_t[i] - ws.tmp_p1[i]
             end
 
-            # Cholesky factorization of F (in-place in tmp_pp1)
-            # Make symmetric for numerical stability
-            for j in 1:p, i in 1:(j - 1)
-
-                avg = (ws.tmp_pp1[i, j] + ws.tmp_pp1[j, i]) / 2
-                ws.tmp_pp1[i, j] = avg
-                ws.tmp_pp1[j, i] = avg
+            # F = Z * P * Z' + H; assemble directly into tmp_pp1 then store Ft.
+            mul!(ws.tmp_pm, ws.Z, P_curr)             # tmp_pm = Z * P   (p×m)
+            mul!(ws.tmp_pp1, ws.tmp_pm, Zt)           # tmp_pp1 = Z*P*Z' (p×p)
+            Ft_view = view(ws.Ft,:,:,t)
+            @inbounds for idx in eachindex(ws.tmp_pp1)
+                ws.tmp_pp1[idx] += ws.H[idx]
+                Ft_view[idx] = ws.tmp_pp1[idx]
             end
 
-            chol = cholesky!(Symmetric(ws.tmp_pp1, :L))
+            # Cholesky on Symmetric(:L) reads only the lower triangle, so we do
+            # not need to symmetrize tmp_pp1 first.
+            cholF = cholesky!(Symmetric(ws.tmp_pp1, :L))
+            L_lower = LowerTriangular(cholF.factors)
 
-            # Store Cholesky factor L
-            for j in 1:p, i in 1:p
-
-                ws.Ft_L[i, j, t] = i >= j ? chol.L[i, j] : zero(T)
+            # Store lower triangle of L; zero the strict upper for clean reuse.
+            FtL_view = view(ws.Ft_L,:,:,t)
+            @inbounds for j in 1:p
+                for i in 1:(j - 1)
+                    FtL_view[i, j] = zero(T)
+                end
+                for i in j:p
+                    FtL_view[i, j] = L_lower[i, j]
+                end
             end
 
-            # Log-likelihood contribution: -0.5 * (log|F| + v' * F^{-1} * v)
-            # log|F| = 2 * sum(log(diag(L)))
+            # log|F| = 2 * Σ log L[i,i]
             logdetF = zero(T)
-            for i in 1:p
-                logdetF += 2 * log(chol.L[i, i])
+            @inbounds for i in 1:p
+                logdetF += log(L_lower[i, i])
             end
+            logdetF += logdetF  # multiply by 2
 
-            # Solve L * tmp_p2 = v => tmp_p2 = L \ v
+            # quad form: v' * F^{-1} * v = || L^{-1} v ||^2
             copyto!(ws.tmp_p2, v_t)
-            ldiv!(LowerTriangular(chol.L), ws.tmp_p2)
-
-            # quad_form = ||L \ v||^2 = v' * F^{-1} * v
+            ldiv!(L_lower, ws.tmp_p2)                 # tmp_p2 = L^{-1} v
             quad_form = zero(T)
-            for i in 1:p
+            @inbounds for i in 1:p
                 quad_form += ws.tmp_p2[i]^2
             end
-
             ws.loglik += -T(0.5) * (logdetF + quad_form)
 
-            # Kalman gain: K = T * P * Z' * F^{-1}
-            # First compute P * Z' (stored in tmp_mp)
-            mul!(ws.tmp_mp, P_curr, ws.Z')          # tmp_mp = P * Z' (m × p)
+            # Core quantity: M = P * Z' * F^{-1} (m×p). Reused for K, att, Ptt.
+            # Compute as (F^{-1} * Z * P)' via two ldiv! on Z*P, then transpose.
+            # (tmp_pm already holds Z*P).
+            ldiv!(L_lower, ws.tmp_pm)                 # L^{-1} (Z*P)
+            ldiv!(transpose(L_lower), ws.tmp_pm)      # L^{-T} L^{-1} (Z*P) = F^{-1} (Z*P)
+            # M = (F^{-1} Z P)' → transpose into tmp_mp (m×p)
+            transpose!(ws.tmp_mp, ws.tmp_pm)          # tmp_mp = M
 
-            # Then T * (P * Z') into tmp_mm1 reused... no, need separate
-            # Actually: K = T * P * Z' * F^{-1}
-            # Let's compute step by step:
-            # tmp_mp = P * Z'  (m × p)
-            # tmp_mp2 = T * tmp_mp = T * P * Z'  (m × p), but we don't have tmp_mp2
-            # We can reuse tmp_pm (p × m) transposed... tricky
-
-            # Better approach: compute F^{-1} * Z * P * T' and transpose
-            # Or: solve F * K' = Z * P * T' for K'
-
-            # Simpler: K = T * P * Z' * inv(F)
-            # inv(F) = L'^{-1} * L^{-1}
-            # K = T * P * Z' * L'^{-1} * L^{-1}
-
-            # Kalman gain: K = T * P * Z' * F^{-1}
-            # Use Kt[:,:,t] directly as target
+            # K_t = T * M
             K_t = view(ws.Kt,:,:,t)
+            mul!(K_t, ws.Tmat, ws.tmp_mp)
 
-            # tmp_mp = P * Z' (m × p) already computed above
-            # Compute K_t = T * (P * Z')
-            mul!(K_t, ws.Tmat, ws.tmp_mp)           # K_t = T * P * Z' (m × p)
-
-            # Compute K_t * F^{-1} in-place
-            # F = L * L' (Cholesky), so F^{-1} = L'^{-1} * L^{-1}
-            # K_t * F^{-1} = K_t * L'^{-1} * L^{-1}
-            # rdiv!(K, L) solves K * L = X, giving K := K * L^{-1}
-            L_lower = LowerTriangular(chol.factors)
-            rdiv!(K_t, L_lower')  # K_t := K_t * L'^{-1}
-            rdiv!(K_t, L_lower)   # K_t := K_t * L^{-1} = T*P*Z'*F^{-1}
-
-            # Filtered state: a_filt = a + P * Z' * F^{-1} * v
-            # We have K = T * P * Z' * F^{-1}, but we need P * Z' * F^{-1} * v
-            # P * Z' * F^{-1} = (m×p) * (p×p) = m×p ... same as above but without T
-
-            # Actually easier: a_filt = a + P * Z' * (F^{-1} * v)
-            # We already have L \ v in tmp_p2
-            # F^{-1} * v = L'^{-1} * (L^{-1} * v) = L'^{-1} * tmp_p2
-            ldiv!(L_lower', ws.tmp_p2)  # tmp_p2 = F^{-1} * v
-
-            # tmp_m2 = P * Z' * (F^{-1} * v)
-            # tmp_mp = P * Z' (already computed)
-            mul!(ws.tmp_m2, ws.tmp_mp, ws.tmp_p2)  # tmp_m2 = P * Z' * F^{-1} * v
-
-            # a_filt = a + tmp_m2
-            for i in 1:m
-                ws.att[i, t] = a_curr[i] + ws.tmp_m2[i]
+            # a_filt = a + M * v
+            mul!(ws.tmp_m2, ws.tmp_mp, v_t)
+            att_view = view(ws.att, :, t)
+            @inbounds for i in 1:m
+                att_view[i] = a_curr[i] + ws.tmp_m2[i]
             end
-            a_filt = view(ws.att, :, t)
 
-            # Filtered covariance: P_filt = P - P * Z' * F^{-1} * Z * P
-            # = P - (P * Z' * F^{-1}) * (Z * P)
-            # tmp_mp = P * Z' (m × p)
-            # Need P * Z' * F^{-1} (m × p)
-
-            # Solve F * X' = (P * Z')' = Z * P' = Z * P for X
-            # X = P * Z' * F^{-1}
-            # Actually let's compute directly using the Cholesky
-
-            # P * Z' * F^{-1}: solve for each row of P * Z'
-            # (P * Z' * F^{-1})' = F^{-1} * Z * P
-            # Solve F * Y = Z * P for Y, then (P * Z' * F^{-1}) = Y'
-
-            # Compute F^{-1} * (Z * P)
-            # Z * P = tmp_pm (p × m)
-            mul!(ws.tmp_pm, ws.Z, P_curr)          # tmp_pm = Z * P (p × m)
-
-            # F^{-1} * (Z*P) = L'^{-1} * L^{-1} * (Z*P)
-            # ldiv!(L, X) solves L * X = B, giving X := L^{-1} * B
-            ldiv!(L_lower, ws.tmp_pm)   # tmp_pm := L^{-1} * Z * P
-            ldiv!(L_lower', ws.tmp_pm)  # tmp_pm := L'^{-1} * tmp_pm = F^{-1} * Z * P
-
-            # P * Z' * F^{-1} = (F^{-1} * Z * P)' but need P * Z' * F^{-1} * Z * P
-            # = P * Z' * (F^{-1} * Z * P) where F^{-1} * Z * P = tmp_pm
-            # Wait, that's (m×p) * (p×m) = m×m. And tmp_mp = P * Z'.
-
-            # Recompute tmp_mp = P * Z'
-            mul!(ws.tmp_mp, P_curr, ws.Z')         # tmp_mp = P * Z' (m × p)
-
-            # tmp_mm2 = tmp_mp * tmp_pm = P * Z' * F^{-1} * Z * P
-            mul!(ws.tmp_mm2, ws.tmp_mp, ws.tmp_pm) # tmp_mm2 = P * Z' * F^{-1} * Z * P
-
-            # P_filt = P - tmp_mm2
-            for j in 1:m, i in 1:m
-
-                ws.Ptt[i, j, t] = P_curr[i, j] - ws.tmp_mm2[i, j]
+            # P_filt = P - M * (Z * P). We need Z*P; the ldiv!s above overwrote
+            # tmp_pm, so recompute once (cheap vs. two ldiv!s on p×m we saved).
+            mul!(ws.tmp_pm, ws.Z, P_curr)             # Z*P (p×m)
+            mul!(ws.tmp_mm2, ws.tmp_mp, ws.tmp_pm)    # M * (Z*P) (m×m)
+            Ptt_view = view(ws.Ptt,:,:,t)
+            @inbounds for idx in eachindex(P_curr)
+                Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
             end
-            P_filt = view(ws.Ptt,:,:,t)
 
-            # Predict next state: a = T * a_filt
-            mul!(a_curr, ws.Tmat, a_filt)
-
-            # Predict next covariance: P = T * P_filt * T' + RQR
-            mul!(ws.tmp_mm2, ws.Tmat, P_filt)      # tmp_mm2 = T * P_filt
-            mul!(P_curr, ws.tmp_mm2, ws.Tmat')     # P_curr = T * P_filt * T'
-            for j in 1:m, i in 1:m
-
-                P_curr[i, j] += ws.RQR[i, j]
+            # Predict next: a = T * a_filt, P = T * P_filt * T' + RQR
+            mul!(a_curr, ws.Tmat, att_view)
+            mul!(ws.tmp_mm2, ws.Tmat, Ptt_view)
+            mul!(P_curr, ws.tmp_mm2, Tt)
+            @inbounds for idx in eachindex(P_curr)
+                P_curr[idx] += ws.RQR[idx]
             end
         end
     end
 
-    # Add constant term
     ws.loglik += -p * ws.n_obs_valid * log2pi / 2
-
     return ws.loglik
 end
 
@@ -1814,55 +1712,78 @@ function compute_sufficient_stats!(
         α_t = view(kf_ws.αs, :, t)       # Smoothed state E[α_t | Y]
         V_t = view(kf_ws.Vs,:,:,t)    # Smoothed covariance Var[α_t | Y]
 
-        # E[α_t α_t' | Y] = V_t + α_t α_t'
-        # Accumulate into S_αα
-        for j in 1:m, i in 1:m
-
-            em_ws.S_αα[i, j] += V_t[i, j] + α_t[i] * α_t[j]
-        end
-
-        # For state equation: need S_00 (t=1:n-1), S_11 (t=2:n), S_10 (t=2:n)
-        if t < n
-            # S_00: Σ_{t=1}^{n-1} E[α_t α_t' | Y]
-            for j in 1:m, i in 1:m
-
-                em_ws.S_00[i, j] += V_t[i, j] + α_t[i] * α_t[j]
+        # E[α_t α_t'|Y] = V_t + α_t α_t'. Every time step contributes once to
+        # S_αα; interior steps (1<t<n) also contribute to both S_00 and S_11.
+        # By adding to S_00 or S_11 here and later folding in the boundary
+        # t=1 or t=n contribution, we read V_t / α_t only once per t.
+        if t == 1
+            # First step contributes to S_αα (and S_00 if n>1), not to S_11.
+            if n > 1
+                @simd for j in 1:m
+                    @simd for i in 1:m
+                        moment = V_t[i, j] + α_t[i] * α_t[j]
+                        em_ws.S_αα[i, j] += moment
+                        em_ws.S_00[i, j] += moment
+                    end
+                end
+            else
+                @simd for j in 1:m
+                    @simd for i in 1:m
+                        em_ws.S_αα[i, j] += V_t[i, j] + α_t[i] * α_t[j]
+                    end
+                end
+            end
+        elseif t == n
+            # Last step contributes to S_αα and S_11, not to S_00.
+            @simd for j in 1:m
+                @simd for i in 1:m
+                    moment = V_t[i, j] + α_t[i] * α_t[j]
+                    em_ws.S_αα[i, j] += moment
+                    em_ws.S_11[i, j] += moment
+                end
+            end
+        else
+            # Interior: contributes to all three state moment sums.
+            @simd for j in 1:m
+                @simd for i in 1:m
+                    moment = V_t[i, j] + α_t[i] * α_t[j]
+                    em_ws.S_αα[i, j] += moment
+                    em_ws.S_00[i, j] += moment
+                    em_ws.S_11[i, j] += moment
+                end
             end
         end
 
+        # S_10: Σ_{t=2}^{n} E[α_t α_{t-1}'|Y] = Σ (Pcross_{t-1} + α_t α_{t-1}').
         if t > 1
-            α_tm1 = view(kf_ws.αs, :, t-1)
-            # S_11: Σ_{t=2}^{n} E[α_t α_t' | Y]
-            for j in 1:m, i in 1:m
-
-                em_ws.S_11[i, j] += V_t[i, j] + α_t[i] * α_t[j]
-            end
-
-            # S_10: Σ_{t=2}^{n} E[α_t α_{t-1}' | Y]
-            # E[α_t α_{t-1}' | Y] = Pcross_{t-1} + α_t α_{t-1}'
-            # where Pcross[:,:,t-1] = Cov[α_t, α_{t-1} | Y]
+            α_tm1 = view(kf_ws.αs, :, t - 1)
             Pcross_tm1 = view(kf_ws.Pcross,:,:,(t - 1))
-            for j in 1:m, i in 1:m
-
-                em_ws.S_10[i, j] += Pcross_tm1[i, j] + α_t[i] * α_tm1[j]
+            @simd for j in 1:m
+                @simd for i in 1:m
+                    em_ws.S_10[i, j] += Pcross_tm1[i, j] + α_t[i] * α_tm1[j]
+                end
             end
         end
 
-        # For observation equation: only valid (non-missing) observations
+        # Observation-equation stats: only for non-missing obs.
         if !kf_ws.missing_mask[t]
             n_valid += 1
             y_t = view(y, :, t)
 
-            # S_yy: Σ y_t y_t'
-            for j in 1:p, i in 1:p
-
-                em_ws.S_yy[i, j] += y_t[i] * y_t[j]
+            # S_yy += y_t y_t' (symmetric; upper/lower updated together).
+            @simd for j in 1:p
+                yj = y_t[j]
+                @simd for i in 1:p
+                    em_ws.S_yy[i, j] += y_t[i] * yj
+                end
             end
 
-            # S_yα: Σ y_t E[α_t' | Y]
-            for j in 1:m, i in 1:p
-
-                em_ws.S_yα[i, j] += y_t[i] * α_t[j]
+            # S_yα += y_t α_t'
+            @simd for j in 1:m
+                αj = α_t[j]
+                @simd for i in 1:p
+                    em_ws.S_yα[i, j] += y_t[i] * αj
+                end
             end
         end
     end
@@ -2205,8 +2126,13 @@ function em_estimate!(
         end
     end
 
-    # Final log-likelihood
-    filter_and_smooth!(kf_ws, y)
+    # When converged we broke out *before* the M-step ran, so kf_ws already
+    # holds filter+smoother results consistent with the current parameters.
+    # Only re-run when we exhausted maxiter without converging (params were
+    # just updated and the workspace is stale).
+    if !converged
+        filter_and_smooth!(kf_ws, y)
+    end
 
     return EMResult{T}(
         converged,
