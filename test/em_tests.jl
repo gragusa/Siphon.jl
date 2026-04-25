@@ -677,17 +677,17 @@ end
     # zero. The mask must keep that column at zero across EM iterations.
     Random.seed!(20260425)
     n = 150
-    Z = Any[FreeParam(:λ_1, init = 0.5)  0.0  FreeParam(:λ_3, init = 0.5);
-        FreeParam(:λ_4, init = 0.5)  0.0  FreeParam(:λ_6, init = 0.5)]
-    T = [0.7  0.0  0.0;
-         0.0  0.5  0.0;
-         0.0  0.0  0.6]
+    Z = Any[FreeParam(:λ_1, init = 0.5) 0.0 FreeParam(:λ_3, init = 0.5);
+            FreeParam(:λ_4, init = 0.5) 0.0 FreeParam(:λ_6, init = 0.5)]
+    T = [0.7 0.0 0.0;
+         0.0 0.5 0.0;
+         0.0 0.0 0.6]
     R = Matrix(I, 3, 3)
-    Q = Any[FreeParam(:q1, init = 1.0, lower = 0.0)  0.0  0.0;
-        0.0  FreeParam(:q2, init = 1.0, lower = 0.0)  0.0;
-        0.0  0.0  FreeParam(:q3, init = 1.0, lower = 0.0)]
-    H = Any[FreeParam(:h1, init = 1.0, lower = 0.0)  0.0;
-        0.0  FreeParam(:h2, init = 1.0, lower = 0.0)]
+    Q = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0 0.0;
+            0.0 FreeParam(:q2, init = 1.0, lower = 0.0) 0.0;
+            0.0 0.0 FreeParam(:q3, init = 1.0, lower = 0.0)]
+    H = Any[FreeParam(:h1, init = 1.0, lower = 0.0) 0.0;
+            0.0 FreeParam(:h2, init = 1.0, lower = 0.0)]
     spec = custom_ssm(Z = Z, H = H, T = T, R = R, Q = Q,
         a1 = zeros(3), P1 = Matrix(I, 3, 3) * 10.0,
         name = :ZeroColumnZ)
