@@ -2405,9 +2405,6 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     r = spec.n_shocks
     n = n_times
 
-    # Determine if we need large-model workspaces
-    needs_inplace = max(m, p, r) > STATIC_THRESHOLD
-
     # Pre-allocate filter storage
     at = Matrix{T}(undef, m, n)
     Pt = Array{T, 3}(undef, m, m, n)
@@ -2426,34 +2423,32 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     n_params = length(spec.params)
     theta_values = zeros(T, n_params)
 
-    # Create workspace reference (will be populated if needed)
-    workspaces_ref = Ref{Any}(nothing)
+    # Always allocate the in-place Kalman/EM workspace. Benchmarks (see
+    # benchmark/em_paths.jl) show in-place EM beats the pure-static path on
+    # every model size, including m = p = 1, because the per-iteration
+    # allocation cost of the result-returning kalman_filter swamps the
+    # state-side static-arithmetic savings. The workspace is a one-time
+    # allocation of order n × max(m², p²) words, negligible vs. the EM
+    # iteration count.
+    theta_init = [prm.init for prm in spec.params]
+    names = Tuple(prm.name for prm in spec.params)
+    theta_nt = NamedTuple{names}(Tuple(theta_init))
 
-    # Pre-allocate in-place workspaces if needed for large models
-    if needs_inplace
-        # Build initial state-space matrices from initial parameter values
-        theta_init = [p.init for p in spec.params]
-        names = Tuple(prm.name for prm in spec.params)
-        theta_nt = NamedTuple{names}(Tuple(theta_init))
+    kfparms = Siphon.build_kfparms(spec, theta_nt)
+    a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
 
-        # Use Siphon's build functions
-        kfparms = Siphon.build_kfparms(spec, theta_nt)
-        a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
-
-        kf_ws = KalmanWorkspace(
-            kfparms.Z,
-            kfparms.H,
-            kfparms.T,
-            kfparms.R,
-            kfparms.Q,
-            a1_init,
-            P1_init,
-            n
-        )
-        em_ws = EMWorkspace(kf_ws)
-
-        workspaces_ref[] = StateSpaceModelWorkspaces{T}(kf_ws, em_ws)
-    end
+    kf_ws = KalmanWorkspace(
+        kfparms.Z,
+        kfparms.H,
+        kfparms.T,
+        kfparms.R,
+        kfparms.Q,
+        a1_init,
+        P1_init,
+        n
+    )
+    em_ws = EMWorkspace(kf_ws)
+    workspaces_ref = Ref{Any}(StateSpaceModelWorkspaces{T}(kf_ws, em_ws))
 
     StateSpaceModel{T}(
         spec,
@@ -2477,7 +2472,7 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         false,
         smoothed_alpha,
         smoothed_V,
-        needs_inplace,
+        true,  # kf_workspace_allocated: always true now
         workspaces_ref
     )
 end
@@ -2628,6 +2623,54 @@ end
 function parameters(model::StateSpaceModel)
     model.fitted || throw(ArgumentError("Model not fitted."))
     return _ssm_get_theta_namedtuple(model)
+end
+
+"""
+    backend(model::StateSpaceModel) -> Symbol
+
+Return the symbol describing how the model was last fitted:
+
+- `:none` — never fitted.
+- `:em_inplace` — fit via `fit!(EM(), model, y)` (always uses the in-place
+  Kalman/EM workspace; the static path is not used for EM because per-EM
+  iteration the in-place workspace beats SMatrix arithmetic).
+- `:mle_static` — fit via `fit!(MLE(), model, y)` with the SMatrix
+  specialization of the Kalman filter (all matrices small enough).
+- `:mle_dynamic` — fit via `fit!(MLE(), model, y)` with the regular
+  `Matrix`/`Vector` specialization (some dimension exceeded the threshold,
+  or the user passed `static = :off`).
+- `:external` — constructed via `StateSpaceModel(spec, θ, n)`.
+
+This is purely a diagnostic: the choice is made automatically based on
+model dimensions and the `static` / `static_threshold` kwargs of `fit!`.
+"""
+backend(model::StateSpaceModel) = model.backend
+
+"""
+    _resolve_static_choice(choice::Symbol, threshold::Int, dims...) -> Bool
+
+Translate a user-facing `static = :auto | :on | :off` choice into the
+boolean `use_static` flag that the optimization / filter machinery expects.
+Warns when `:on` is requested for a dimension that exceeds `threshold`.
+"""
+function _resolve_static_choice(choice::Symbol, threshold::Int, dims::Vararg{Int})
+    max_dim = maximum(dims)
+    if choice === :on
+        if max_dim > threshold
+            @warn "static = :on requested but model has dimension $(max_dim) > " *
+                  "threshold $(threshold). StaticArrays specialization above this " *
+                  "size typically loses to BLAS and triggers slow recompilation; " *
+                  "consider :auto or :off." maxlog = 1
+        end
+        return true
+    elseif choice === :off
+        return false
+    elseif choice === :auto
+        return max_dim <= threshold
+    else
+        throw(ArgumentError(
+            "static must be :auto, :on, or :off, got :$(choice)"))
+    end
 end
 
 # ============================================
@@ -2947,12 +2990,13 @@ end
 # ============================================
 
 """
-    fit!(::MLE, model::StateSpaceModel, y::AbstractMatrix; kwargs...)
+    fit!(::MLE, model::StateSpaceModel, y::AbstractMatrix; static, static_threshold, kwargs...)
 
 Fit state-space model using Maximum Likelihood Estimation.
 
-Uses the pure AD-compatible Kalman filter via Optimization.jl.
-Automatically uses StaticArrays for small models (dims ≤ 13).
+Uses the pure AD-compatible Kalman filter via Optimization.jl. For small
+models the system matrices are promoted to `SMatrix`/`SVector` so the inner
+filter loop runs without heap allocations and the compiler can unroll.
 
 # Arguments
 - `MLE()`: Estimation method selector
@@ -2960,12 +3004,31 @@ Automatically uses StaticArrays for small models (dims ≤ 13).
 - `y`: Observations (p × n matrix), missing values as NaN
 
 # Keyword Arguments
+- `static::Symbol = :auto`: Controls whether the optimization uses the
+  StaticArrays specialization of the Kalman filter.
+  - `:auto` — promote when `max(n_states, n_obs, n_shocks) ≤ static_threshold`.
+  - `:on`   — force the static path. Warns if any dimension exceeds
+    `static_threshold`; promotion above ~16 typically loses to BLAS.
+  - `:off`  — force the dynamic-`Matrix` path. Useful when you do nested
+    `ForwardDiff` or want to avoid the per-`Dual{...}` SMatrix recompile.
+- `static_threshold::Int = STATIC_THRESHOLD`: Maximum matrix dimension for
+  the `:auto` decision. Default is `STATIC_THRESHOLD` (currently 13).
+  Lower values reduce compile-time risk on AD-heavy workflows.
 - `method`: Optimization algorithm (default: LBFGS from Optim.jl)
 - `verbose`: Print optimization progress (default: false)
-- Additional kwargs passed to optimize_ssm
+- Additional kwargs passed to `optimize_ssm`.
 
 # Returns
-The fitted `model` (same object, mutated)
+The fitted `model` (same object, mutated). `model.backend` is set to
+`:mle_static` or `:mle_dynamic` to indicate which path was taken; see
+[`backend`](@ref).
+
+# Static-path tradeoff
+The `SMatrix` specialization gives ~6-10× speedup for one-shot likelihoods on
+small models, but each unique element type and dimension combination
+requires a fresh specialization (~100s of ms). When you take gradients via
+`ForwardDiff`, every chunk size triggers another compile; nested AD
+compounds it. Pass `static = :off` to opt out for those workflows.
 
 # Example
 ```julia
@@ -2973,12 +3036,15 @@ spec = local_level(var_obs=:free, var_level=:free)
 model = StateSpaceModel(spec, 100)
 fit!(MLE(), model, randn(1, 100))
 parameters(model)  # (var_obs=..., var_level=...)
+backend(model)     # :mle_static
 ```
 """
 function fit!(
         ::MLE,
         model::StateSpaceModel{T},
         y::AbstractMatrix;
+        static::Symbol = :auto,
+        static_threshold::Int = STATIC_THRESHOLD,
         verbose::Bool = false,
         kwargs...
 ) where {T}
@@ -2986,8 +3052,10 @@ function fit!(
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
     @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
 
-    # Use existing optimize_ssm infrastructure
-    use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
+    use_static = _resolve_static_choice(
+        static, static_threshold,
+        model.spec.n_states, model.spec.n_obs, model.spec.n_shocks
+    )
 
     result = Siphon.optimize_ssm(model.spec, y; use_static = use_static, kwargs...)
 
@@ -3007,13 +3075,14 @@ function fit!(
     model.fitted = true
     model.converged = result.converged
     model.iterations = 0  # MLE doesn't have iteration count in same sense
-    model.backend = :mle
+    model.backend = use_static ? :mle_static : :mle_dynamic
     model.smoother_computed = false
 
     if verbose
         println("MLE fitting complete:")
         println("  Log-likelihood: ", round(model.loglik, digits = 4))
         println("  Converged: ", model.converged)
+        println("  Backend: ", model.backend)
     end
 
     return model
@@ -3068,16 +3137,14 @@ function fit!(
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
     @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
 
-    if model.kf_workspace_allocated
-        # Large model: use in-place EM
-        _ssm_fit_em_inplace!(model, y; maxiter = maxiter, tol = tol, verbose = verbose)
-        model.backend = :em_inplace
-    else
-        # Small model: use pure/static EM (fall back to MLE for now)
-        # TODO: Implement proper static EM
-        _ssm_fit_em_static!(model, y; maxiter = maxiter, tol = tol, verbose = verbose)
-        model.backend = :em_static
-    end
+    # All models route through the in-place EM path. Benchmarks show the
+    # in-place workspace beats the pure/static EM by 1.6–2.6× even on the
+    # smallest models (m=p=1) because each EM iteration's filter+smoother
+    # avoids fresh result-array allocation. The static specialization in
+    # filter_ad.jl remains the right tool for one-shot loglik / MLE, where
+    # there is no n × iters multiplier to wash out the savings.
+    _ssm_fit_em_inplace!(model, y; maxiter = maxiter, tol = tol, verbose = verbose)
+    model.backend = :em_inplace
 
     model.fitted = true
     model.filter_valid = true
@@ -3110,6 +3177,11 @@ function _ssm_fit_em_inplace!(
     a1_init, P1_init = Siphon.build_initial_state(model.spec, theta_nt)
     _set_workspace_params!(kf_ws, kfparms, a1_init, P1_init)
 
+    # Translate the spec's structural fixed/free pattern into the EM workspace
+    # masks. Without this, the M-step would overwrite fixed elements (e.g. the
+    # Z=1, T=1 of local_level) with their unconstrained estimates.
+    _set_em_masks_from_spec!(em_ws, model.spec)
+
     # Run EM using existing em_estimate!
     em_result = em_estimate!(
         kf_ws, em_ws, y; maxiter = maxiter, tol = tol, verbose = verbose)
@@ -3127,6 +3199,56 @@ function _ssm_fit_em_inplace!(
     model.iterations = em_result.iterations
 
     return nothing
+end
+
+"""
+    _set_em_masks_from_spec!(em_ws, spec)
+
+Populate the EM workspace's `Z_free` / `T_free` / `Q_free` BitMatrices and
+`H_diag_only` flag from the SSMSpec's structural fixed/free pattern.
+
+A matrix element is treated as free iff its `SSMMatrixSpec` entry is a
+`ParameterRef`. Elements with `FixedValue` (or absent) are fixed and the
+EM M-step will leave them untouched.
+
+For models whose `Z`, `T`, `H`, or `Q` are driven by a `MatrixExpr` (e.g. DNS
+loadings), the corresponding `SSMMatrixSpec` is a placeholder with no
+elements, so the mask stays all-false and the M-step skips that block — the
+right behaviour, since closed-form M-step updates do not exist for those.
+
+`H_diag_only` is true unless some off-diagonal `H[i,j]` is a free parameter.
+"""
+function _set_em_masks_from_spec!(em_ws::EMWorkspace, spec::SSMSpec)
+    fill!(em_ws.Z_free, false)
+    fill!(em_ws.T_free, false)
+    fill!(em_ws.Q_free, false)
+
+    for ((i, j), elem) in spec.Z.elements
+        if elem isa ParameterRef
+            em_ws.Z_free[i, j] = true
+        end
+    end
+    for ((i, j), elem) in spec.T.elements
+        if elem isa ParameterRef
+            em_ws.T_free[i, j] = true
+        end
+    end
+    for ((i, j), elem) in spec.Q.elements
+        if elem isa ParameterRef
+            em_ws.Q_free[i, j] = true
+        end
+    end
+
+    H_diag_only = true
+    for ((i, j), elem) in spec.H.elements
+        if i != j && elem isa ParameterRef
+            H_diag_only = false
+            break
+        end
+    end
+    em_ws.H_diag_only = H_diag_only
+
+    return em_ws
 end
 
 """Set workspace parameters from KFParms."""

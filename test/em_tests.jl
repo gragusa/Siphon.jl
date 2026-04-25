@@ -639,6 +639,118 @@ end
 end
 
 # ============================================
+# In-place EM honours spec-fixed elements
+# ============================================
+
+@testset "fit!(EM) preserves spec-fixed Z and T" begin
+    # local_level fixes Z = 1, T = 1 structurally (only var_obs and var_level
+    # are free). Before mask propagation was wired up, the in-place EM would
+    # update Z and T as if they were free, drifting away from the unit values
+    # while still hitting a similar log-likelihood. Verify the fix.
+    Random.seed!(20260425)
+    n = 200
+    states = zeros(n)
+    y = zeros(1, n)
+    for t in 2:n
+        states[t] = states[t - 1] + 5 * randn()
+    end
+    for t in 1:n
+        y[1, t] = states[t] + 10 * randn()
+    end
+
+    spec = local_level()
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 100, tol = 1e-8)
+
+    # The workspace's Z and T must remain at their spec-fixed values.
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.Z[1, 1] ≈ 1.0 atol = 0
+    @test kf_ws.Tmat[1, 1] ≈ 1.0 atol = 0
+
+    # And EM should still find a sensible likelihood.
+    @test isfinite(loglikelihood(model))
+    @test loglikelihood(model) > -10_000  # sanity bound
+end
+
+@testset "fit!(EM) preserves zero columns in DFM-style Z" begin
+    # Custom 3-state, 2-obs spec where the second column of Z is structurally
+    # zero. The mask must keep that column at zero across EM iterations.
+    Random.seed!(20260425)
+    n = 150
+    Z = Any[FreeParam(:λ_1, init = 0.5)  0.0  FreeParam(:λ_3, init = 0.5);
+        FreeParam(:λ_4, init = 0.5)  0.0  FreeParam(:λ_6, init = 0.5)]
+    T = [0.7  0.0  0.0;
+         0.0  0.5  0.0;
+         0.0  0.0  0.6]
+    R = Matrix(I, 3, 3)
+    Q = Any[FreeParam(:q1, init = 1.0, lower = 0.0)  0.0  0.0;
+        0.0  FreeParam(:q2, init = 1.0, lower = 0.0)  0.0;
+        0.0  0.0  FreeParam(:q3, init = 1.0, lower = 0.0)]
+    H = Any[FreeParam(:h1, init = 1.0, lower = 0.0)  0.0;
+        0.0  FreeParam(:h2, init = 1.0, lower = 0.0)]
+    spec = custom_ssm(Z = Z, H = H, T = T, R = R, Q = Q,
+        a1 = zeros(3), P1 = Matrix(I, 3, 3) * 10.0,
+        name = :ZeroColumnZ)
+    y = randn(2, n)
+
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 30, tol = 0.0)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.Z[1, 2] == 0.0   # column 2 of Z stays zero
+    @test kf_ws.Z[2, 2] == 0.0
+    # And the structurally-fixed T elements stay put.
+    @test kf_ws.Tmat[1, 1] ≈ 0.7
+    @test kf_ws.Tmat[2, 2] ≈ 0.5
+    @test kf_ws.Tmat[3, 3] ≈ 0.6
+end
+
+# ============================================
+# backend(model) and static knob
+# ============================================
+
+@testset "backend(model) reports the path used" begin
+    Random.seed!(20260425)
+    n = 80
+    y = reshape(cumsum(randn(n)) .+ randn(n), 1, n)
+    spec = local_level()
+
+    # Unfit model
+    m0 = StateSpaceModel(spec, n)
+    @test backend(m0) === :none
+
+    # MLE static path (default :auto on a tiny model)
+    m_static = StateSpaceModel(spec, n)
+    fit!(MLE(), m_static, y)
+    @test backend(m_static) === :mle_static
+
+    # MLE dynamic path (force off)
+    m_dyn = StateSpaceModel(spec, n)
+    fit!(MLE(), m_dyn, y; static = :off)
+    @test backend(m_dyn) === :mle_dynamic
+    # Both paths should reach essentially the same log-likelihood.
+    @test loglikelihood(m_dyn) ≈ loglikelihood(m_static) atol = 1e-4
+
+    # MLE :on with a small model is fine.
+    m_on = StateSpaceModel(spec, n)
+    fit!(MLE(), m_on, y; static = :on)
+    @test backend(m_on) === :mle_static
+
+    # EM always reports :em_inplace, regardless of model size.
+    m_em = StateSpaceModel(spec, n)
+    fit!(EM(), m_em, y; maxiter = 50)
+    @test backend(m_em) === :em_inplace
+end
+
+@testset "fit!(MLE) static knob validation" begin
+    spec = local_level()
+    n = 50
+    y = randn(1, n)
+    model = StateSpaceModel(spec, n)
+    @test_throws ArgumentError fit!(MLE(), model, y; static = :nonsense)
+end
+
+# ============================================
 # DynamicFactorModel Identification Tests
 # ============================================
 

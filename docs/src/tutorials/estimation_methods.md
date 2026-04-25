@@ -297,6 +297,54 @@ println("\n=== 12-Period Yield Forecast ===")
 println("Short rate (3m): ", round.(y_forecast[1, :], digits=2))
 ```
 
+## Static-array dispatch and AD interaction
+
+For small models, `fit!(MLE(), ...)` automatically promotes the system
+matrices `Z, H, T, R, Q` to `SMatrix` (and `a1, P1` to `SVector`/`SMatrix`)
+so the inner Kalman filter loop runs without heap allocations. This delivers
+~6-10× speedups for one-shot MLE on models like `local_level`, `ar1`, and
+small ARMAs.
+
+The promotion is gated by a per-dimension threshold (`STATIC_THRESHOLD`,
+currently 13). The behaviour is controlled with two kwargs:
+
+```julia
+fit!(MLE(), model, y; static = :auto, static_threshold = 13)
+# :auto — promote when max(n_states, n_obs, n_shocks) ≤ static_threshold (default).
+# :on   — force the static path (warns if dims exceed the threshold).
+# :off  — force the regular `Matrix`/`Vector` path.
+backend(model)  # → :mle_static or :mle_dynamic, for diagnostics.
+```
+
+**EM is *not* affected by this knob.** Benchmarks across `local_level`,
+`local_linear_trend`, and small custom models show that the in-place EM
+workspace beats the static path by 1.6-2.6× on every model size, because
+each EM iteration's Kalman filter call would otherwise re-allocate result
+arrays. EM therefore always uses the in-place workspace; `backend(model)`
+returns `:em_inplace` after `fit!(EM(), ...)`.
+
+### The AD recompile pitfall
+
+`SMatrix` types include their element type and dimensions as type
+parameters. Each unique `(eltype, dims)` combination compiles a fresh copy
+of the Kalman filter inner loop. With `Float64` data this is a one-time
+~100-500 ms cost amortised over many calls. With `ForwardDiff` for
+gradient-based MLE this is trickier:
+
+- Each `Dual{Tag, ChunkSize, V}` element type recompiles the filter.
+- ForwardDiff picks chunk size automatically based on the parameter count;
+  if your script fits several models of different parameter counts in one
+  session, every new chunk size pays the cost again.
+- Nested differentiation (Hessian = grad of grad) compounds the
+  combinations.
+
+If you see noticeable cold-start latency in an AD-heavy script and your
+model is fairly small, try `fit!(MLE(), model, y; static = :off)`. The
+runtime cost of the dynamic path is small (model dependent — typically a 2×
+slowdown per iteration vs. static), and the compile cost goes away.
+
+For one-shot fits on small models, leave `static = :auto`.
+
 ## Summary
 
 Siphon.jl provides multiple estimation approaches to suit different needs:
