@@ -282,6 +282,23 @@ function _to_vector(x::AbstractVector{<:Real})
     Vector{MatrixInput}(convert.(Float64, x))
 end
 
+# Mixed vector (e.g. Vector{Any} from [FreeParam(...), 0.0, FreeParam(...)])
+function _to_vector(x::AbstractVector)
+    out = Vector{MatrixInput}(undef, length(x))
+    for i in eachindex(x)
+        elem = x[i]
+        if elem isa FreeParam
+            out[i] = elem
+        elseif elem isa Real
+            out[i] = Float64(elem)
+        else
+            throw(ArgumentError(
+                "Vector element must be Real or FreeParam, got $(typeof(elem))"))
+        end
+    end
+    out
+end
+
 function _to_vector(x::Real)
     Vector{MatrixInput}([Float64(x)])
 end

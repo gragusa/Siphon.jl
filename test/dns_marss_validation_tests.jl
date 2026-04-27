@@ -167,11 +167,14 @@ end
 # ============================================
 
 @testset "DNS EM - Diagonal Structure - MARSS Validation" begin
-    # Load reference data
+    # End-to-end MARSS-equivalence test on a 3-state, 5-maturity DNS dataset.
+    # Both estimators run on the same data; Siphon uses the public
+    # `fit!(EM(), …)` API with `allow_degen = true` to mirror MARSS's
+    # `allow.degen = TRUE` (which is on by default in MARSS and is what
+    # produces the H[3] = 0 entry in the saved reference).
     df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
     data = Matrix(df)
     y = Matrix(data')
-
     p, n = size(y)
     m = 3
 
@@ -179,78 +182,97 @@ end
     λ_fixed = results["lambda"]
     maturities = [3, 12, 24, 60, 120]
 
-    # Build Z at fixed lambda
+    # Build Z at fixed lambda (NS loadings, all entries fixed).
     Z = ones(p, m)
     for i in 1:p
         Z[i, 2] = Siphon.dns_loading1(λ_fixed, maturities[i])
         Z[i, 3] = Siphon.dns_loading2(λ_fixed, maturities[i])
     end
 
-    # Initialize T closer to MARSS estimates
-    T_init = diagm([results["B_L"], results["B_S"], results["B_C"]])
+    # Build the spec via the DSL: diagonal B, diagonal H, diagonal Q. Match
+    # MARSS's `tinitx=0, V0=100·I` initial-state convention: in Siphon's
+    # `tinitx=1` form this maps to `a1 = T·x0 = 0`, `P1 = T·V0·T' + R·Q·R'`.
+    # Without this conversion, `P1 = 100·I` underweights the first observation
+    # and produces a 0.05-nat gap from MARSS that has nothing to do with EM.
+    B_init = [0.95, 0.95, 0.95]
+    Q_init_diag = [0.1, 0.1, 0.1]
+    T_init = diagm(B_init)
+    Q_init = diagm(Q_init_diag)
     R = Matrix(1.0I, m, m)
+    P1 = T_init * (100.0 * Matrix(1.0I, m, m)) * T_init' + R * Q_init * R'
 
-    # Initialize H closer to MARSS (avoid zeros by using small positive values)
-    H_diag = [max(results["R_$i"], 1e-6) for i in 1:p]
-    H_init = diagm(H_diag)
-
-    # Initialize Q closer to MARSS
-    Q_init = diagm([results["Q_L"], results["Q_S"], results["Q_C"]])
-
-    # Initial state - use diffuse prior
-    a1 = zeros(m)
-    P1 = 100.0 * Matrix(1.0I, m, m)
-
-    # Run general EM (with diagonal constraints via free masks)
-    em_result = Siphon.DSL._em_general_ssm_full_cov(
-        Float64.(Z),
-        T_init,
-        Float64.(R),
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = falses(p, m),      # Z is fixed
-        T_free = Matrix(I(m)) .== 1, # Only diagonal T elements
-        H_free = Matrix(I(p)) .== 1, # Only diagonal H elements
-        Q_free = Matrix(I(m)) .== 1, # Only diagonal Q elements
-        maxiter = 2000,
-        tol_ll = 1e-8,
-        tol_param = 1e-6,
-        verbose = false
-    )
-
-    println("\nJulia DNS EM Results (Diagonal):")
-    println("================================")
-    println("T_L = $(em_result.T[1,1]) (MARSS: $(results["B_L"]))")
-    println("T_S = $(em_result.T[2,2]) (MARSS: $(results["B_S"]))")
-    println("T_C = $(em_result.T[3,3]) (MARSS: $(results["B_C"]))")
-    println("Q_L = $(em_result.Q[1,1]) (MARSS: $(results["Q_L"]))")
-    println("Q_S = $(em_result.Q[2,2]) (MARSS: $(results["Q_S"]))")
-    println("Q_C = $(em_result.Q[3,3]) (MARSS: $(results["Q_C"]))")
-    for i in 1:p
-        println("H_$i = $(em_result.H[i,i]) (MARSS: $(results["R_$i"]))")
+    T_dsl = Matrix{Any}(undef, m, m);
+    fill!(T_dsl, 0.0)
+    for i in 1:m
+        T_dsl[i, i] = FreeParam(Symbol(:B, i); init = B_init[i], lower = -Inf, upper = Inf)
     end
-    println("loglik = $(em_result.loglik) (MARSS: $(results["loglik"]))")
-    println("iterations = $(em_result.iterations)")
-    println("converged = $(em_result.converged)")
+    H_dsl = Matrix{Any}(undef, p, p);
+    fill!(H_dsl, 0.0)
+    for i in 1:p
+        H_dsl[i, i] = FreeParam(Symbol(:H, i); init = 0.01, lower = 0.0, upper = Inf)
+    end
+    Q_dsl = Matrix{Any}(undef, m, m);
+    fill!(Q_dsl, 0.0)
+    for i in 1:m
+        Q_dsl[i, i] = FreeParam(Symbol(:Q, i); init = Q_init_diag[i], lower = 0.0, upper = Inf)
+    end
+    a1 = zeros(m)
+    spec = custom_ssm(Z = Float64.(Z), H = H_dsl, T = T_dsl, R = R, Q = Q_dsl,
+        a1 = a1, P1 = P1, name = :dns_diag)
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y;
+        maxiter = 5000, tol = 1e-12, verbose = false,
+        allow_degen = true, degen_lim = 1e-4, min_degen_iter = 5)
 
-    # Test transition matrix (T) estimates
-    @test isapprox(em_result.T[1, 1], results["B_L"], rtol = 0.05)
-    @test isapprox(em_result.T[2, 2], results["B_S"], rtol = 0.05)
-    @test isapprox(em_result.T[3, 3], results["B_C"], rtol = 0.05)
+    mats = system_matrices(model)
+    ll_siphon = loglikelihood(model)
 
-    # Test state covariance (Q) estimates
-    @test isapprox(em_result.Q[1, 1], results["Q_L"], rtol = 0.10)  # Looser for Q
-    @test isapprox(em_result.Q[2, 2], results["Q_S"], rtol = 0.10)
-    @test isapprox(em_result.Q[3, 3], results["Q_C"], rtol = 0.10)
+    println("\nSiphon DNS EM (allow_degen=true) vs MARSS:")
+    println("================================")
+    for i in 1:m
+        println("B_$i = $(round(mats.T[i,i], digits=4)) (MARSS: $(round(results["B_$(["L","S","C"][i])"], digits=4)))")
+    end
+    for i in 1:m
+        println("Q_$i = $(round(mats.Q[i,i], digits=6)) (MARSS: $(round(results["Q_$(["L","S","C"][i])"], digits=6)))")
+    end
+    for i in 1:p
+        println("H_$i = $(round(mats.H[i,i], digits=6)) (MARSS: $(round(results["R_$i"], digits=6)))")
+    end
+    println("loglik = $(round(ll_siphon, digits=4)) (MARSS: $(round(results["loglik"], digits=4)))")
 
-    # Test log-likelihood
-    @test isapprox(em_result.loglik, results["loglik"], rtol = 0.001)
+    # Filter agreement at MARSS's reported converged parameters: Siphon's
+    # Kalman filter evaluated at MARSS's (B, Q, H) must reproduce MARSS's
+    # reported loglik to machine precision (limited only by the precision of
+    # the saved CSV values, ~7 sig figs).
+    let
+        T_at_marss = diagm([results["B_L"], results["B_S"], results["B_C"]])
+        Q_at_marss = diagm([results["Q_L"], results["Q_S"], results["Q_C"]])
+        H_at_marss = diagm([results["R_$i"] for i in 1:p])  # exact, incl. zero
+        P1_at_marss = T_at_marss * (100.0 * Matrix(1.0I, m, m)) * T_at_marss' +
+                      R * Q_at_marss * R'
+        ll_at_marss = kalman_loglik(KFParms(Z, H_at_marss, T_at_marss, R, Q_at_marss),
+            y, zeros(m), P1_at_marss)
+        @test isapprox(ll_at_marss, results["loglik"]; atol = 1e-6)
+    end
 
-    # Siphon should achieve at least as good log-likelihood as MARSS
-    @test em_result.loglik >= results["loglik"] - 1.0  # Allow some tolerance for numerical issues
+    # Transition matrix B should match within 5e-4 once both EMs have
+    # converged tightly. (MARSS uses loose slope-based stopping; Siphon
+    # uses tight loglik tolerance.)
+    @test isapprox(mats.T[1, 1], results["B_L"], atol = 5e-4)
+    @test isapprox(mats.T[2, 2], results["B_S"], atol = 5e-4)
+    @test isapprox(mats.T[3, 3], results["B_C"], atol = 5e-4)
+
+    # State covariance Q should match within 5e-3 (looser because Q is more
+    # weakly identified than B in finite samples).
+    @test isapprox(mats.Q[1, 1], results["Q_L"], atol = 5e-3)
+    @test isapprox(mats.Q[2, 2], results["Q_S"], atol = 5e-3)
+    @test isapprox(mats.Q[3, 3], results["Q_C"], atol = 5e-3)
+
+    # Siphon's optimum must be ≥ MARSS's. With the corrected H M-step (full
+    # 4-term Shumway–Stoffer formula instead of the simplified two-term form
+    # that's only valid when Z is also at its M-step optimum) and tight tol,
+    # Siphon's EM consistently finds a likelihood ≥ MARSS's.
+    @test ll_siphon >= results["loglik"] - 1e-6
 end
 
 # ============================================

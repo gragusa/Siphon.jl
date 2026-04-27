@@ -1643,6 +1643,15 @@ mutable struct EMWorkspace{T <: Real}
     # for cells that the spec marks as ParameterRef.
     a1_free::BitVector     # m: which a1 entries to estimate
     P1_free::BitMatrix     # m × m: which P1 entries to estimate
+
+    # Degeneracy freeze masks (used by `allow_degen` path). When `H_zero[i]` is
+    # true the EM treats `H[i, i]` as structurally zero: the M-step skips it
+    # and the Kalman filter sees a zero variance for observation `i`. Same for
+    # `Q_zero[i]`. These flips are committed in `_try_degenerate!`, which
+    # tentatively zeros each below-threshold cell, runs a Kalman pass, and
+    # commits only if loglik does not decrease. Mirrors MARSS `degen.test`.
+    H_zero::BitVector      # p: which H diagonal entries are frozen at 0
+    Q_zero::BitVector      # r: which Q diagonal entries are frozen at 0
 end
 
 """
@@ -1680,7 +1689,11 @@ function EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T} = Float64) where 
         # path turns these on per-cell from the SSMSpec via
         # _set_em_masks_from_spec!.
         falses(m),       # a1_free
-        falses(m, m)     # P1_free
+        falses(m, m),    # P1_free
+        # Default: no entries frozen at zero — this is the existing behaviour.
+        # The opt-in `allow_degen` path in `fit!(EM(), …)` flips these per cell.
+        falses(p),       # H_zero
+        falses(r)        # Q_zero
     )
 end
 
@@ -1860,41 +1873,80 @@ end
 """
     update_H!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace, n_valid::Int)
 
-M-step update for observation covariance H.
-H_new = (1/n) * (S_yy - S_yα * S_αα^{-1} * S_yα')
-      = (1/n) * (S_yy - Z_new * S_yα')
+M-step update for observation covariance H. The Shumway–Stoffer formula is
 
-If H_diag_only is true, only diagonal elements are updated.
+    H_new = (1/n) Σ_t [(y_t - Z α̂_t)(y_t - Z α̂_t)' + Z V̂_t Z']
+          = (1/n) [S_yy - Z S_yα' - S_yα Z' + Z S_αα Z'],
+
+where `S_αα = Σ_t E[α_t α_t' | Y]` includes the smoother variance term
+`Σ_t V̂_t`. The previous implementation used the simplified two-term form
+`S_yy - Z S_yα'`, which is correct **only** when `Z` is simultaneously
+updated to its unconstrained M-step optimum `Z = S_yα S_αα^{-1}`. When `Z`
+is structurally fixed (e.g. Nelson–Siegel loadings in DNS) or only partially
+free, the simplification produces negative `H` diagonals (then floored to
+1e-10), which destroys EM monotonicity and pushes the optimizer into a
+spurious basin. Using the full four-term formula is correct in all cases
+and identical to the simplified form when Z reaches its M-step optimum.
+
+Honours `em_ws.H_diag_only` (skips off-diagonal updates) and
+`em_ws.H_zero` (per-cell freezes from the `allow_degen` path).
 """
 function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
 
-    # H = (1/n) * (S_yy - Z * S_yα')
-    # tmp_pp1 = Z * S_yα'
+    # tmp_pp1 = Z * S_yα'                              (p × p)
     mul!(em_ws.tmp_pp1, kf_ws.Z, em_ws.S_yα')
 
-    # H = (S_yy - tmp_pp1) / n_valid
+    # tmp_pm = Z * S_αα                                (p × m)
+    mul!(em_ws.tmp_pm, kf_ws.Z, em_ws.S_αα)
+
     scale = one(T) / n_valid
 
     if em_ws.H_diag_only
+        # Diagonal entries only: avoid the full p × p matmul for Z S_αα Z'.
         @inbounds for i in 1:p
-            h_ii = (em_ws.S_yy[i, i] - em_ws.tmp_pp1[i, i]) * scale
-            kf_ws.H[i, i] = max(h_ii, T(1e-10))  # Ensure positive
+            if em_ws.H_zero[i]
+                kf_ws.H[i, i] = zero(T)   # frozen at 0 by allow_degen path
+                continue
+            end
+            # (Z S_αα Z')[i, i] = Σ_k tmp_pm[i, k] · Z[i, k]
+            zsz_ii = zero(T)
+            @simd for k in 1:m
+                zsz_ii += em_ws.tmp_pm[i, k] * kf_ws.Z[i, k]
+            end
+            # H[i,i] = (S_yy[i,i] - 2 (Z S_yα')[i,i] + (Z S_αα Z')[i,i]) / n
+            h_ii = (em_ws.S_yy[i, i] - T(2) * em_ws.tmp_pp1[i, i] + zsz_ii) * scale
+            kf_ws.H[i, i] = max(h_ii, T(1e-10))
         end
     else
+        # Full p × p update. tmp_pp1 currently holds Z * S_yα'; we need
+        # H_new = (S_yy - Z S_yα' - (Z S_yα')' + Z S_αα Z') / n.
+        # Compute Z S_αα Z' on top of tmp_pp1 - the Z S_yα' contributions:
+        # Use a fresh accumulation to avoid clobbering tmp_pp1 mid-computation.
+        # H_new = S_yy - Z S_yα' - (Z S_yα')' + (Z S_αα) Z'
         @inbounds for j in 1:p, i in 1:p
 
-            kf_ws.H[i, j] = (em_ws.S_yy[i, j] - em_ws.tmp_pp1[i, j]) * scale
+            zsz_ij = zero(T)
+            @simd for k in 1:m
+                zsz_ij += em_ws.tmp_pm[i, k] * kf_ws.Z[j, k]
+            end
+            kf_ws.H[i, j] = (em_ws.S_yy[i, j] -
+                             em_ws.tmp_pp1[i, j] - em_ws.tmp_pp1[j, i] +
+                             zsz_ij) * scale
         end
-        # Ensure symmetry and positive definiteness
+        # Symmetrise (avg upper/lower triangle to clean up FP noise).
         for j in 1:p, i in 1:(j - 1)
 
             avg = (kf_ws.H[i, j] + kf_ws.H[j, i]) / 2
             kf_ws.H[i, j] = avg
             kf_ws.H[j, i] = avg
         end
-        # Add small regularization to diagonal
-        for i in 1:p
+        # Floor diagonals (skip frozen ones).
+        @inbounds for i in 1:p
+            if em_ws.H_zero[i]
+                kf_ws.H[i, i] = zero(T)
+                continue
+            end
             kf_ws.H[i, i] = max(kf_ws.H[i, i], T(1e-10))
         end
     end
@@ -1905,38 +1957,111 @@ end
 """
     update_T!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace)
 
-M-step update for state transition matrix T.
-T_new = S_10 * S_00^{-1}
+M-step update for state transition matrix T (restricted MLE).
 
-Only updates elements where em_ws.T_free is true.
+For an unconstrained `T` the M-step closed form is `T = S_10 / S_00`. When some
+cells of `T` are structurally fixed (e.g. diagonal-only `T`, or any pattern
+encoded by `em_ws.T_free`), the restricted-MLE update is **row-wise**:
+for each row `i`, with `J_i = {j : T_free[i, j]}`,
+
+    T[i, J_i] = S_10[i, J_i] * inv(S_00[J_i, J_i]).
+
+If row `i` has no free cells it is left untouched. The previous implementation
+computed the unconstrained `T_new = S_10 / S_00` and then wrote back only the
+free positions; that gives a different (biased) estimate whenever the free
+pattern is not the full rectangle, e.g. for a diagonal `B` in DNS-style models.
 """
 function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
     m = em_ws.state_dim
 
-    # tmp_mm1 = S_00
-    copyto!(em_ws.tmp_mm1, em_ws.S_00)
+    # Detect whether all rows share the same free-column pattern. Common cases:
+    # all-true (unrestricted), diagonal-only, lower-triangular, fixed sub-block.
+    common_pattern = true
+    @inbounds for i in 2:m, j in 1:m
 
-    # Regularize
-    for i in 1:m
-        em_ws.tmp_mm1[i, i] += T(1e-10)
+        if em_ws.T_free[i, j] != em_ws.T_free[1, j]
+            common_pattern = false
+            break
+        end
     end
 
-    # Cholesky
-    chol = cholesky!(Symmetric(em_ws.tmp_mm1, :L))
+    if common_pattern
+        # Same J for every row → solve once for all rows.
+        J = Int[]
+        @inbounds for j in 1:m
+            em_ws.T_free[1, j] && push!(J, j)
+        end
+        isempty(J) && return nothing
+        if length(J) == m
+            # Fast unrestricted path — bit-for-bit identical to the original code.
+            copyto!(em_ws.tmp_mm1, em_ws.S_00)
+            @inbounds for i in 1:m
+                em_ws.tmp_mm1[i, i] += T(1e-10)
+            end
+            chol = cholesky!(Symmetric(em_ws.tmp_mm1, :L))
+            copyto!(em_ws.tmp_mm2, em_ws.S_10)
+            L_lower = LowerTriangular(chol.L)
+            rdiv!(em_ws.tmp_mm2, L_lower')
+            rdiv!(em_ws.tmp_mm2, L_lower)
+            @inbounds for j in 1:m, i in 1:m
 
-    # T_new = S_10 * S_00^{-1}
-    # tmp_mm2 = S_10, then solve
-    copyto!(em_ws.tmp_mm2, em_ws.S_10)
+                if em_ws.T_free[i, j]
+                    kf_ws.Tmat[i, j] = em_ws.tmp_mm2[i, j]
+                end
+            end
+            return nothing
+        end
+        # Sub-block solve: build S_00[J, J] and S_10[:, J], one Cholesky for all rows.
+        k = length(J)
+        S00_sub = Matrix{T}(undef, k, k)
+        S10_sub = Matrix{T}(undef, m, k)
+        @inbounds for jj in 1:k, ii in 1:k
 
-    L_lower = LowerTriangular(chol.L)
-    rdiv!(em_ws.tmp_mm2, L_lower')
-    rdiv!(em_ws.tmp_mm2, L_lower)
+            S00_sub[ii, jj] = em_ws.S_00[J[ii], J[jj]]
+        end
+        @inbounds for i in 1:k
+            S00_sub[i, i] += T(1e-10)
+        end
+        @inbounds for jj in 1:k, ii in 1:m
 
-    # Update only free elements
-    @inbounds for j in 1:m, i in 1:m
+            S10_sub[ii, jj] = em_ws.S_10[ii, J[jj]]
+        end
+        chol = cholesky!(Symmetric(S00_sub, :L))
+        L_lower = LowerTriangular(chol.L)
+        rdiv!(S10_sub, L_lower')
+        rdiv!(S10_sub, L_lower)
+        @inbounds for jj in 1:k, i in 1:m
 
-        if em_ws.T_free[i, j]
-            kf_ws.Tmat[i, j] = em_ws.tmp_mm2[i, j]
+            if em_ws.T_free[i, J[jj]]
+                kf_ws.Tmat[i, J[jj]] = S10_sub[i, jj]
+            end
+        end
+        return nothing
+    end
+
+    # General path: rows have different free patterns → restricted OLS per row.
+    Jbuf = Vector{Int}(undef, m)
+    @inbounds for i in 1:m
+        nj = 0
+        for j in 1:m
+            if em_ws.T_free[i, j]
+                nj += 1
+                Jbuf[nj] = j
+            end
+        end
+        nj == 0 && continue
+        S00_i = Matrix{T}(undef, nj, nj)
+        rhs_i = Vector{T}(undef, nj)
+        for jj in 1:nj
+            for ii in 1:nj
+                S00_i[ii, jj] = em_ws.S_00[Jbuf[ii], Jbuf[jj]]
+            end
+            S00_i[jj, jj] += T(1e-10)
+            rhs_i[jj] = em_ws.S_10[i, Jbuf[jj]]
+        end
+        sol = Symmetric(S00_i, :L) \ rhs_i
+        for jj in 1:nj
+            kf_ws.Tmat[i, Jbuf[jj]] = sol[jj]
         end
     end
 
@@ -2011,15 +2136,28 @@ function update_Q!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
         end
     end
 
-    # Ensure symmetry and positive definiteness
+    # Ensure symmetry and positive definiteness; honour Q_zero freezes from
+    # the allow_degen path. A frozen diagonal entry forces the entire
+    # corresponding row and column of Q to zero (the shock is structurally
+    # absent, not just smaller than the floor).
     for j in 1:r, i in 1:(j - 1)
 
         avg = (kf_ws.Q[i, j] + kf_ws.Q[j, i]) / 2
         kf_ws.Q[i, j] = avg
         kf_ws.Q[j, i] = avg
     end
-    for i in 1:r
-        kf_ws.Q[i, i] = max(kf_ws.Q[i, i], T(1e-10))
+    @inbounds for i in 1:r
+        if em_ws.Q_zero[i]
+            kf_ws.Q[i, i] = zero(T)
+            for j in 1:r
+                if j != i
+                    kf_ws.Q[i, j] = zero(T)
+                    kf_ws.Q[j, i] = zero(T)
+                end
+            end
+        else
+            kf_ws.Q[i, i] = max(kf_ws.Q[i, i], T(1e-10))
+        end
     end
 
     # Update RQR
@@ -2144,7 +2282,10 @@ function em_estimate!(
         estimate_H::Bool = true,
         estimate_T::Bool = true,
         estimate_Q::Bool = true,
-        estimate_initial::Bool = true
+        estimate_initial::Bool = true,
+        allow_degen::Bool = false,
+        degen_lim::Real = 1e-4,
+        min_degen_iter::Int = 50
 ) where {T}
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
@@ -2200,6 +2341,18 @@ function em_estimate!(
         if estimate_initial
             update_initial_state!(kf_ws, em_ws)
         end
+
+        # Try freezing degenerate H/Q diagonal entries (mirror MARSS
+        # `degen.test`). Only after the M-step has had time to converge
+        # roughly, and only when the user has opted in via `allow_degen`.
+        if allow_degen && i > min_degen_iter
+            if estimate_H
+                _try_degenerate!(kf_ws, em_ws, y; degen_lim = degen_lim, what = :H)
+            end
+            if estimate_Q
+                _try_degenerate!(kf_ws, em_ws, y; degen_lim = degen_lim, what = :Q)
+            end
+        end
     end
 
     # When converged we broke out *before* the M-step ran, so kf_ws already
@@ -2220,6 +2373,96 @@ function em_estimate!(
         copy(kf_ws.Tmat),
         copy(kf_ws.Q)
     )
+end
+
+# `_try_degenerate!(kf_ws, em_ws, y; degen_lim, what)` — internal helper for
+# the `allow_degen` opt-in path of `em_estimate!`. Mirrors MARSS's
+# `degen.test`: for each diagonal cell of `H` (when `what === :H`) or `Q`
+# (when `what === :Q`) whose current value is below `degen_lim`, tentatively
+# zero the cell, run `filter_and_smooth!`, and commit the freeze iff loglik
+# is finite and does not decrease beyond `√eps`. On a failed freeze the prior
+# value is restored and the smoother is re-run so the workspace stays
+# consistent. Returns the number of cells frozen by this call.
+function _try_degenerate!(
+        kf_ws::KalmanWorkspace{T},
+        em_ws::EMWorkspace{T},
+        y::AbstractMatrix;
+        degen_lim::Real,
+        what::Symbol
+) where {T}
+    em_ws.H_diag_only || return 0   # only meaningful for diagonal H/Q
+    n_frozen = 0
+    ll_old = kf_ws.loglik
+    isfinite(ll_old) || return 0
+    threshold = T(degen_lim)
+    eps_tol = sqrt(eps(T))
+
+    if what === :H
+        p = em_ws.obs_dim
+        for i in 1:p
+            em_ws.H_zero[i] && continue
+            h_save = kf_ws.H[i, i]
+            h_save < threshold || continue
+            kf_ws.H[i, i] = zero(T)
+            try
+                filter_and_smooth!(kf_ws, y)
+                ll_new = kf_ws.loglik
+                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                    em_ws.H_zero[i] = true
+                    ll_old = ll_new
+                    n_frozen += 1
+                else
+                    kf_ws.H[i, i] = h_save
+                end
+            catch
+                kf_ws.H[i, i] = h_save
+            end
+        end
+    elseif what === :Q
+        r = em_ws.shock_dim
+        for i in 1:r
+            em_ws.Q_zero[i] && continue
+            q_save = kf_ws.Q[i, i]
+            q_save < threshold || continue
+            row_save = copy(kf_ws.Q[i, :])
+            col_save = copy(kf_ws.Q[:, i])
+            kf_ws.Q[i, i] = zero(T)
+            for j in 1:r
+                if j != i
+                    kf_ws.Q[i, j] = zero(T)
+                    kf_ws.Q[j, i] = zero(T)
+                end
+            end
+            _update_RQR!(kf_ws)
+            try
+                filter_and_smooth!(kf_ws, y)
+                ll_new = kf_ws.loglik
+                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                    em_ws.Q_zero[i] = true
+                    ll_old = ll_new
+                    n_frozen += 1
+                else
+                    kf_ws.Q[i, :] .= row_save
+                    kf_ws.Q[:, i] .= col_save
+                    _update_RQR!(kf_ws)
+                end
+            catch
+                kf_ws.Q[i, :] .= row_save
+                kf_ws.Q[:, i] .= col_save
+                _update_RQR!(kf_ws)
+            end
+        end
+    else
+        throw(ArgumentError("`what` must be :H or :Q, got $what"))
+    end
+
+    # Re-sync the workspace if anything was frozen so subsequent M-step calls
+    # see the up-to-date sufficient statistics.
+    if n_frozen > 0
+        filter_and_smooth!(kf_ws, y)
+    end
+
+    return n_frozen
 end
 
 # ============================================
@@ -3207,7 +3450,10 @@ function fit!(
         y::AbstractMatrix;
         maxiter::Int = 500,
         tol::Real = 1e-6,
-        verbose::Bool = false
+        verbose::Bool = false,
+        allow_degen::Bool = false,
+        degen_lim::Real = 1e-4,
+        min_degen_iter::Int = 50
 ) where {T}
     p_obs, n = size(y)
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
@@ -3219,7 +3465,12 @@ function fit!(
     # avoids fresh result-array allocation. The static specialization in
     # filter_ad.jl remains the right tool for one-shot loglik / MLE, where
     # there is no n × iters multiplier to wash out the savings.
-    _ssm_fit_em_inplace!(model, y; maxiter = maxiter, tol = tol, verbose = verbose)
+    _ssm_fit_em_inplace!(
+        model, y;
+        maxiter = maxiter, tol = tol, verbose = verbose,
+        allow_degen = allow_degen, degen_lim = degen_lim,
+        min_degen_iter = min_degen_iter
+    )
     model.backend = :em_inplace
 
     model.fitted = true
@@ -3235,7 +3486,10 @@ function _ssm_fit_em_inplace!(
         y::AbstractMatrix;
         maxiter::Int,
         tol::Real,
-        verbose::Bool
+        verbose::Bool,
+        allow_degen::Bool = false,
+        degen_lim::Real = 1e-4,
+        min_degen_iter::Int = 50
 ) where {T}
 
     # Get pre-allocated workspaces
@@ -3260,7 +3514,11 @@ function _ssm_fit_em_inplace!(
 
     # Run EM using existing em_estimate!
     em_result = em_estimate!(
-        kf_ws, em_ws, y; maxiter = maxiter, tol = tol, verbose = verbose)
+        kf_ws, em_ws, y;
+        maxiter = maxiter, tol = tol, verbose = verbose,
+        allow_degen = allow_degen, degen_lim = degen_lim,
+        min_degen_iter = min_degen_iter
+    )
 
     # Extract fitted parameters from workspace back to spec format
     # For general SSM, we extract from Z, H, T, R, Q matrices
