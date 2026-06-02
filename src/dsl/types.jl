@@ -5,7 +5,7 @@ Type definitions for the state-space model DSL.
 These types form the intermediate representation (IR) for model specification.
 """
 
-export SSMParameter, SSMSpec, CovFree, @ssm
+export SSMParameter, SSMSpec, CovFree
 
 """
     SSMParameter{T<:Real}
@@ -18,13 +18,13 @@ Represents a single estimable parameter in a state-space model.
 - `upper::T`: Upper bound for optimization (use Inf for unbounded)
 - `init::T`: Initial value for optimization
 """
-struct SSMParameter{T<:Real}
+struct SSMParameter{T <: Real}
     name::Symbol
     lower::T
     upper::T
     init::T
 
-    function SSMParameter(name::Symbol, lower::T, upper::T, init::T) where {T<:Real}
+    function SSMParameter(name::Symbol, lower::T, upper::T, init::T) where {T <: Real}
         lower <= init <= upper || throw(
             ArgumentError("Initial value $init for $name must be in [$lower, $upper]"),
         )
@@ -33,8 +33,9 @@ struct SSMParameter{T<:Real}
 end
 
 # Convenience constructors
-SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = 0.0) =
+function SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = 0.0)
     SSMParameter(name, Float64(lower), Float64(upper), Float64(init))
+end
 
 SSMParameter(name::Symbol, init::Real) = SSMParameter(name, -Inf, Inf, Float64(init))
 
@@ -43,7 +44,7 @@ SSMParameter(name::Symbol, init::Real) = SSMParameter(name, -Inf, Inf, Float64(i
 
 Represents a fixed (non-estimable) value in a state-space model.
 """
-struct FixedValue{T<:Real}
+struct FixedValue{T <: Real}
     value::T
 end
 
@@ -65,7 +66,7 @@ Can be:
 - Parameter reference
 - Expression involving parameters
 """
-const MatrixElement = Union{FixedValue,ParameterRef,Expr}
+const MatrixElement = Union{FixedValue, ParameterRef, Expr}
 
 """
     SSMMatrixSpec
@@ -78,14 +79,14 @@ Specification for a state-space matrix with fixed/free elements.
 - `default::MatrixElement`: Default value for unspecified elements
 """
 struct SSMMatrixSpec
-    dims::Tuple{Int,Int}
-    elements::Dict{Tuple{Int,Int},MatrixElement}
+    dims::Tuple{Int, Int}
+    elements::Dict{Tuple{Int, Int}, MatrixElement}
     default::MatrixElement
 end
 
 # Default constructor with zero default
-function SSMMatrixSpec(dims::Tuple{Int,Int})
-    SSMMatrixSpec(dims, Dict{Tuple{Int,Int},MatrixElement}(), FixedValue(0.0))
+function SSMMatrixSpec(dims::Tuple{Int, Int})
+    SSMMatrixSpec(dims, Dict{Tuple{Int, Int}, MatrixElement}(), FixedValue(0.0))
 end
 
 # Forward declaration for MatrixExpr (defined in expressions.jl)
@@ -131,8 +132,8 @@ struct SSMSpec
     Q::SSMMatrixSpec
     a1::Vector{MatrixElement}
     P1::SSMMatrixSpec
-    P1_inf::Union{Nothing,SSMMatrixSpec}  # nothing = approximate, SSMMatrixSpec = exact diffuse
-    matrix_exprs::Dict{Symbol,Any}  # Maps :Z, :H, etc. to MatrixExpr objects
+    P1_inf::Union{Nothing, SSMMatrixSpec}  # nothing = approximate, SSMMatrixSpec = exact diffuse
+    matrix_exprs::Dict{Symbol, Any}  # Maps :Z, :H, etc. to MatrixExpr objects
 end
 
 # Convenience constructor without matrix_exprs or P1_inf (approximate diffuse)
@@ -151,25 +152,25 @@ function SSMSpec(name, n_states, n_obs, n_shocks, params, Z, H, T, R, Q, a1, P1)
         a1,
         P1,
         nothing,
-        Dict{Symbol,Any}(),
+        Dict{Symbol, Any}()
     )
 end
 
 # Constructor with P1_inf but no matrix_exprs
 function SSMSpec(
-    name,
-    n_states,
-    n_obs,
-    n_shocks,
-    params,
-    Z,
-    H,
-    T,
-    R,
-    Q,
-    a1,
-    P1,
-    P1_inf::Union{Nothing,SSMMatrixSpec},
+        name,
+        n_states,
+        n_obs,
+        n_shocks,
+        params,
+        Z,
+        H,
+        T,
+        R,
+        Q,
+        a1,
+        P1,
+        P1_inf::Union{Nothing, SSMMatrixSpec}
 )
     SSMSpec(
         name,
@@ -185,25 +186,25 @@ function SSMSpec(
         a1,
         P1,
         P1_inf,
-        Dict{Symbol,Any}(),
+        Dict{Symbol, Any}()
     )
 end
 
 # Constructor with matrix_exprs but no P1_inf (for custom_ssm backwards compatibility)
 function SSMSpec(
-    name,
-    n_states,
-    n_obs,
-    n_shocks,
-    params,
-    Z,
-    H,
-    T,
-    R,
-    Q,
-    a1,
-    P1,
-    matrix_exprs::Dict{Symbol,Any},
+        name,
+        n_states,
+        n_obs,
+        n_shocks,
+        params,
+        Z,
+        H,
+        T,
+        R,
+        Q,
+        a1,
+        P1,
+        matrix_exprs::Dict{Symbol, Any}
 )
     SSMSpec(
         name,
@@ -219,7 +220,7 @@ function SSMSpec(
         a1,
         P1,
         nothing,
-        matrix_exprs,
+        matrix_exprs
     )
 end
 

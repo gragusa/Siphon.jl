@@ -5,7 +5,8 @@ Tests for EM algorithm implementation.
 using Test
 using Siphon
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 using ForwardDiff
 using Random
 
@@ -28,16 +29,16 @@ using Random
     filt = kalman_filter(p, y, a1, P1)
 
     # Without cross-covariances
-    result1 =
-        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = false)
+    result1 = kalman_smoother(
+        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = false)
     @test haskey(result1, :alpha)
     @test haskey(result1, :V)
     @test size(result1.alpha) == (1, 30)
     @test size(result1.V) == (1, 1, 30)
 
     # With cross-covariances
-    result2 =
-        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
+    result2 = kalman_smoother(
+        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
     @test haskey(result2, :P_crosslag)
     @test size(result2.P_crosslag) == (1, 1, 29)  # n-1 cross-covariances
 
@@ -58,9 +59,9 @@ end
     states = zeros(n)
     y_data = zeros(1, n)
     states[1] = 0.0
-    for t = 1:n
+    for t in 1:n
         if t > 1
-            states[t] = states[t-1] + sqrt(true_var_level) * randn()
+            states[t] = states[t - 1] + sqrt(true_var_level) * randn()
         end
         y_data[1, t] = states[t] + sqrt(true_var_obs) * randn()
     end
@@ -74,8 +75,8 @@ end
 
 @testset "fit!(EM(), ...) Nile data" begin
     # Load Nile data
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     spec = local_level()
     model = StateSpaceModel(spec, size(y, 2))
@@ -103,16 +104,16 @@ end
     result = Siphon.DSL._em_local_level(spec, y; maxiter = 50, verbose = false)
 
     # Log-likelihood should be monotonically non-decreasing
-    for i = 2:length(result.loglik_history)
-        @test result.loglik_history[i] >= result.loglik_history[i-1] - 1e-8
+    for i in 2:length(result.loglik_history)
+        @test result.loglik_history[i] >= result.loglik_history[i - 1] - 1e-8
     end
 end
 
 @testset "_em_local_level finds MLE" begin
     # EM should find the maximum likelihood estimate
     # Test on Nile data where the MLE is known from Durbin & Koopman (2012)
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     spec = local_level()
     result_em = Siphon.DSL._em_local_level(spec, y; maxiter = 300, tol_ll = 1e-8)
@@ -133,8 +134,8 @@ end
     # Fix var_obs, estimate var_level only
     spec_fixed = local_level(var_obs = 15099.0)
 
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 
@@ -150,8 +151,8 @@ end
     # Fix var_level, estimate var_obs only
     spec_fixed = local_level(var_level = 1469.0)
 
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
 
@@ -179,7 +180,7 @@ end
     @test result.converged isa Bool
     @test result.iterations isa Int
     @test result.smoothed_states isa Matrix{Float64}
-    @test result.smoothed_cov isa Array{Float64,3}
+    @test result.smoothed_cov isa Array{Float64, 3}
 
     # Check dimensions
     @test size(result.smoothed_states) == (1, 50)
@@ -209,7 +210,7 @@ end
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true,
+            compute_crosscov = true
         )
 
         # Sum of smoothed states and cross-covariances
@@ -254,9 +255,9 @@ end
     L_H = cholesky(Symmetric(H_true)).L
 
     states[:, 1] = zeros(m)
-    for t = 1:n
+    for t in 1:n
         if t > 1
-            states[:, t] = T_true * states[:, t-1] + L_Q * randn(m)
+            states[:, t] = T_true * states[:, t - 1] + L_Q * randn(m)
         end
         y[:, t] = Z_true * states[:, t] + L_H * randn(p)
     end
@@ -290,7 +291,7 @@ end
         Q_free = Q_free,
         maxiter = 500,
         tol_ll = 1e-5,
-        verbose = false,
+        verbose = false
     )
 
     # May not fully converge but should make progress
@@ -338,12 +339,12 @@ end
         a1,
         P1;
         maxiter = 50,
-        verbose = false,
+        verbose = false
     )
 
     # Log-likelihood should be monotonically non-decreasing
-    for i = 2:length(result.loglik_history)
-        @test result.loglik_history[i] >= result.loglik_history[i-1] - 1e-6
+    for i in 2:length(result.loglik_history)
+        @test result.loglik_history[i] >= result.loglik_history[i - 1] - 1e-6
     end
 end
 
@@ -381,7 +382,7 @@ end
         H_free = H_free,
         Q_free = Q_free,
         maxiter = 100,
-        verbose = false,
+        verbose = false
     )
 
     # Z and T should remain unchanged
@@ -414,9 +415,9 @@ end
     @test all(eigvals(C_proj) .>= 1e-10)
 end
 
-@testset "Full cov EM matches diagonal EM" begin
-    # Test that full covariance EM with diagonal constraints produces
-    # the same results as specialized diagonal EM
+@testset "em_ssm_diagonal matches full_cov with diagonal constraints" begin
+    # Test that em_ssm_diagonal convenience wrapper produces
+    # the same results as _em_general_ssm_full_cov with diagonal constraints
     Random.seed!(42)
 
     # Setup: simple 2-state, 2-observation model
@@ -435,13 +436,14 @@ end
     # Generate data
     y = randn(p, n)
 
-    # Method 1: Specialized diagonal EM
-    Z_free_diag = trues(p, m)
-    T_free_diag = trues(m, m)
+    # Free masks
+    Z_free = trues(p, m)
+    T_free = trues(m, m)
     H_free_diag = trues(p)
     Q_free_diag = trues(r)
 
-    result_diag = Siphon.DSL._em_general_ssm(
+    # Method 1: em_ssm_diagonal wrapper
+    result_wrapper = Siphon.DSL.em_ssm_diagonal(
         Z_init,
         T_init,
         R,
@@ -450,16 +452,16 @@ end
         y,
         a1,
         P1;
-        Z_free = Z_free_diag,
-        T_free = T_free_diag,
+        Z_free = Z_free,
+        T_free = T_free,
         H_free = H_free_diag,
         Q_free = Q_free_diag,
         maxiter = 200,
         tol_ll = 1e-8,
-        verbose = false,
+        verbose = false
     )
 
-    # Method 2: Full covariance EM with diagonal constraints
+    # Method 2: _em_general_ssm_full_cov with diagonal constraints
     H_init_full = Diagonal(H_init_diag) |> Matrix
     Q_init_full = Diagonal(Q_init_diag) |> Matrix
 
@@ -481,21 +483,21 @@ end
         y,
         a1,
         P1;
-        Z_free = Z_free_diag,
-        T_free = T_free_diag,
+        Z_free = Z_free,
+        T_free = T_free,
         H_free = H_free_full,
         Q_free = Q_free_full,
         maxiter = 200,
         tol_ll = 1e-8,
-        verbose = false,
+        verbose = false
     )
 
     # Both methods should produce the same results
-    @test maximum(abs.(result_diag.Z - result_full.Z)) < 1e-10
-    @test maximum(abs.(result_diag.T - result_full.T)) < 1e-10
-    @test maximum(abs.(result_diag.H_diag - diag(result_full.H))) < 1e-10
-    @test maximum(abs.(result_diag.Q_diag - diag(result_full.Q))) < 1e-10
-    @test abs(result_diag.loglik - result_full.loglik) < 1e-10
+    @test maximum(abs.(result_wrapper.Z - result_full.Z)) < 1e-10
+    @test maximum(abs.(result_wrapper.T - result_full.T)) < 1e-10
+    @test maximum(abs.(result_wrapper.H_diag - diag(result_full.H))) < 1e-10
+    @test maximum(abs.(result_wrapper.Q_diag - diag(result_full.Q))) < 1e-10
+    @test abs(result_wrapper.loglik - result_full.loglik) < 1e-10
     # Off-diagonals should be exactly zero (they were fixed)
     @test result_full.H[1, 2] == 0.0
     @test result_full.Q[1, 2] == 0.0
@@ -521,12 +523,14 @@ end
     # Run filter and smoother
     kfp = KFParms(Z, H, T, R, Q)
     filt = kalman_filter(kfp, y, a1, P1)
-    smooth =
-        kalman_smoother(Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
+    smooth = kalman_smoother(
+        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
 
     # Run M-step
-    Z_new, T_new, H_new, Q_new =
-        Siphon.DSL._mstep_full_cov(Z, T, R, y, smooth.alpha, smooth.V, smooth.P_crosslag)
+    Z_new, T_new,
+    H_new,
+    Q_new = Siphon.DSL._mstep_full_cov(
+        Z, T, R, y, smooth.alpha, smooth.V, smooth.P_crosslag)
 
     # Check symmetry
     @test H_new ≈ H_new' atol=1e-10
@@ -538,3 +542,531 @@ end
     @test size(Z_new) == (p, m)
     @test size(T_new) == (m, m)
 end
+
+@testset "block_diag matches manual block-diagonal spec under EM" begin
+    # Build the same 3-state, 2-observation, 2-shock state-space model two
+    # ways: once by writing every cell of T/H/Q by hand, and once via
+    # block_diag. The model has an AR(2) block and an independent AR(1)
+    # block. Running EM with the same data, starting values, and iteration
+    # count should produce identical parameter estimates and log-likelihood.
+
+    # ---- DSL spec via block_diag ----
+    T_dsl = block_diag(
+        companion_mat(2, :φ),
+        FreeParam(:ρ; init = 0.5, lower = -0.99, upper = 0.99)
+    )
+    H_dsl = block_diag(
+        FreeParam(:h1; init = 1.0, lower = 0.0),
+        FreeParam(:h2; init = 1.0, lower = 0.0)
+    )
+    Q_dsl = block_diag(
+        FreeParam(:q1; init = 1.0, lower = 0.0),
+        FreeParam(:q2; init = 1.0, lower = 0.0)
+    )
+
+    # ---- Manual spec, cell by cell ----
+    # companion_mat(2, :φ) puts FreeParam(:φ_1, init=0.5) at (1,1) and
+    # FreeParam(:φ_2, init=0.25) at (2,1) (init/i convention), with a 1.0
+    # on the superdiagonal and zeros everywhere else.
+    T_manual = Any[FreeParam(:φ_1, init = 0.5, lower = -Inf, upper = Inf) 1.0 0.0;
+                   FreeParam(:φ_2, init = 0.25, lower = -Inf, upper = Inf) 0.0 0.0;
+                   0.0 0.0 FreeParam(:ρ, init = 0.5, lower = -0.99, upper = 0.99)]
+    H_manual = Any[FreeParam(:h1, init = 1.0, lower = 0.0) 0.0;
+                   0.0 FreeParam(:h2, init = 1.0, lower = 0.0)]
+    Q_manual = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0;
+                   0.0 FreeParam(:q2, init = 1.0, lower = 0.0)]
+
+    # Observation, selection, initial state are identical and fixed.
+    Z = [1.0 0.0 0.0;
+         0.0 0.0 1.0]            # obs 1 ← state 1, obs 2 ← state 3
+    R = [1.0 0.0;
+         0.0 0.0;
+         0.0 1.0]                # shock 1 → state 1, shock 2 → state 3
+    a1 = [0.0, 0.0, 0.0]
+    P1 = Matrix(1e6I, 3, 3)
+
+    spec_dsl = custom_ssm(Z = Z, H = H_dsl, T = T_dsl, R = R, Q = Q_dsl,
+        a1 = a1, P1 = P1, name = :BlockDiagDSL)
+    spec_manual = custom_ssm(Z = Z, H = H_manual, T = T_manual, R = R,
+        Q = Q_manual, a1 = a1, P1 = P1, name = :BlockDiagManual)
+
+    # The two specs should expose the same parameter list in the same order
+    # with the same initial values and bounds — that's the precondition for
+    # EM giving identical answers.
+    @test param_names(spec_dsl) == param_names(spec_manual)
+    @test initial_values(spec_dsl) == initial_values(spec_manual)
+    @test param_bounds(spec_dsl) == param_bounds(spec_manual)
+
+    # ---- Generate synthetic data ----
+    n = 120
+    Random.seed!(20260425)
+    # Truth: AR(2) with φ = (0.6, -0.2), AR(1) with ρ = 0.7
+    φ_true = (0.6, -0.2)
+    ρ_true = 0.7
+    σ_q1, σ_q2 = sqrt(0.5), sqrt(0.3)
+    σ_h1, σ_h2 = sqrt(0.4), sqrt(0.2)
+
+    α = zeros(3, n)
+    for t in 2:n
+        α[1, t] = φ_true[1] * α[1, t - 1] + φ_true[2] * α[2, t - 1] + σ_q1 * randn()
+        α[2, t] = α[1, t - 1]
+        α[3, t] = ρ_true * α[3, t - 1] + σ_q2 * randn()
+    end
+    y = Matrix{Float64}(undef, 2, n)
+    for t in 1:n
+        y[1, t] = α[1, t] + σ_h1 * randn()
+        y[2, t] = α[3, t] + σ_h2 * randn()
+    end
+
+    # ---- Run EM on both ----
+    model_dsl = StateSpaceModel(spec_dsl, n)
+    model_manual = StateSpaceModel(spec_manual, n)
+
+    fit!(EM(), model_dsl, y; maxiter = 60, verbose = false)
+    fit!(EM(), model_manual, y; maxiter = 60, verbose = false)
+
+    # ---- Compare ----
+    # EM is deterministic given the same starting values; equivalent specs
+    # should match to machine precision.
+    @test loglikelihood(model_dsl) ≈ loglikelihood(model_manual) atol = 1e-10
+    @test model_dsl.theta_values ≈ model_manual.theta_values atol = 1e-10
+    # The estimates should also be roughly close to the truth (loose check —
+    # this is a small-sample EM with n=120, not a consistency proof).
+    # Note: with the corrected H M-step (Apr 2026, see update_H! docstring) EM
+    # finds a higher-likelihood optimum that is slightly farther from the
+    # truth in this finite sample. The point estimate φ_1 ≈ 0.86 sits inside
+    # the data's likelihood basin, not the population truth's. This is the
+    # right behaviour for ML — the test is loose by design.
+    names = param_names(spec_dsl)
+    θ = model_dsl.theta_values
+    @test isapprox(θ[findfirst(==(:φ_1), names)], φ_true[1], atol = 0.30)
+    @test isapprox(θ[findfirst(==(:ρ), names)], ρ_true, atol = 0.30)
+end
+
+# ============================================
+# In-place EM honours spec-fixed elements
+# ============================================
+
+@testset "fit!(EM) preserves spec-fixed Z and T" begin
+    # local_level fixes Z = 1, T = 1 structurally (only var_obs and var_level
+    # are free). Before mask propagation was wired up, the in-place EM would
+    # update Z and T as if they were free, drifting away from the unit values
+    # while still hitting a similar log-likelihood. Verify the fix.
+    Random.seed!(20260425)
+    n = 200
+    states = zeros(n)
+    y = zeros(1, n)
+    for t in 2:n
+        states[t] = states[t - 1] + 5 * randn()
+    end
+    for t in 1:n
+        y[1, t] = states[t] + 10 * randn()
+    end
+
+    spec = local_level()
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 100, tol = 1e-8)
+
+    # The workspace's Z and T must remain at their spec-fixed values.
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.Z[1, 1] ≈ 1.0 atol = 0
+    @test kf_ws.Tmat[1, 1] ≈ 1.0 atol = 0
+
+    # And EM should still find a sensible likelihood.
+    @test isfinite(loglikelihood(model))
+    @test loglikelihood(model) > -10_000  # sanity bound
+end
+
+@testset "fit!(EM) preserves zero columns in DFM-style Z" begin
+    # Custom 3-state, 2-obs spec where the second column of Z is structurally
+    # zero. The mask must keep that column at zero across EM iterations.
+    Random.seed!(20260425)
+    n = 150
+    Z = Any[FreeParam(:λ_1, init = 0.5) 0.0 FreeParam(:λ_3, init = 0.5);
+            FreeParam(:λ_4, init = 0.5) 0.0 FreeParam(:λ_6, init = 0.5)]
+    T = [0.7 0.0 0.0;
+         0.0 0.5 0.0;
+         0.0 0.0 0.6]
+    R = Matrix(I, 3, 3)
+    Q = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0 0.0;
+            0.0 FreeParam(:q2, init = 1.0, lower = 0.0) 0.0;
+            0.0 0.0 FreeParam(:q3, init = 1.0, lower = 0.0)]
+    H = Any[FreeParam(:h1, init = 1.0, lower = 0.0) 0.0;
+            0.0 FreeParam(:h2, init = 1.0, lower = 0.0)]
+    spec = custom_ssm(Z = Z, H = H, T = T, R = R, Q = Q,
+        a1 = zeros(3), P1 = Matrix(I, 3, 3) * 10.0,
+        name = :ZeroColumnZ)
+    y = randn(2, n)
+
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 30, tol = 0.0)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.Z[1, 2] == 0.0   # column 2 of Z stays zero
+    @test kf_ws.Z[2, 2] == 0.0
+    # And the structurally-fixed T elements stay put.
+    @test kf_ws.Tmat[1, 1] ≈ 0.7
+    @test kf_ws.Tmat[2, 2] ≈ 0.5
+    @test kf_ws.Tmat[3, 3] ≈ 0.6
+end
+
+# ============================================
+# backend(model) and static knob
+# ============================================
+
+@testset "backend(model) reports the path used" begin
+    Random.seed!(20260425)
+    n = 80
+    y = reshape(cumsum(randn(n)) .+ randn(n), 1, n)
+    spec = local_level()
+
+    # Unfit model
+    m0 = StateSpaceModel(spec, n)
+    @test backend(m0) === :none
+
+    # MLE static path (default :auto on a tiny model)
+    m_static = StateSpaceModel(spec, n)
+    fit!(MLE(), m_static, y)
+    @test backend(m_static) === :mle_static
+
+    # MLE dynamic path (force off)
+    m_dyn = StateSpaceModel(spec, n)
+    fit!(MLE(), m_dyn, y; static = :off)
+    @test backend(m_dyn) === :mle_dynamic
+    # Both paths should reach essentially the same log-likelihood.
+    @test loglikelihood(m_dyn) ≈ loglikelihood(m_static) atol = 1e-4
+
+    # MLE :on with a small model is fine.
+    m_on = StateSpaceModel(spec, n)
+    fit!(MLE(), m_on, y; static = :on)
+    @test backend(m_on) === :mle_static
+
+    # EM always reports :em_inplace, regardless of model size.
+    m_em = StateSpaceModel(spec, n)
+    fit!(EM(), m_em, y; maxiter = 50)
+    @test backend(m_em) === :em_inplace
+end
+
+@testset "fit!(MLE) static knob validation" begin
+    spec = local_level()
+    n = 50
+    y = randn(1, n)
+    model = StateSpaceModel(spec, n)
+    @test_throws ArgumentError fit!(MLE(), model, y; static = :nonsense)
+end
+
+# ============================================
+# EM updates a1 / P1 only when spec marks them free
+# ============================================
+
+@testset "fit!(EM) leaves spec-fixed (a1, P1) untouched" begin
+    # local_level uses FixedValue everywhere in a1 / P1, so EM must not
+    # change them — even after the M-step now calls update_initial_state!.
+    Random.seed!(20260425)
+    n = 200
+    y = zeros(1, n)
+    states = zeros(n)
+    for t in 2:n
+        states[t] = states[t - 1] + 5 * randn()
+    end
+    for t in 1:n
+        y[1, t] = states[t] + 10 * randn()
+    end
+
+    spec = local_level()                 # diffuse=true → P1 = 1e7
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 50, tol = 1e-8)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.a1[1] == 0.0
+    @test kf_ws.P1[1, 1] == 1e7
+end
+
+@testset "fit!(EM) estimates FreeParam a1 / P1" begin
+    # Local-level model where the user marks both the initial mean and
+    # variance as free. EM should converge and produce values consistent
+    # with the smoothed t=1 distribution.
+    Random.seed!(20260425)
+    n = 250
+    states = zeros(n)
+    states[1] = 5.0
+    for t in 2:n
+        states[t] = states[t - 1] + 1.0 * randn()
+    end
+    y = Matrix{Float64}(undef, 1, n)
+    for t in 1:n
+        y[1, t] = states[t] + 2.0 * randn()
+    end
+
+    spec = custom_ssm(
+        Z = [1.0;;],
+        H = [FreeParam(:var_obs, init = 4.0, lower = 0.0);;],
+        T = [1.0;;], R = [1.0;;],
+        Q = [FreeParam(:var_level, init = 1.0, lower = 0.0);;],
+        a1 = [FreeParam(:mu0, init = 0.0)],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;]
+    )
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 200, tol = 1e-10)
+
+    nm = param_names(spec)
+    θ = parameters(model)
+    @test isfinite(loglikelihood(model))
+    @test :mu0 in nm && :p0 in nm
+
+    # mu0 is the smoothed mean at t=1; with a long enough series it should
+    # be in the neighbourhood of the true initial state (5.0). Loose check
+    # because p0 → small inflates posterior precision.
+    @test abs(θ.mu0 - 5.0) < 3.0
+    @test θ.p0 ≥ 0.0   # variance non-negative
+
+    # The fitted (a1, P1) in the workspace match what _find_param_value
+    # returns to the model's theta_values — i.e., the fix that lets EM
+    # actually surface FreeParams in a1/P1 is wired through.
+    kf_ws = model.workspaces_ref[].kf_ws
+    @test kf_ws.a1[1] ≈ θ.mu0
+    @test kf_ws.P1[1, 1] ≈ θ.p0
+
+    # At an exact EM fixed point the closed-form M-step gives
+    # a1 = αs[:, 1] and P1 = Vs[:, :, 1]; with finite maxiter the two are
+    # close but not bit-equal because em_estimate! refreshes the smoother
+    # after the last M-step. Verify they're close in relative terms.
+    @test kf_ws.a1[1] ≈ kf_ws.αs[1, 1] rtol = 1e-3
+    @test kf_ws.P1[1, 1] ≈ kf_ws.Vs[1, 1, 1] rtol = 1e-2
+end
+
+@testset "fit!(EM) preserves loglik monotonicity with free a1 / P1" begin
+    # Closed-form M-step including a1/P1 should still produce a non-
+    # decreasing loglik trajectory.
+    Random.seed!(123)
+    n = 80
+    y = reshape(cumsum(0.5 .* randn(n)) .+ 0.3 .* randn(n), 1, n)
+
+    spec = custom_ssm(
+        Z = [1.0;;],
+        H = [FreeParam(:h, init = 0.5, lower = 0.0);;],
+        T = [1.0;;], R = [1.0;;],
+        Q = [FreeParam(:q, init = 0.5, lower = 0.0);;],
+        a1 = [FreeParam(:mu0, init = 0.0)],
+        P1 = [FreeParam(:p0, init = 1.0, lower = 0.0);;]
+    )
+
+    # Drive em_estimate! directly to capture the loglik history.
+    theta_init = [p.init for p in spec.params]
+    names_t = Tuple(p.name for p in spec.params)
+    theta_nt = NamedTuple{names_t}(Tuple(theta_init))
+    kfp = Siphon.build_kfparms(spec, theta_nt)
+    a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
+    kf_ws = KalmanWorkspace(kfp.Z, kfp.H, kfp.T, kfp.R, kfp.Q, a1_init, P1_init, n)
+    em_ws = Siphon.EMWorkspace(kf_ws)
+    Siphon._set_em_masks_from_spec!(em_ws, spec)
+    result = em_estimate!(kf_ws, em_ws, y; maxiter = 50, tol = 0.0, verbose = false)
+
+    @test all(diff(result.loglik_history) .>= -1e-8)
+end
+
+@testset "fit!(EM) partial-free P1 stays symmetric" begin
+    # 2-state model with one FreeParam in P1[1,1] and FixedValues elsewhere.
+    # The update should respect the fixed entries.
+    Random.seed!(0)
+    n = 100
+    α = zeros(2, n)
+    for t in 2:n
+        α[1, t] = α[1, t - 1] + 0.5 * randn()
+        α[2, t] = α[2, t - 1] + 0.5 * randn()
+    end
+    y = α[1:1, :] + 0.5 .* randn(1, n)
+
+    spec = custom_ssm(
+        Z = [1.0 0.0],
+        H = [FreeParam(:h, init = 0.25, lower = 0.0);;],
+        T = [1.0 0.0; 0.0 1.0],
+        R = Matrix(I, 2, 2),
+        Q = [FreeParam(:q1, init = 0.25, lower = 0.0) 0.0;
+             0.0 FreeParam(:q2, init = 0.25, lower = 0.0)],
+        # P1[1,1] is free; off-diagonals and P1[2,2] are fixed.
+        a1 = [0.0, 0.0],
+        P1 = [FreeParam(:p11, init = 1.0, lower = 0.0) 0.0;
+              0.0 10.0]
+    )
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 30, tol = 0.0)
+
+    kf_ws = model.workspaces_ref[].kf_ws
+    # Fixed cells unchanged
+    @test kf_ws.P1[2, 2] == 10.0
+    @test kf_ws.P1[1, 2] == 0.0
+    @test kf_ws.P1[2, 1] == 0.0
+    # Free cell estimated (positive, finite)
+    @test kf_ws.P1[1, 1] > 0
+    @test isfinite(kf_ws.P1[1, 1])
+end
+
+# ============================================
+# DynamicFactorModel Identification Tests
+# ============================================
+
+# TODO: These tests require the `identification` keyword argument which is not yet implemented
+# @testset "DynamicFactorModel identification validation" begin
+#     # n_obs < n_factors should error for identified models
+#     @test_throws ArgumentError DynamicFactorModel(2, 5, 100; identification = :named_factor)
+#     @test_throws ArgumentError DynamicFactorModel(
+#         2,
+#         5,
+#         100;
+#         identification = :lower_triangular,
+#     )
+#
+#     # But :none should work (no identification constraints)
+#     @test_nowarn DynamicFactorModel(2, 5, 100; identification = :none)
+#
+#     # Invalid identification scheme
+#     @test_throws ArgumentError DynamicFactorModel(10, 2, 100; identification = :invalid)
+#
+#     # Valid configurations
+#     @test_nowarn DynamicFactorModel(10, 2, 100; identification = :named_factor)
+#     @test_nowarn DynamicFactorModel(10, 2, 100; identification = :lower_triangular)
+#     @test_nowarn DynamicFactorModel(10, 2, 100; identification = :none)
+# end
+
+# TODO: These tests require the `identification` keyword argument which is not yet implemented
+# @testset "DynamicFactorModel identification initialization" begin
+#     # Test named_factor identification initialization
+#     model_nf = DynamicFactorModel(10, 3, 100; identification = :named_factor)
+#     Z = model_nf.kf_ws.Z
+#
+#     # Check identity block in first k rows
+#     @test Z[1, 1] ≈ 1.0
+#     @test Z[1, 2] ≈ 0.0
+#     @test Z[1, 3] ≈ 0.0
+#     @test Z[2, 2] ≈ 1.0
+#     @test Z[2, 3] ≈ 0.0
+#     @test Z[3, 3] ≈ 1.0
+#
+#     # Check Z_free mask
+#     Z_free = model_nf.em_ws.Z_free
+#     @test Z_free[1, 1] == false  # diagonal fixed
+#     @test Z_free[1, 2] == false  # upper triangle fixed
+#     @test Z_free[2, 1] == true   # lower triangle free
+#     @test Z_free[2, 2] == false  # diagonal fixed
+#     @test Z_free[3, 1] == true   # lower triangle free
+#     @test Z_free[3, 2] == true   # lower triangle free
+#     @test Z_free[3, 3] == false  # diagonal fixed
+#     @test Z_free[4, 1] == true   # row > k, all free
+#     @test Z_free[4, 2] == true
+#     @test Z_free[4, 3] == true
+#
+#     # Test lower_triangular identification initialization (Harvey 1989)
+#     model_lt = DynamicFactorModel(10, 3, 100; identification = :lower_triangular)
+#     Z_lt = model_lt.kf_ws.Z
+#     Z_free_lt = model_lt.em_ws.Z_free
+#     Q_lt = model_lt.kf_ws.Q
+#     Q_free_lt = model_lt.em_ws.Q_free
+#
+#     # Upper triangle = 0 (fixed)
+#     @test Z_lt[1, 2] ≈ 0.0
+#     @test Z_lt[1, 3] ≈ 0.0
+#     @test Z_lt[2, 3] ≈ 0.0
+#
+#     # Diagonal is FREE (not fixed to 1)
+#     @test Z_free_lt[1, 1] == true   # diagonal free
+#     @test Z_free_lt[2, 2] == true   # diagonal free
+#     @test Z_free_lt[3, 3] == true   # diagonal free
+#     @test Z_free_lt[1, 2] == false  # upper triangle fixed
+#     @test Z_free_lt[1, 3] == false  # upper triangle fixed
+#     @test Z_free_lt[2, 3] == false  # upper triangle fixed
+#     @test Z_free_lt[2, 1] == true   # lower triangle free
+#
+#     # Q factor block = I (fixed)
+#     k = 3
+#     @test Q_lt[1, 1] ≈ 1.0
+#     @test Q_lt[2, 2] ≈ 1.0
+#     @test Q_lt[3, 3] ≈ 1.0
+#     @test Q_free_lt[1, 1] == false  # Q factor block is fixed
+#     @test Q_free_lt[2, 2] == false
+#     @test Q_free_lt[3, 3] == false
+#
+#     # Test :none identification (all free)
+#     model_none = DynamicFactorModel(10, 3, 100; identification = :none)
+#     Z_free_none = model_none.em_ws.Z_free
+#
+#     # All factor loadings should be free
+#     @test all(Z_free_none[1:10, 1:3])
+# end
+
+# TODO: These tests require the `identification` keyword argument which is not yet implemented
+# @testset "DynamicFactorModel identification constraints preserved" begin
+#     Random.seed!(42)
+#
+#     # Generate simple factor model data
+#     N, k, n_time = 10, 2, 100
+#     true_factors = randn(k, n_time)
+#     true_loadings = randn(N, k)
+#     noise = randn(N, n_time) * 0.5
+#     y = true_loadings * true_factors + noise
+#
+#     # Fit with named_factor identification
+#     model = DynamicFactorModel(N, k, n_time; identification = :named_factor)
+#     fit!(EM(), model, y; maxiter = 50, verbose = false)
+#
+#     # Check constraints are preserved after fitting
+#     Λ = loadings(model)
+#     Λ₀ = Λ[1]  # Contemporaneous loadings
+#
+#     @test Λ₀[1, 1] ≈ 1.0 atol=1e-10
+#     @test Λ₀[1, 2] ≈ 0.0 atol=1e-10
+#     @test Λ₀[2, 2] ≈ 1.0 atol=1e-10
+#
+#     # Lower triangle should be estimated (not necessarily 0)
+#     # Just check they exist and are finite
+#     @test isfinite(Λ₀[2, 1])
+#     @test isfinite(Λ₀[3, 1])
+#     @test isfinite(Λ₀[3, 2])
+#
+#     # Fit with lower_triangular identification (Harvey 1989)
+#     model_lt = DynamicFactorModel(N, k, n_time; identification = :lower_triangular)
+#     fit!(EM(), model_lt, y; maxiter = 50, verbose = false)
+#
+#     Λ_lt = loadings(model_lt)[1]
+#     # Upper triangle should be 0 (fixed)
+#     @test Λ_lt[1, 2] ≈ 0.0 atol=1e-10
+#
+#     # Diagonal is FREE, so should be estimated (not necessarily 1)
+#     @test isfinite(Λ_lt[1, 1])
+#     @test isfinite(Λ_lt[2, 2])
+#
+#     # Q should remain at identity
+#     Q_lt = model_lt.kf_ws.Q
+#     @test Q_lt[1, 1] ≈ 1.0 atol=1e-10
+#     @test Q_lt[2, 2] ≈ 1.0 atol=1e-10
+# end
+
+# TODO: These tests require the `identification` keyword argument which is not yet implemented
+# @testset "DynamicFactorModel identification schemes differ" begin
+#     Random.seed!(123)
+#
+#     # Generate data
+#     N, k, n_time = 10, 2, 100
+#     true_factors = randn(k, n_time)
+#     true_loadings = randn(N, k)
+#     noise = randn(N, n_time) * 0.5
+#     y = true_loadings * true_factors + noise
+#
+#     # Fit with different identification schemes
+#     model_nf = DynamicFactorModel(N, k, n_time; identification = :named_factor)
+#     model_none = DynamicFactorModel(N, k, n_time; identification = :none)
+#
+#     fit!(EM(), model_nf, y; maxiter = 50, verbose = false)
+#     fit!(EM(), model_none, y; maxiter = 50, verbose = false)
+#
+#     # Loadings should differ (up to rotation for :none)
+#     Λ_nf = loadings(model_nf)[1]
+#     Λ_none = loadings(model_none)[1]
+#
+#     # The identified model should have the identity block
+#     @test Λ_nf[1, 1] ≈ 1.0 atol=1e-10
+#     @test Λ_nf[1, 2] ≈ 0.0 atol=1e-10
+#
+#     # The unidentified model likely does not
+#     @test !(Λ_none[1, 1] ≈ 1.0 && Λ_none[1, 2] ≈ 0.0)
+# end

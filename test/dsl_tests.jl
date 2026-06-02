@@ -99,7 +99,7 @@ end
         R = [1.0],
         Q = [FreeParam(:var_level, init = 25.0, lower = 0.0)],
         a1 = [0.0],
-        P1 = [1e7],
+        P1 = [1e7]
     )
 
     @test spec.n_states == 1
@@ -117,7 +117,7 @@ end
         R = [1.0;;],
         Q = [1.0;;],
         a1 = [0.0],      # wrong length
-        P1 = [1e7;;],
+        P1 = [1e7;;]
     )
 end
 
@@ -127,12 +127,10 @@ end
         H = [FreeParam(:var_obs, init = 1.0, lower = 0.0);;],
         T = [1.0 1.0; 0.0 1.0],
         R = Matrix(1.0I, 2, 2),
-        Q = [
-            FreeParam(:var_level, init = 0.01, lower = 0.0) 0.0;
-            0.0 FreeParam(:var_slope, init = 0.0001, lower = 0.0)
-        ],
+        Q = [FreeParam(:var_level, init = 0.01, lower = 0.0) 0.0;
+             0.0 FreeParam(:var_slope, init = 0.0001, lower = 0.0)],
         a1 = [0.0, 0.0],
-        P1 = 1e7 * Matrix(1.0I, 2, 2),
+        P1 = 1e7 * Matrix(1.0I, 2, 2)
     )
 
     @test spec.n_states == 2
@@ -211,6 +209,90 @@ end
     @test S[1, 2].name == :Σ_2_1
 end
 
+@testset "block_diag basic shapes" begin
+    # Two diagonal blocks of free params
+    B = block_diag(diag_free([:a, :b]), diag_free([:c]))
+    @test size(B) == (3, 3)
+    @test B[1, 1] isa FreeParam && B[1, 1].name == :a
+    @test B[2, 2] isa FreeParam && B[2, 2].name == :b
+    @test B[3, 3] isa FreeParam && B[3, 3].name == :c
+    # Off-block entries are zero (not FreeParam)
+    @test B[1, 2] == 0.0 && B[1, 3] == 0.0
+    @test B[2, 1] == 0.0 && B[2, 3] == 0.0
+    @test B[3, 1] == 0.0 && B[3, 2] == 0.0
+
+    # Free + fixed mix
+    B2 = block_diag(diag_free([:q1, :q2]), [3.0;;])
+    @test size(B2) == (3, 3)
+    @test B2[3, 3] == 3.0
+    @test B2[1, 3] == 0.0
+end
+
+@testset "block_diag rectangular blocks" begin
+    # Independent column-vector loadings for two factor groups
+    Z = block_diag([FreeParam(:λ1); FreeParam(:λ2)],
+        [FreeParam(:λ3); FreeParam(:λ4); FreeParam(:λ5)])
+    @test size(Z) == (5, 2)
+    @test Z[1, 1].name == :λ1
+    @test Z[2, 1].name == :λ2
+    @test Z[3, 2].name == :λ3
+    @test Z[4, 2].name == :λ4
+    @test Z[5, 2].name == :λ5
+    @test Z[1, 2] == 0.0
+    @test Z[3, 1] == 0.0
+end
+
+@testset "block_diag scalar and FreeParam blocks" begin
+    # Scalars and a single FreeParam are treated as 1×1 blocks
+    B = block_diag(2.0, FreeParam(:ρ; init = 0.5),
+        diag_free([:σ]))
+    @test size(B) == (3, 3)
+    @test B[1, 1] == 2.0
+    @test B[2, 2] isa FreeParam && B[2, 2].name == :ρ
+    @test B[3, 3] isa FreeParam && B[3, 3].name == :σ
+end
+
+@testset "block_diag preserves shared FreeParam refs" begin
+    # symmetric_free ties the (i,j)/(j,i) cells via identical FreeParam objects;
+    # block_diag must keep that identity intact.
+    S = symmetric_free(2, :Σ)
+    B = block_diag([1.0;;], S)
+    @test B[2, 3] === B[3, 2]
+    @test B[2, 3] === S[1, 2]
+end
+
+@testset "block_diag with custom_ssm" begin
+    # Uses block_diag for both T and Q in a 2-state, 1-obs SSM made of two
+    # independent AR(1) components.
+    T = block_diag(FreeParam(:ρ1; init = 0.5, lower = -0.99, upper = 0.99),
+        FreeParam(:ρ2; init = 0.3, lower = -0.99, upper = 0.99))
+    Q = block_diag(diag_free([:q1, :q2], init = 1.0))
+    spec = custom_ssm(
+        Z = [1.0 1.0],
+        H = [FreeParam(:h; init = 1.0, lower = 0.0)],
+        T = T,
+        R = identity_mat(2),
+        Q = Q,
+        a1 = [0.0, 0.0],
+        P1 = [10.0 0.0; 0.0 10.0],
+        name = :TwoAR1
+    )
+    @test n_params(spec) == 5  # ρ1, ρ2, h, q1, q2
+    names = param_names(spec)
+    @test :ρ1 in names && :ρ2 in names
+    @test :q1 in names && :q2 in names
+    @test :h in names
+    @test spec.n_states == 2
+    @test spec.n_obs == 1
+end
+
+@testset "block_diag errors" begin
+    @test_throws ArgumentError block_diag()
+    @test_throws ArgumentError block_diag("not a matrix")
+    # CovFree / MatrixExpr explicitly unsupported (clearer error)
+    @test_throws ArgumentError block_diag(cov_free(2, :Σ), [1.0;;])
+end
+
 # ============================================
 # MatrixExpr Tests
 # ============================================
@@ -231,15 +313,13 @@ end
     spec = custom_ssm(
         Z = Z,
         H = diag_free(3, :var_obs, init = 0.01),
-        T = [
-            FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
-            0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
-            0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)
-        ],
+        T = [FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
+             0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
+             0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)],
         R = identity_mat(3),
         Q = diag_free([:var_L, :var_S, :var_C], init = 0.01),
         a1 = [0.0, 0.0, 0.0],
-        P1 = 1e6 * identity_mat(3),
+        P1 = 1e6 * identity_mat(3)
     )
 
     @test :λ in param_names(spec)
@@ -352,7 +432,7 @@ end
     # NormalPrior now takes NamedTuple arguments (variance parameters)
     prior = NormalPrior(
         (var_obs = 25.0, var_level = 25.0),
-        (var_obs = 100.0, var_level = 100.0),
+        (var_obs = 100.0, var_level = 100.0)
     )
     ld = SSMLogDensity(spec, y; prior = prior)
 
@@ -554,17 +634,18 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Smoothed variance should be <= predicted variance (smoothing uses more info)
-    for t = 1:30
+    for t in 1:30
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
 
 @testset "kalman_smoother Nile reference" begin
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
-    nile = readdlm(joinpath(@__DIR__, "Nile.csv"), ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # MLE estimates from Durbin & Koopman (2012)
     # σ²_ε (observation) = 15099
@@ -596,7 +677,7 @@ end
     @test all(V_smooth[1, 1, :] .> 0)
 
     # Variance should be smaller than predicted variance (smoothing uses more info)
-    for t = 1:size(y, 2)
+    for t in 1:size(y, 2)
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t] + 1e-10
     end
 end
@@ -673,13 +754,14 @@ end
     result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
 
     # Run scalar smoother
-    alpha_smooth, V_smooth = kalman_smoother_scalar(
+    alpha_smooth,
+    V_smooth = kalman_smoother_scalar(
         Z,
         T,
         result_scalar.at,
         result_scalar.Pt,
         result_scalar.vt,
-        result_scalar.Ft,
+        result_scalar.Ft
     )
 
     @test length(alpha_smooth) == 30
@@ -704,4 +786,171 @@ end
 
     @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol = 1e-10)
     @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol = 1e-10)
+end
+
+# ============================================
+# Unified StateSpaceModel API Tests
+# ============================================
+
+@testset "StateSpaceModel with known parameters (NamedTuple)" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+
+    model = StateSpaceModel(spec, θ, n)
+
+    @test model.fitted == true
+    @test model.theta_fitted == true
+    @test model.converged == true
+    @test model.backend == :external
+    @test parameters(model) == θ
+end
+
+@testset "StateSpaceModel with known parameters (Vector)" begin
+    spec = local_level()
+    θ_vec = [100.0, 50.0]  # [var_obs, var_level]
+    n = 100
+
+    model = StateSpaceModel(spec, θ_vec, n)
+
+    @test model.fitted == true
+    @test model.theta_fitted == true
+    @test parameters(model).var_obs == 100.0
+    @test parameters(model).var_level == 50.0
+end
+
+@testset "kalman_loglik(model, y)" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # New unified API
+    ll_new = kalman_loglik(model, y)
+    @test isfinite(ll_new)
+
+    # Compare with old API (should match)
+    ss = build_linear_state_space(spec, initial_values(spec), y)
+    # Replace initial values with θ
+    θ_vec = [θ.var_obs, θ.var_level]
+    ss_θ = build_linear_state_space(spec, θ_vec, y)
+    ll_old = kalman_loglik(ss_θ.p, y, ss_θ.a1, ss_θ.P1)
+
+    @test ll_new ≈ ll_old rtol=1e-10
+end
+
+@testset "kalman_filter!(model, y)" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Filter should not be valid before calling kalman_filter!
+    @test model.filter_valid == false
+
+    ll = kalman_filter!(model, y)
+
+    @test isfinite(ll)
+    @test model.filter_valid == true
+    @test loglikelihood(model) ≈ ll
+
+    # Access filtered states
+    att = filtered_states(model)
+    @test size(att) == (1, n)
+
+    # Predicted states should also be available
+    at = predicted_states(model)
+    @test size(at) == (1, n)
+end
+
+@testset "kalman_smoother!(model)" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Smoother should fail before filter
+    @test_throws ArgumentError kalman_smoother!(model)
+
+    # Run filter first
+    kalman_filter!(model, y)
+    @test model.smoother_computed == false
+
+    # Now run smoother
+    kalman_smoother!(model)
+    @test model.smoother_computed == true
+
+    # Access smoothed states
+    alpha = smoothed_states(model)
+    @test size(alpha) == (1, n)
+
+    V = smoothed_states_cov(model)
+    @test size(V) == (1, 1, n)
+end
+
+@testset "Unified API equivalence with old API" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+    y = randn(1, n)
+
+    # New unified way
+    model = StateSpaceModel(spec, θ, n)
+    ll_new = kalman_filter!(model, y)
+    kalman_smoother!(model)
+    alpha_new = smoothed_states(model)
+
+    # Old way with build_linear_state_space
+    θ_vec = [θ.var_obs, θ.var_level]
+    ss = build_linear_state_space(spec, θ_vec, y)
+    filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
+    smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+
+    @test ll_new ≈ filt.loglik rtol=1e-10
+    @test alpha_new ≈ smooth.alpha rtol=1e-10
+end
+
+@testset "StateSpaceModel with local_linear_trend" begin
+    spec = local_linear_trend()
+    θ = (var_obs = 100.0, var_level = 50.0, var_slope = 10.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+    ll = kalman_filter!(model, y)
+    kalman_smoother!(model)
+
+    @test isfinite(ll)
+    @test size(smoothed_states(model)) == (2, n)
+end
+
+@testset "StateSpaceModel dimension validation" begin
+    spec = local_level()
+    θ = (var_obs = 100.0, var_level = 50.0)
+    n = 100
+    y = randn(1, n)
+
+    model = StateSpaceModel(spec, θ, n)
+
+    # Wrong observation dimension
+    y_wrong = randn(2, n)
+    @test_throws AssertionError kalman_filter!(model, y_wrong)
+
+    # Wrong time dimension
+    y_wrong_t = randn(1, 50)
+    @test_throws AssertionError kalman_filter!(model, y_wrong_t)
+end
+
+@testset "StateSpaceModel parameter vector length validation" begin
+    spec = local_level()
+    θ_wrong = [100.0]  # Too few parameters
+    n = 100
+
+    @test_throws ArgumentError StateSpaceModel(spec, θ_wrong, n)
 end

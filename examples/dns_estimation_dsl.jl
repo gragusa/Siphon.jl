@@ -48,7 +48,7 @@ spec_diag = dns_model(
     λ_init = 0.06,
     T_init = 0.95,
     Q_init = 0.01,
-    H_init = 0.001,
+    H_init = 0.001
 )
 
 println("\nDiagonal model parameters: ", param_names(spec_diag))
@@ -63,7 +63,7 @@ spec_full = dns_model(
     λ_init = 0.06,
     T_init = 0.95,
     Q_init = 0.01,
-    H_init = 0.001,
+    H_init = 0.001
 )
 
 println("\nFull model parameters: ", param_names(spec_full))
@@ -81,11 +81,9 @@ n_obs = 200
 # True parameters for simulation
 λ_true = 0.0609
 Φ_true = Diagonal([0.99, 0.95, 0.90])
-Q_true = [
-    0.01 0.002 0.0;
-    0.002 0.02 0.005;
-    0.0 0.005 0.03
-]
+Q_true = [0.01 0.002 0.0;
+          0.002 0.02 0.005;
+          0.0 0.005 0.03]
 H_true = 0.0001 * I(n_maturities)
 
 # Build true DNS loadings
@@ -116,9 +114,9 @@ yields = zeros(n_maturities, n_obs)
 # Factor means
 μ_true = [5.0, -1.0, 0.5]
 
-for t = 1:n_obs
+for t in 1:n_obs
     if t > 1
-        factors[:, t] = Φ_true * factors[:, t-1] + L_Q * randn(3)
+        factors[:, t] = Φ_true * factors[:, t - 1] + L_Q * randn(3)
     end
     yields[:, t] = Z_true * (factors[:, t] + μ_true) + L_H * randn(n_maturities)
 end
@@ -139,7 +137,7 @@ result_em = profile_em_ssm(
     yields;
     λ_grid = 0.02:0.01:0.12,
     verbose = true,
-    maxiter = 200,
+    maxiter = 200
 )
 
 println("\n--- Results ---")
@@ -152,13 +150,13 @@ Q_est = result_em.em_result.Q
 H_est = result_em.em_result.H
 
 println("\nEstimated T (transition matrix):")
-for i = 1:3
+for i in 1:3
     @printf("  [%.4f  %.4f  %.4f]\n", T_est[i, 1], T_est[i, 2], T_est[i, 3])
 end
 println("True T diagonal: ", diag(Φ_true))
 
 println("\nEstimated Q (factor covariance):")
-for i = 1:3
+for i in 1:3
     @printf("  [%.5f  %.5f  %.5f]\n", Q_est[i, 1], Q_est[i, 2], Q_est[i, 3])
 end
 println("True Q diagonal: ", diag(Q_true))
@@ -206,7 +204,7 @@ println(
     round(minimum(result_em.loglik_profile), digits = 1),
     ", ",
     round(maximum(result_em.loglik_profile), digits = 1),
-    "]",
+    "]"
 )
 
 # ============================================
@@ -224,7 +222,7 @@ spec_diag_T_full = dns_model(
     λ_init = 0.06,
     T_init = 0.95,
     Q_init = 0.01,
-    H_init = 0.001,
+    H_init = 0.001
 )
 
 result_diag = profile_em_ssm(
@@ -232,24 +230,24 @@ result_diag = profile_em_ssm(
     yields;
     λ_grid = 0.02:0.01:0.12,
     verbose = false,
-    maxiter = 200,
+    maxiter = 200
 )
 
 println(
     "Full Q model:     λ = ",
     round(result_em.λ_optimal, digits = 4),
     ", loglik = ",
-    round(result_em.loglik, digits = 2),
+    round(result_em.loglik, digits = 2)
 )
 println(
     "Diagonal Q model: λ = ",
     round(result_diag.λ_optimal, digits = 4),
     ", loglik = ",
-    round(result_diag.loglik, digits = 2),
+    round(result_diag.loglik, digits = 2)
 )
 println(
     "Log-likelihood improvement: ",
-    round(result_em.loglik - result_diag.loglik, digits = 2),
+    round(result_em.loglik - result_diag.loglik, digits = 2)
 )
 
 # ============================================
@@ -300,7 +298,7 @@ if isfile(data_path)
         λ_init = 0.06,
         T_init = 0.95,
         Q_init = 0.1,
-        H_init = 0.01,
+        H_init = 0.01
     )
 
     println("\n=== Profile EM on Real Data ===")
@@ -310,7 +308,7 @@ if isfile(data_path)
         selected_yields;
         λ_grid = 0.02:0.005:0.12,
         verbose = true,
-        maxiter = 300,
+        maxiter = 300
     )
 
     println("\n--- Real Data Results ---")
@@ -324,14 +322,14 @@ if isfile(data_path)
     # Display T matrix
     T_real = result_real.em_result.T
     println("\nEstimated T (factor dynamics):")
-    for i = 1:3
+    for i in 1:3
         @printf("  [%.4f  %.4f  %.4f]\n", T_real[i, 1], T_real[i, 2], T_real[i, 3])
     end
 
     # Display Q matrix
     Q_real = result_real.em_result.Q
     println("\nEstimated Q (factor covariance):")
-    for i = 1:3
+    for i in 1:3
         @printf("  [%.5f  %.5f  %.5f]\n", Q_real[i, 1], Q_real[i, 2], Q_real[i, 3])
     end
 
@@ -339,14 +337,14 @@ if isfile(data_path)
     σ = sqrt.(diag(Q_real))
     corr_mat = Q_real ./ (σ * σ')
     println("\nFactor correlations:")
-    for i = 1:3
+    for i in 1:3
         @printf("  [%.3f  %.3f  %.3f]\n", corr_mat[i, 1], corr_mat[i, 2], corr_mat[i, 3])
     end
 
     # Extract smoothed factors
     Z_real = dns_loadings(result_real.λ_optimal, selected_maturities)
-    p_real =
-        KFParms(Z_real, result_real.em_result.H, T_real, Matrix{Float64}(I, 3, 3), Q_real)
+    p_real = KFParms(
+        Z_real, result_real.em_result.H, T_real, Matrix{Float64}(I, 3, 3), Q_real)
     a1_real = zeros(3)
     P1_real = 1e4 * Matrix{Float64}(I, 3, 3)
 
@@ -357,7 +355,7 @@ if isfile(data_path)
         filt_real.at,
         filt_real.Pt,
         filt_real.vt,
-        filt_real.Ft,
+        filt_real.Ft
     )
 
     println("\nSmoothed factor statistics:")
@@ -367,7 +365,7 @@ if isfile(data_path)
             "  $name: mean = ",
             round(mean(factor), digits = 2),
             ", std = ",
-            round(std(factor), digits = 2),
+            round(std(factor), digits = 2)
         )
     end
 else

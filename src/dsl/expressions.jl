@@ -34,11 +34,13 @@ end
 # Convenience constructors
 ParamExpr(param::Symbol, data::NamedTuple, expr::Function) = ParamExpr((param,), data, expr)
 
-ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function) =
+function ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function)
     ParamExpr(params, (val = data,), (args...) -> expr(args[1:length(params)]..., data))
+end
 
-ParamExpr(param::Symbol, data::Real, expr::Function) =
+function ParamExpr(param::Symbol, data::Real, expr::Function)
     ParamExpr((param,), (val = data,), (p, v) -> expr(p, data))
+end
 
 """
     MatrixExpr(params, data, builder)
@@ -78,7 +80,7 @@ struct MatrixExpr
     params::Vector{SSMParameter{Float64}}
     data::NamedTuple
     builder::Function
-    dims::Tuple{Int,Int}  # Expected output dimensions
+    dims::Tuple{Int, Int}  # Expected output dimensions
 end
 
 function MatrixExpr(params, data::NamedTuple, builder::Function; dims = nothing)
@@ -147,10 +149,10 @@ spec = custom_ssm(
 ```
 """
 function build_dns_loadings(
-    maturities::AbstractVector{<:Real};
-    λ_init = 0.0609,
-    λ_lower = 0.001,
-    λ_upper = 1.0,
+        maturities::AbstractVector{<:Real};
+        λ_init = 0.0609,
+        λ_lower = 0.001,
+        λ_upper = 1.0
 )
     p = length(maturities)
 
@@ -178,13 +180,13 @@ Create a MatrixExpr for Svensson (4-factor) yield curve loadings.
 Adds a second curvature factor with separate decay rate λ2.
 """
 function build_svensson_loadings(
-    maturities::AbstractVector{<:Real};
-    λ1_init = 0.0609,
-    λ1_lower = 0.001,
-    λ1_upper = 1.0,
-    λ2_init = 0.03,
-    λ2_lower = 0.001,
-    λ2_upper = 1.0,
+        maturities::AbstractVector{<:Real};
+        λ1_init = 0.0609,
+        λ1_lower = 0.001,
+        λ1_upper = 1.0,
+        λ2_init = 0.03,
+        λ2_lower = 0.001,
+        λ2_upper = 1.0
 )
     p = length(maturities)
 
@@ -202,7 +204,7 @@ function build_svensson_loadings(
 
     params = [
         SSMParameter(:λ1; init = λ1_init, lower = λ1_lower, upper = λ1_upper),
-        SSMParameter(:λ2; init = λ2_init, lower = λ2_lower, upper = λ2_upper),
+        SSMParameter(:λ2; init = λ2_init, lower = λ2_lower, upper = λ2_upper)
     ]
 
     MatrixExpr(params, (maturities = collect(Float64, maturities),), builder; dims = (p, 4))

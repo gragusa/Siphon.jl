@@ -14,8 +14,8 @@ export KFParms, KFParms_static
 export KalmanFilterResult, KalmanFilterResultScalar, SmootherWorkspace
 export DiffuseFilterResult  # Exact diffuse initialization
 export STATIC_THRESHOLD, to_static_if_small, select_backend
-export kalman_loglik, kalman_loglik_scalar, kalman_loglik_static
-export kalman_filter, kalman_filter_scalar, kalman_filter_static
+export kalman_loglik, kalman_loglik_scalar
+export kalman_filter, kalman_filter_scalar
 export kalman_smoother, kalman_smoother_scalar, kalman_filter_and_smooth
 # Exact diffuse initialization (Durbin-Koopman method)
 # Note: Use 5-arg kalman_loglik/kalman_filter for diffuse (P1_inf triggers diffuse)
@@ -63,6 +63,7 @@ export identity_mat, zeros_mat, ones_mat
 export lower_triangular_free, symmetric_free
 export selection_mat, companion_mat
 export cov_free, CovFree, CovMatrixExpr
+export block_diag
 
 # Functional expressions (for DNS, Svensson, etc.)
 export ParamExpr, MatrixExpr
@@ -98,6 +99,8 @@ export MLE, EM  # Estimation method markers
 
 # High-level StateSpaceModel API
 export StateSpaceModel, fit!, system_matrices
+export smoothed_states_cov, predicted_states_cov, filtered_states_cov
+export prediction_errors_cov, isfitted, backend
 
 # Dynamic Factor Model
 export DynamicFactorModel, DynamicFactorModelSpec

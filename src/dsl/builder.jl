@@ -57,28 +57,29 @@ macro P(name, init = 0.0)
 end
 
 # Type for matrix elements that can be Real or FreeParam
-const MatrixInput = Union{Real,FreeParam}
+const MatrixInput = Union{Real, FreeParam}
 
 """
-    custom_ssm(; Z, H, T, R, Q, a1, P1, name=:CustomSSM)
+    custom_ssm(; Z, H, T, R, Q, a1, P1, name=:CustomSSM) -> SSMSpec
 
 Create a state-space model specification from explicit matrices.
 
-Use `FreeParam(...)` to mark elements that should be estimated.
+Use `FreeParam(:name, init=val, lower=lb, upper=ub)` to mark elements for estimation.
 Use regular numbers for fixed values.
 
 # Arguments
-- `Z`: Observation matrix (p × m) - relates states to observations
+- `Z`: Observation matrix (p × m)
 - `H`: Observation covariance (p × p)
-- `T`: Transition matrix (m × m) - state dynamics
-- `R`: Selection matrix (m × r) - maps shocks to states
+- `T`: Transition matrix (m × m)
+- `R`: Selection matrix (m × r)
 - `Q`: State covariance (r × r)
 - `a1`: Initial state mean (m-vector)
 - `P1`: Initial state covariance (m × m)
 - `name`: Model name (default: :CustomSSM)
 
-# Example: Local Level Model
+# Example
 ```julia
+# Local level model
 spec = custom_ssm(
     Z = [1.0],
     H = [FreeParam(:var_obs, init=225.0, lower=0.0)],
@@ -88,46 +89,16 @@ spec = custom_ssm(
     a1 = [0.0],
     P1 = [1e7]
 )
-
-# Check parameters
 param_names(spec)  # [:var_obs, :var_level]
 ```
 
-# Example: Local Linear Trend
-```julia
-using LinearAlgebra
-
-spec = custom_ssm(
-    Z = [1.0 0.0],
-    H = [FreeParam(:var_obs, init=1.0, lower=0.0)],
-    T = [1.0 1.0;
-         0.0 1.0],
-    R = Matrix(1.0I, 2, 2),
-    Q = [FreeParam(:var_level, init=0.01, lower=0.0)  0.0;
-         0.0  FreeParam(:var_slope, init=0.0001, lower=0.0)],
-    a1 = [0.0, 0.0],
-    P1 = 1e7 * Matrix(1.0I, 2, 2)
-)
-```
-
-# Example: AR(1) with fixed ρ
-```julia
-spec = custom_ssm(
-    Z = [1.0],
-    H = [FreeParam(:var_obs, init=1.0, lower=0.0)],
-    T = [0.9],  # Fixed AR coefficient
-    R = [1.0],
-    Q = [FreeParam(:var_state, init=1.0, lower=0.0)],
-    a1 = [0.0],
-    P1 = [1e4]
-)
-```
+See also: `local_level`, `ar1`, `arma`, `dynamic_factor` for pre-built templates.
 """
 function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     # Collect parameters and MatrixExpr objects
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol,Any}()
+    matrix_exprs = Dict{Symbol, Any}()
 
     # Process each matrix, handling MatrixExpr specially
     Z_spec, Z_dims = _process_matrix_input(:Z, Z, params, param_set, matrix_exprs)
@@ -170,15 +141,16 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
         Q_spec,
         a1_elems,
         P1_spec,
-        matrix_exprs,
+        matrix_exprs
     )
 end
 
 # Check if something is a MatrixExpr (duck typing to avoid circular dependency)
-_is_matrix_expr(x) =
+function _is_matrix_expr(x)
     hasfield(typeof(x), :builder) &&
-    hasfield(typeof(x), :dims) &&
-    hasfield(typeof(x), :params)
+        hasfield(typeof(x), :dims) &&
+        hasfield(typeof(x), :params)
+end
 
 # Check if something is a CovFree specification
 _is_cov_free(x) = x isa CovFree
@@ -195,12 +167,12 @@ function _process_matrix_input(name::Symbol, input, params, param_set, matrix_ex
 
         # Create σ parameters (positive, use lower=0.0 for asℝ₊ transform)
         σ_param_names = Symbol[]
-        for i = 1:n
+        for i in 1:n
             pname = Symbol("$(prefix)_σ_$i")
             if !(pname in param_set)
                 push!(
                     params,
-                    SSMParameter(pname; lower = 0.0, upper = Inf, init = input.init_σ),
+                    SSMParameter(pname; lower = 0.0, upper = Inf, init = input.init_σ)
                 )
                 push!(param_set, pname)
             end
@@ -210,7 +182,7 @@ function _process_matrix_input(name::Symbol, input, params, param_set, matrix_ex
         # Create correlation parameters (unconstrained)
         n_corr = n * (n - 1) ÷ 2
         corr_param_names = Symbol[]
-        for i = 1:n_corr
+        for i in 1:n_corr
             pname = Symbol("$(prefix)_corr_$i")
             if !(pname in param_set)
                 push!(params, SSMParameter(pname; lower = -Inf, upper = Inf, init = 0.0))
@@ -266,8 +238,8 @@ function _to_matrix(x::AbstractMatrix)
         else
             throw(
                 ArgumentError(
-                    "Matrix element must be Real or FreeParam, got $(typeof(elem))",
-                ),
+                "Matrix element must be Real or FreeParam, got $(typeof(elem))",
+            ),
             )
         end
     end
@@ -278,7 +250,7 @@ function _to_matrix(x::AbstractVector{<:MatrixInput})
     # Treat vector as 1×n row vector (common for Z matrix)
     n = length(x)
     mat = Matrix{MatrixInput}(undef, 1, n)
-    for i = 1:n
+    for i in 1:n
         mat[1, i] = x[i]
     end
     mat
@@ -287,7 +259,7 @@ end
 function _to_matrix(x::AbstractVector{<:Real})
     n = length(x)
     mat = Matrix{MatrixInput}(undef, 1, n)
-    for i = 1:n
+    for i in 1:n
         mat[1, i] = Float64(x[i])
     end
     mat
@@ -310,20 +282,38 @@ function _to_vector(x::AbstractVector{<:Real})
     Vector{MatrixInput}(convert.(Float64, x))
 end
 
+# Mixed vector (e.g. Vector{Any} from [FreeParam(...), 0.0, FreeParam(...)])
+function _to_vector(x::AbstractVector)
+    out = Vector{MatrixInput}(undef, length(x))
+    for i in eachindex(x)
+        elem = x[i]
+        if elem isa FreeParam
+            out[i] = elem
+        elseif elem isa Real
+            out[i] = Float64(elem)
+        else
+            throw(ArgumentError(
+                "Vector element must be Real or FreeParam, got $(typeof(elem))"))
+        end
+    end
+    out
+end
+
 function _to_vector(x::Real)
     Vector{MatrixInput}([Float64(x)])
 end
 
 # Build SSMMatrixSpec from a matrix that may contain FreeParams
 function _build_matrix_spec(
-    mat::Matrix{MatrixInput},
-    params::Vector{SSMParameter{Float64}},
-    param_set::Set{Symbol},
+        mat::Matrix{MatrixInput},
+        params::Vector{SSMParameter{Float64}},
+        param_set::Set{Symbol}
 )
     m, n = size(mat)
     spec = SSMMatrixSpec((m, n))
 
-    for j = 1:n, i = 1:m
+    for j in 1:n, i in 1:m
+
         elem = mat[i, j]
         if elem isa FreeParam
             # Add parameter if not already added
@@ -334,8 +324,8 @@ function _build_matrix_spec(
                         elem.name;
                         init = elem.init,
                         lower = elem.lower,
-                        upper = elem.upper,
-                    ),
+                        upper = elem.upper
+                    )
                 )
                 push!(param_set, elem.name)
             end
@@ -352,9 +342,9 @@ end
 
 # Build vector spec
 function _build_vector_spec(
-    vec::Vector{MatrixInput},
-    params::Vector{SSMParameter{Float64}},
-    param_set::Set{Symbol},
+        vec::Vector{MatrixInput},
+        params::Vector{SSMParameter{Float64}},
+        param_set::Set{Symbol}
 )
     elems = MatrixElement[]
 
@@ -367,8 +357,8 @@ function _build_vector_spec(
                         elem.name;
                         init = elem.init,
                         lower = elem.lower,
-                        upper = elem.upper,
-                    ),
+                        upper = elem.upper
+                    )
                 )
                 push!(param_set, elem.name)
             end

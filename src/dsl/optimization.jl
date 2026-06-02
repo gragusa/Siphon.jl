@@ -87,14 +87,14 @@ result6 = optimize_ssm(spec, y; use_static=false)
 ```
 """
 function optimize_ssm(
-    spec::SSMSpec,
-    y::AbstractMatrix;
-    method = Optim.LBFGS(),
-    θ0::Union{Nothing,AbstractVector,NamedTuple} = nothing,
-    ad_backend = Optimization.AutoForwardDiff(),
-    use_static::Bool = true,
-    prob_kwargs::NamedTuple = NamedTuple(),
-    kwargs...,
+        spec::SSMSpec,
+        y::AbstractMatrix;
+        method = Optim.LBFGS(),
+        θ0::Union{Nothing, AbstractVector, NamedTuple} = nothing,
+        ad_backend = Optimization.AutoForwardDiff(),
+        use_static::Bool = true,
+        prob_kwargs::NamedTuple = NamedTuple(),
+        kwargs...
 )
 
     # Create log-density object
@@ -132,7 +132,7 @@ function optimize_ssm(
         θ = θ_opt,
         loglik = ll_opt,
         result = result,
-        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success,
+        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
     )
 end
 
@@ -150,10 +150,10 @@ For accurate standard errors on constrained parameters, use the delta method
 or bootstrap.
 """
 function optimize_ssm_with_stderr(
-    spec::SSMSpec,
-    y::AbstractMatrix;
-    use_static::Bool = true,
-    kwargs...,
+        spec::SSMSpec,
+        y::AbstractMatrix;
+        use_static::Bool = true,
+        kwargs...
 )
     # First optimize
     opt_result = optimize_ssm(spec, y; use_static = use_static, kwargs...)
@@ -196,7 +196,7 @@ function optimize_ssm_with_stderr(
             result = opt_result.result,
             converged = opt_result.converged,
             stderr = stderr_c,
-            hessian = H,
+            hessian = H
         )
     catch e
         @warn "Failed to compute standard errors: $(e)"
@@ -206,7 +206,7 @@ function optimize_ssm_with_stderr(
             result = opt_result.result,
             converged = opt_result.converged,
             stderr = fill(NaN, length(opt_result.θ)),
-            hessian = H,
+            hessian = H
         )
     end
 end

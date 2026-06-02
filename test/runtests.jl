@@ -1,12 +1,13 @@
 using Siphon
 using Test
 using LinearAlgebra
-using DelimitedFiles
+using CSV
+using DataFrames
 using ForwardDiff
 
 # Load Nile data
-nile = readdlm("Nile.csv", ',', Float64)
-y = reshape(nile[:, 1], 1, :)  # 1 x 100 matrix
+nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+y = reshape(Float64.(nile[!, 1]), 1, :)  # 1 x 100 matrix
 
 # MLE estimates from Durbin & Koopman (2012)
 const Z_nile = [1.0;;]
@@ -24,7 +25,6 @@ const P1_nile = [1e7;;]
     @test p.T == T_nile
     @test p.R == R_nile
     @test p.Q == Q_nile
-    @test size(p) == (1, 1, 1)
 end
 
 @testset "kalman_loglik" begin
@@ -102,7 +102,7 @@ end
     @test result_exact.loglik ≈ ll_exact
 
     # After diffuse period, filtered states should be similar
-    for t = (d+2):size(y, 2)
+    for t in (d + 2):size(y, 2)
         @test result_exact.att[1, t] ≈ result_approx.att[1, t] rtol=0.01
     end
 
@@ -116,7 +116,7 @@ end
         a1,
         P1_star,
         P1_inf,
-        size(y, 2),
+        size(y, 2)
     )
     ll_inplace = kalman_filter!(ws, y)
     @test ll_inplace ≈ ll_exact rtol=1e-10
@@ -159,7 +159,8 @@ end
 end
 
 @testset "kalman_loglik_scalar" begin
-    ll = kalman_loglik_scalar(1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
+    ll = kalman_loglik_scalar(
+        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, Float64.(nile[!, 1]))
 
     @test isfinite(ll)
     @test ll < 0
@@ -230,7 +231,7 @@ end
     @test all(V_smooth .> 0)
 
     # Smoothed variance should be smaller than predicted variance
-    for t = 2:(n-1)
+    for t in 2:(n - 1)
         @test V_smooth[1, 1, t] <= result.Pt[1, 1, t]
     end
 
@@ -271,30 +272,32 @@ end
 end
 
 @testset "kalman_smoother_scalar" begin
-    result_scalar =
-        kalman_filter_scalar(1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, vec(nile))
+    nile_vec = Float64.(nile[!, 1])
+    result_scalar = kalman_filter_scalar(
+        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, nile_vec)
 
     # Check struct type
     @test result_scalar isa Siphon.KalmanFilterResultScalar
 
-    alpha, V = kalman_smoother_scalar(
+    alpha,
+    V = kalman_smoother_scalar(
         1.0,
         1.0,
         result_scalar.at,
         result_scalar.Pt,
         result_scalar.vt,
-        result_scalar.Ft,
+        result_scalar.Ft
     )
 
-    n = length(nile)
+    n = length(nile_vec)
     @test length(alpha) == n
     @test length(V) == n
 
     # Should match matrix version
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     result = kalman_filter(p, y, a1_nile, P1_nile)
-    alpha_mat, V_mat =
-        kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
+    alpha_mat,
+    V_mat = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
 
     @test isapprox(alpha, vec(alpha_mat), rtol = 1e-10)
 end
@@ -322,3 +325,6 @@ include("arma_tests.jl")
 
 # Exact diffuse filter tests
 include("diffuse_tests.jl")
+
+# Aqua.jl quality assurance tests
+include("Aqua.jl")

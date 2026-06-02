@@ -122,8 +122,8 @@ end
     σ² = 1.0
     y = zeros(n)
     ε = randn(n)
-    for t = 2:n
-        y[t] = φ * y[t-1] + sqrt(σ²) * ε[t]
+    for t in 2:n
+        y[t] = φ * y[t - 1] + sqrt(σ²) * ε[t]
     end
     y_mat = reshape(y, 1, n)
 
@@ -149,8 +149,8 @@ end
         # Simulate AR(1)
         y = zeros(n)
         ε = sqrt(var_true) * randn(n)
-        for t = 2:n
-            y[t] = φ_true * y[t-1] + ε[t]
+        for t in 2:n
+            y[t] = φ_true * y[t - 1] + ε[t]
         end
         y_mat = reshape(y, 1, n)
 
@@ -180,8 +180,8 @@ end
         # Simulate MA(1)
         ε = sqrt(var_true) * randn(n + 1)
         y = zeros(n)
-        for t = 1:n
-            y[t] = ε[t+1] + θ_true * ε[t]
+        for t in 1:n
+            y[t] = ε[t + 1] + θ_true * ε[t]
         end
         y_mat = reshape(y, 1, n)
 
@@ -289,8 +289,8 @@ end
 
     y = zeros(n)
     ε = sqrt(var_true) * randn(n)
-    for t = 2:n
-        y[t] = φ_true * y[t-1] + ε[t]
+    for t in 2:n
+        y[t] = φ_true * y[t - 1] + ε[t]
     end
     y_mat = reshape(y, 1, n)
 
@@ -331,8 +331,8 @@ end
     σ² = 1.0
     y = zeros(n)
     ε = randn(n)
-    for t = 2:n
-        y[t] = φ * y[t-1] + ε[t]
+    for t in 2:n
+        y[t] = φ * y[t - 1] + ε[t]
     end
     y_mat = reshape(y, 1, n)
 
@@ -376,8 +376,8 @@ end
     # Simulate
     ε = sqrt(σ²) * randn(n + 10)
     y = zeros(n)
-    for t = 3:n
-        y[t] = φ1 * y[t-1] + φ2 * y[t-2] + ε[t+10] + θ1 * ε[t+9]
+    for t in 3:n
+        y[t] = φ1 * y[t - 1] + φ2 * y[t - 2] + ε[t + 10] + θ1 * ε[t + 9]
     end
     y_mat = reshape(y, 1, n)
 
@@ -423,16 +423,12 @@ end
     r = 2  # max(1, 1+1) = 2
 
     # Build T matrix with Union type
-    T_mat = Union{Float64,FreeParam}[
-        FreeParam(:φ1, init = 0.6, lower = -Inf, upper = Inf) 1.0;
-        0.0 0.0
-    ]
+    T_mat = Union{Float64, FreeParam}[FreeParam(:φ1, init = 0.6, lower = -Inf, upper = Inf) 1.0;
+                                      0.0 0.0]
 
     # Build R matrix with Union type
-    R_mat = Union{Float64,FreeParam}[
-        1.0;
-        FreeParam(:θ1, init = 0.3, lower = -Inf, upper = Inf)
-    ]
+    R_mat = Union{Float64, FreeParam}[1.0;
+                                      FreeParam(:θ1, init = 0.3, lower = -Inf, upper = Inf)]
     R_mat = reshape(R_mat, 2, 1)  # Make it a proper 2x1 matrix
 
     spec_custom = custom_ssm(
@@ -443,7 +439,7 @@ end
         Q = reshape([FreeParam(:var, init = 1.0, lower = 0.0)], 1, 1),
         a1 = [0.0, 0.0],
         P1 = 1e7 * Matrix(1.0I, 2, 2),
-        name = :ARMA11_custom,
+        name = :ARMA11_custom
     )
 
     # Both should have same dimensions

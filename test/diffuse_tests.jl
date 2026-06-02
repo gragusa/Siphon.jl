@@ -21,7 +21,7 @@ using Random
         [σ²_obs;;],    # H
         [1.0;;],       # T
         [1.0;;],       # R
-        [σ²_state;;],   # Q
+        [σ²_state;;]   # Q
     )
 
     # Generate data
@@ -104,7 +104,7 @@ end
         [σ²_obs;;],                    # H
         [1.0 1.0; 0.0 1.0],            # T
         [1.0 0.0; 0.0 1.0],            # R
-        [σ²_level 0.0; 0.0 σ²_slope],   # Q
+        [σ²_level 0.0; 0.0 σ²_slope]   # Q
     )
 
     n = 100
@@ -163,7 +163,7 @@ end
     d = diffuse_period(result)
 
     # After diffuse period, covariances should be finite and reasonable
-    for t = (d+1):n
+    for t in (d + 1):n
         P_t = result.Pt[:, :, t]
         @test all(isfinite.(P_t))
         @test all(P_t .> 0)  # Should be positive
@@ -307,13 +307,13 @@ end
 
     # Compare filtered states (after diffuse period)
     d = diffuse_period(ws)
-    for t = (d+1):n
+    for t in (d + 1):n
         @test filtered_states(ws)[:, t] ≈ result.att[:, t] rtol=1e-10
         @test predicted_states(ws)[:, t] ≈ result.at[:, t] rtol=1e-10
     end
 
     # Compare prediction errors
-    for t = (d+1):n
+    for t in (d + 1):n
         @test prediction_errors(ws)[:, t] ≈ result.vt[:, t] rtol=1e-10
     end
 end

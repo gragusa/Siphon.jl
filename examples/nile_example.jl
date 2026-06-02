@@ -8,11 +8,12 @@ This example demonstrates how to:
 """
 
 using Siphon
-using DelimitedFiles
+using CSV
+using DataFrames
 
 # Load the Nile data
-nile = readdlm(joinpath(@__DIR__, "..", "test", "Nile.csv"), ',', Float64)
-y = nile'  # Convert to 1×n matrix for the filter
+nile = CSV.read(joinpath(@__DIR__, "..", "test", "Nile.csv"), DataFrame; header = false)
+y = permutedims(Matrix(nile))  # Convert to 1×n matrix for the filter
 
 println("Nile data: $(length(nile)) observations")
 println("Range: $(minimum(nile)) - $(maximum(nile))")
@@ -48,7 +49,7 @@ spec2 = custom_ssm(
     R = [1.0],
     Q = [FreeParam(:var_level, init = 2500.0, lower = 0.0)],
     a1 = [0.0],
-    P1 = [1e7],
+    P1 = [1e7]
 )
 
 println("Parameters: ", param_names(spec2))
@@ -87,8 +88,8 @@ function grid_search(negloglik)
     best_θ = [1.0, 1.0]
 
     # Grid search over variance values directly
-    for var_obs = 10000:1000:20000
-        for var_level = 500:100:3000
+    for var_obs in 10000:1000:20000
+        for var_level in 500:100:3000
             θ = [Float64(var_obs), Float64(var_level)]
             nll = negloglik(θ)
             if nll < best_nll

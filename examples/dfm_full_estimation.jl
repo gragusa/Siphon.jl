@@ -12,7 +12,8 @@ Uses the DynamicFactorModel type with fit!(EM(), ...) interface.
 Data: Quarterly macroeconomic data from FRED-QD
 =#
 
-using DelimitedFiles
+using CSV
+using DataFrames
 using LinearAlgebra
 using Statistics
 using Printf
@@ -31,16 +32,14 @@ println("Loading data...")
 data_path = joinpath(@__DIR__, "qt_factor_data.csv")
 
 # Read CSV - first row is header, first column is date
-raw_data = readdlm(data_path, ',', Any; header = true)
-data_matrix = raw_data[1]
-header = raw_data[2]
+df = CSV.read(data_path, DataFrame)
 
 # Extract variable names (skip DATE column)
-var_names = String.(header[2:end])
+var_names = String.(names(df)[2:end])
 println("  Variables: ", length(var_names))
 
 # Extract numeric data (skip DATE column)
-y_raw = Matrix{Float64}(data_matrix[:, 2:end])
+y_raw = Matrix{Float64}(Matrix(df[:, 2:end]))
 T_obs, n_vars = size(y_raw)
 println("  Time periods: ", T_obs)
 println("  Raw dimensions: $n_vars × $T_obs")
@@ -53,7 +52,7 @@ y_raw_t = permutedims(y_raw)
 # ============================================
 
 # Count missing values per variable
-missing_counts = [count(isnan, y_raw_t[i, :]) for i = 1:n_vars]
+missing_counts = [count(isnan, y_raw_t[i, :]) for i in 1:n_vars]
 println()
 println("Missing data summary:")
 println("  Variables with no missing: ", count(==(0), missing_counts))
@@ -83,7 +82,7 @@ println("Standardizing data...")
 # Compute means and stds ignoring NaN
 means = zeros(N)
 stds = zeros(N)
-for i = 1:N
+for i in 1:N
     valid_obs = filter(!isnan, y[i, :])
     means[i] = mean(valid_obs)
     stds[i] = std(valid_obs)
@@ -94,8 +93,8 @@ end
 
 # Standardize
 y_std = similar(y)
-for i = 1:N
-    for t = 1:n
+for i in 1:N
+    for t in 1:n
         if isnan(y[i, t])
             y_std[i, t] = NaN
         else
@@ -136,7 +135,7 @@ model1 = DynamicFactorModel(
     n;
     loading_lags = 0,
     factor_lags = factor_lags,
-    error_lags = 0,
+    error_lags = 0
 )
 
 t_start = time()
@@ -174,7 +173,7 @@ model2 = DynamicFactorModel(
     n;
     loading_lags = 0,
     factor_lags = factor_lags,
-    error_lags = 1,
+    error_lags = 1
 )
 
 t_start = time()
@@ -217,7 +216,7 @@ model3 = DynamicFactorModel(
     n;
     loading_lags = 1,
     factor_lags = factor_lags,
-    error_lags = 0,
+    error_lags = 0
 )
 
 t_start = time()
@@ -255,7 +254,7 @@ model4 = DynamicFactorModel(
     n;
     loading_lags = 1,
     factor_lags = factor_lags,
-    error_lags = 1,
+    error_lags = 1
 )
 
 t_start = time()
@@ -297,7 +296,7 @@ models = [
     ("Simple DFM (p=0, r=0)", model1, state_dim(0, factor_lags, 0, n_factors, N)),
     ("AR(1) errors (p=0, r=1)", model2, state_dim(0, factor_lags, 1, n_factors, N)),
     ("Dynamic loadings (p=1, r=0)", model3, state_dim(1, factor_lags, 0, n_factors, N)),
-    ("Full DFM (p=1, r=1)", model4, state_dim(1, factor_lags, 1, n_factors, N)),
+    ("Full DFM (p=1, r=1)", model4, state_dim(1, factor_lags, 1, n_factors, N))
 ]
 
 println("| Model                        | LogLik       | Iterations | State Dim |")
@@ -313,7 +312,7 @@ for (name, model, m) in models
         lpad(string(niterations(model)), 10),
         " | ",
         lpad(string(m), 9),
-        " |",
+        " |"
     )
 end
 
@@ -361,7 +360,7 @@ end
 Λ = loadings(best_model)
 println("Factor loadings Λ₀ summary:")
 Λ0 = Λ[1]  # First element is Λ₀ (contemporaneous loadings)
-for k = 1:n_factors
+for k in 1:n_factors
     loadings_k = Λ0[:, k]
     println(
         "  Factor $k: mean=$(round(mean(loadings_k), digits=3)), " *
@@ -374,7 +373,7 @@ println()
 # Factor summary statistics
 smoothed_factors = factors(best_model)
 println("Smoothed factor summary:")
-for k = 1:n_factors
+for k in 1:n_factors
     f_k = smoothed_factors[k, :]
     println(
         "  Factor $k: mean=$(round(mean(f_k), digits=3)), " *

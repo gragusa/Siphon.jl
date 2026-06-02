@@ -115,12 +115,6 @@ println("State dimension: ", spec_manual.n_states)
 println("Parameters: ", param_names(spec_manual))
 ```
 
-Output:
-```
-Model: ARMA22_manual
-State dimension: 3
-Parameters: [:φ1, :φ2, :θ1, :θ2, :var]
-```
 
 ## Using Matrix Helpers
 
@@ -347,20 +341,8 @@ println("\nTransition matrix T:")
 display(round.(mats.T, digits=4))
 ```
 
-## Tips and Best Practices
-
-1. **Initial values matter**: ARMA models can have multiple local optima. Good initial values help find the global optimum.
-
-2. **Stationarity**: The `arma` template does not enforce stationarity constraints on AR coefficients. For guaranteed stationarity, use bounds like `lower=-0.99, upper=0.99` for AR coefficients.
-
-3. **Invertibility**: Similarly, MA coefficients are not constrained for invertibility. Check your fitted coefficients satisfy the invertibility conditions.
-
-4. **Model order selection**: Use information criteria (AIC, BIC) computed from the log-likelihood to select appropriate (p,q) values.
-
-5. **EM vs MLE**: MLE is generally faster for ARMA models. EM can be useful when there are many missing observations.
-
 ## Next Steps
 
-- Learn about **[Custom Models](custom_models.md)** for more complex specifications
-- See **[Parameter Transformations](transformations.md)** for constrained optimization
-- Explore **[Dynamic Factor Models](dynamic_factor.md)** for multivariate time series
+- Learn about [Custom Models](custom_models.md) for more complex specifications
+- See [Parameter Transformations](transformations.md) for constrained optimization
+- Explore [Dynamic Factor Models](dynamic_factor.md) for multivariate time series

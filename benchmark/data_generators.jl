@@ -58,9 +58,9 @@ function simulate_scalar(n::Int; σ_ε = 15.0, σ_η = 10.0, rng = Random.GLOBAL
     μ = zeros(n + 1)
     y = zeros(n)
     μ[1] = randn(rng) * 100  # Initial state
-    for t = 1:n
+    for t in 1:n
         y[t] = μ[t] + σ_ε * randn(rng)
-        μ[t+1] = μ[t] + σ_η * randn(rng)
+        μ[t + 1] = μ[t] + σ_η * randn(rng)
     end
     return y
 end
@@ -74,12 +74,12 @@ Generate small matrix model parameters (local linear trend + cycle).
 State: [level, slope, cycle]
 """
 function small_matrix(;
-    σ_ε = 1.0,
-    σ_level = 0.5,
-    σ_slope = 0.1,
-    σ_cycle = 0.3,
-    ρ = 0.9,
-    λ = 0.1,
+        σ_ε = 1.0,
+        σ_level = 0.5,
+        σ_slope = 0.1,
+        σ_cycle = 0.3,
+        ρ = 0.9,
+        λ = 0.1
 )
     m = 3  # states
     p = 1  # observations
@@ -87,11 +87,9 @@ function small_matrix(;
     Z = [1.0 0.0 1.0]  # 1×3
     H = fill(σ_ε^2, 1, 1)
 
-    T = [
-        1.0 1.0 0.0;
-        0.0 1.0 0.0;
-        0.0 0.0 ρ*cos(λ)
-    ]
+    T = [1.0 1.0 0.0;
+         0.0 1.0 0.0;
+         0.0 0.0 ρ*cos(λ)]
 
     R = Matrix(1.0I, m, m)
     Q = diagm([σ_level^2, σ_slope^2, σ_cycle^2])
@@ -118,9 +116,9 @@ function simulate_small_matrix(n::Int; rng = Random.GLOBAL_RNG)
     R_chol = cholesky(parms.Q).L
     H_chol = sqrt(parms.H[1, 1])
 
-    for t = 1:n
+    for t in 1:n
         y[:, t] = parms.Z * α[:, t] .+ H_chol * randn(rng)
-        α[:, t+1] = parms.T * α[:, t] + R_chol * randn(rng, m)
+        α[:, t + 1] = parms.T * α[:, t] + R_chol * randn(rng, m)
     end
 
     return y
@@ -169,9 +167,9 @@ function simulate_medium_matrix(n::Int; rng = Random.GLOBAL_RNG)
     R_chol = cholesky(parms.Q).L
     H_chol = cholesky(parms.H).L
 
-    for t = 1:n
+    for t in 1:n
         y[:, t] = parms.Z * α[:, t] + H_chol * randn(rng, p)
-        α[:, t+1] = parms.T * α[:, t] + parms.R * R_chol * randn(rng, r)
+        α[:, t + 1] = parms.T * α[:, t] + parms.R * R_chol * randn(rng, r)
     end
 
     return y, parms
@@ -187,13 +185,13 @@ Generate StaticArrays version of small matrix model.
 function small_static()
     parms = small_matrix()
 
-    Z = SMatrix{1,3}(parms.Z)
-    H = SMatrix{1,1}(parms.H)
-    T = SMatrix{3,3}(parms.T)
-    R = SMatrix{3,3}(parms.R)
-    Q = SMatrix{3,3}(parms.Q)
+    Z = SMatrix{1, 3}(parms.Z)
+    H = SMatrix{1, 1}(parms.H)
+    T = SMatrix{3, 3}(parms.T)
+    R = SMatrix{3, 3}(parms.R)
+    Q = SMatrix{3, 3}(parms.Q)
     a1 = SVector{3}(parms.a1)
-    P1 = SMatrix{3,3}(parms.P1)
+    P1 = SMatrix{3, 3}(parms.P1)
 
     return (; Z, H, T, R, Q, a1, P1)
 end
@@ -213,7 +211,7 @@ Pre-generate all benchmark data.
 function generate_all_benchmark_data(; seed = 42)
     rng = benchmark_rng(seed)
 
-    data = Dict{Symbol,Any}()
+    data = Dict{Symbol, Any}()
 
     # Sequence lengths
     lengths = [100, 1000, 10000]

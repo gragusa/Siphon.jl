@@ -71,7 +71,7 @@ end
     m, n = 2, 10
     mean = rand(m, n)
     cov = zeros(m, m, n)
-    for t = 1:n
+    for t in 1:n
         cov[1, 1, t] = 1.0
         cov[2, 2, t] = 4.0
     end
@@ -115,7 +115,7 @@ end
         yhat = rand(p_obs, h),
         a = rand(m_state, h),
         P = rand(m_state, m_state, h),
-        F = rand(p_obs, p_obs, h),
+        F = rand(p_obs, p_obs, h)
     )
 
     fr = ForecastResult(nt)
@@ -138,12 +138,13 @@ end
 @testitem "SmootherResult convenience constructor" tags=[:recipes] begin
     using Siphon
     using Siphon: SmootherResult
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # Local level model parameters
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
@@ -161,12 +162,13 @@ end
 @testitem "KalmanFilterResult recipe produces series" tags=[:recipes] begin
     using Siphon
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     # Local level model
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
@@ -176,15 +178,15 @@ end
     result = kalman_filter(p, y, a1, P1)
 
     # Recipe should produce output
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), result)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), result)
     @test !isempty(rec)
 
     # With options
-    rec2 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:vars => 1, :level => 0.90), result)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:vars => 1, :level => 0.90), result)
     @test !isempty(rec2)
 
     # Predicted instead of filtered
-    rec3 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:filtered => false), result)
+    rec3 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:filtered => false), result)
     @test !isempty(rec3)
 end
 
@@ -192,11 +194,12 @@ end
     using Siphon
     using Siphon: SmootherResult
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -204,7 +207,7 @@ end
 
     sr = SmootherResult(p, y, a1, P1)
 
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), sr)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), sr)
     @test !isempty(rec)
 end
 
@@ -219,11 +222,11 @@ end
     fr = ForecastResult(nt)
 
     # Observations (default)
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), fr)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), fr)
     @test !isempty(rec)
 
     # States
-    rec2 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:what => :states), fr)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:what => :states), fr)
     @test !isempty(rec2)
 end
 
@@ -231,11 +234,12 @@ end
     using Siphon
     using Siphon: SmootherResult
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -244,7 +248,7 @@ end
     filt = kalman_filter(p, y, a1, P1)
     smooth = SmootherResult(p, y, a1, P1)
 
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), (filt, smooth))
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), (filt, smooth))
     @test !isempty(rec)
 end
 
@@ -252,11 +256,12 @@ end
     using Siphon
     using Siphon: ObservablePlot
     using RecipesBase
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
 
     p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.0;;])
     a1 = [0.0]
@@ -264,11 +269,11 @@ end
 
     result = kalman_filter(p, y, a1, P1)
 
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), result, ObservablePlot)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), result, ObservablePlot)
     @test !isempty(rec)
 
     # With actual data overlay
-    rec2 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:actual => y), result, ObservablePlot)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:actual => y), result, ObservablePlot)
     @test !isempty(rec2)
 end
 
@@ -292,15 +297,15 @@ end
     result = kalman_filter(p, y, a1, P1)
 
     # All states
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(:vars => :all), result)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(:vars => :all), result)
     @test !isempty(rec)
 
     # Subset of states
-    rec2 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:vars => [1, 3]), result)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:vars => [1, 3]), result)
     @test !isempty(rec2)
 
     # Single state
-    rec3 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:vars => 2), result)
+    rec3 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:vars => 2), result)
     @test !isempty(rec3)
 end
 
@@ -332,12 +337,13 @@ end
 @testitem "KalmanWorkspace filter and smoother" tags=[:recipes, :inplace] begin
     using Siphon
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     # Local level model
@@ -371,11 +377,12 @@ end
     using Siphon
     using RecipesBase
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     ws = KalmanWorkspace(
@@ -386,21 +393,21 @@ end
         [1469.0;;],
         [0.0],
         [1e7;;],
-        n,
+        n
     )
     kalman_filter!(ws, y)
     kalman_smoother!(ws)
 
     # Smoothed (default)
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), ws)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), ws)
     @test !isempty(rec)
 
     # Filtered
-    rec2 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:what => :filtered), ws)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:what => :filtered), ws)
     @test !isempty(rec2)
 
     # Predicted
-    rec3 = RecipesBase.apply_recipe(Dict{Symbol,Any}(:what => :predicted), ws)
+    rec3 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:what => :predicted), ws)
     @test !isempty(rec3)
 end
 
@@ -409,11 +416,12 @@ end
     using Siphon: SmootherResult
     using RecipesBase
     using LinearAlgebra
-    using DelimitedFiles
+    using CSV
+    using DataFrames
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
-    nile = readdlm(nile_path, ',', Float64)
-    y = reshape(nile[:, 1], 1, :)
+    nile = CSV.read(nile_path, DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
     n = size(y, 2)
 
     ws = KalmanWorkspace(
@@ -424,7 +432,7 @@ end
         [1469.0;;],
         [0.0],
         [1e7;;],
-        n,
+        n
     )
     kalman_filter!(ws, y)
     kalman_smoother!(ws)
@@ -435,6 +443,6 @@ end
     @test size(sr.V) == (1, 1, n)
 
     # Recipe should work
-    rec = RecipesBase.apply_recipe(Dict{Symbol,Any}(), sr)
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), sr)
     @test !isempty(rec)
 end

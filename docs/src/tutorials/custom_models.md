@@ -177,6 +177,28 @@ S = symmetric_free(2, :S)
 # The matrix is symmetric by construction
 ```
 
+### Block Diagonal
+
+`block_diag` glues smaller matrix specs into a larger block-diagonal layout.
+Each block can be any of: an `AbstractMatrix` (free, fixed, or mixed), an
+`AbstractVector` (column block), a `Real`, or a `FreeParam`. Off-block entries
+are zero, and shared `FreeParam` references inside a block (e.g. from
+`symmetric_free`) stay tied in the result.
+
+```julia
+# Two independent AR(1) state components: T = diag(ρ₁, ρ₂)
+T = block_diag(FreeParam(:ρ_1, init=0.5, lower=-0.99, upper=0.99),
+               FreeParam(:ρ_2, init=0.3, lower=-0.99, upper=0.99))
+
+# Q with diagonal free shocks plus a fixed third shock
+Q = block_diag(diag_free([:q_1, :q_2]), [3.0;;])
+
+# Rectangular Z: independent loadings for two factor groups
+Z = block_diag([FreeParam(:λ_1); FreeParam(:λ_2)],
+               [FreeParam(:λ_3); FreeParam(:λ_4); FreeParam(:λ_5)])
+# size(Z) == (5, 2): block 1 loads on factor 1, block 2 loads on factor 2
+```
+
 ## Example: Bivariate VAR(1)
 
 A bivariate VAR(1) model:
@@ -376,10 +398,10 @@ println("\nSmoothed state at t=100: ", smooth.alpha[:, 100])
 
 5. **Diffuse initialization**: Use large values in P1 (e.g., 1e7) for diffuse priors on initial states.
 
-6. **Dimension checks**: `custom_ssm` validates dimensions automatically—let it catch errors early.
+6. **Dimension checks**: `custom_ssm` validates dimensions automatically--let it catch errors early.
 
 ## Next Steps
 
-- Learn about **[Parameter Transformations](transformations.md)** for understanding how bounds are handled
-- Learn about **[Dynamic Factor Models](dynamic_factor.md)** for multivariate factor analysis
-- See the **[Core Functions](../api/core.md)** and **[DSL & Templates](../api/dsl.md)** for complete API documentation
+- Learn about [Parameter Transformations](transformations.md) for understanding how bounds are handled
+- Learn about [Dynamic Factor Models](dynamic_factor.md) for multivariate factor analysis
+- See the [Core Functions](../api/core.md) and [DSL & Templates](../api/dsl.md) for complete API documentation
