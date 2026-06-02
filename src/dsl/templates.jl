@@ -261,10 +261,12 @@ function local_linear_trend(;
 
     # Q = diag(var_level, var_slope)
     Q = SSMMatrixSpec((2, 2))
-    Q.elements[(1, 1)] = level_free ? ParameterRef(:var_level) :
-                         FixedValue(level_spec.value)
-    Q.elements[(2, 2)] = slope_free ? ParameterRef(:var_slope) :
-                         FixedValue(slope_spec.value)
+    Q.elements[(
+        1, 1)] = level_free ? ParameterRef(:var_level) :
+                 FixedValue(level_spec.value)
+    Q.elements[(
+        2, 2)] = slope_free ? ParameterRef(:var_slope) :
+                 FixedValue(slope_spec.value)
 
     # Initial state mean
     a1 = [FixedValue(0.0), FixedValue(0.0)]
@@ -340,8 +342,9 @@ function ar1(;
 
     # Q = var_state
     Q = SSMMatrixSpec((1, 1))
-    Q.elements[(1, 1)] = state_free ? ParameterRef(:var_state) :
-                         FixedValue(state_spec.value)
+    Q.elements[(
+        1, 1)] = state_free ? ParameterRef(:var_state) :
+                 FixedValue(state_spec.value)
 
     # Initial state mean
     a1 = [FixedValue(0.0)]
