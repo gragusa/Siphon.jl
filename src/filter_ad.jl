@@ -11,11 +11,13 @@ This module provides pure functional filter implementations that:
 - Use StaticArrays for small state dimensions (≤ STATIC_THRESHOLD)
 
 Missing Data Handling:
-When an observation contains NaN, the filter skips the measurement update
-and propagates the state using only the transition equation:
+NaN marks a missing observation, one element at a time. Where only some rows of a
+period are present, the measurement update runs on the reduced system formed by
+those rows. Where every row is NaN the update is skipped and the state propagates
+through the transition equation alone:
     a_{t+1} = T * a_t
     P_{t+1} = T * P_t * T' + R * Q * R'
-This is equivalent to having infinite observation noise for that period.
+which is equivalent to infinite observation noise for that period.
 
 StaticArrays Optimization:
 When KFParms contains StaticArrays and initial state (a1, P1) are also static,
@@ -43,6 +45,121 @@ Check if observation vector contains any NaN (missing) values.
 Check if scalar observation is NaN (missing).
 """
 @inline _has_missing(y_t::Real) = isnan(y_t)
+
+"""
+    _all_missing(y_t::AbstractVector) -> Bool
+
+Whether every element of the observation vector is NaN, so the period carries no
+information and the measurement update is skipped entirely.
+"""
+@inline _all_missing(y_t::AbstractVector) = all(isnan, y_t)
+
+@inline _all_missing(y_t::Real) = isnan(y_t)
+
+"""
+    _observed_row_indices(y_t) -> Vector{Int}
+
+The indices of the non-NaN elements of `y_t`.
+
+The return type is concrete rather than a range-or-vector union: the callers feed
+it straight into the matrices of a long filter body, and a union there propagates
+through every downstream expression and makes type inference intractable.
+"""
+function _observed_row_indices(y_t::AbstractVector)
+    rows = Vector{Int}(undef, count(!isnan, y_t))
+    k = 0
+    for (i, yi) in pairs(y_t)
+        if !isnan(yi)
+            k += 1
+            rows[k] = i
+        end
+    end
+    return rows
+end
+
+"""
+    _select_rows(A, rows) -> Matrix
+
+Rows `rows` of `A`. Always materializes, so the result type does not depend on
+whether the period was fully observed; a union there would defeat inference in
+the filter bodies that consume it.
+"""
+_select_rows(A::AbstractMatrix, rows) = A[rows, :]
+
+"""
+    _select_rows_cols(A, rows) -> Matrix
+
+The principal submatrix of `A` on `rows`, materialized for the same reason as
+[`_select_rows`](@ref).
+"""
+_select_rows_cols(A::AbstractMatrix, rows) = A[rows, rows]
+
+"""
+    _period_obs_rows(observed_mask, vt, t) -> AbstractVector{Int}
+
+The rows observed in period `t`. Taken from `observed_mask` when one is supplied;
+otherwise every row of `vt` is assumed observed, which is what a filter result
+without a per-element mask records.
+"""
+function _period_obs_rows(observed_mask, vt::AbstractMatrix, t::Integer)
+    observed_mask === nothing && return collect(axes(vt, 1))
+    return findall(view(observed_mask, :, t))
+end
+
+"""
+    _period_obs_dim(observed_mask, vt, t) -> Int
+
+The number of rows observed in period `t`.
+"""
+function _period_obs_dim(observed_mask, vt::AbstractMatrix, t::Integer)
+    observed_mask === nothing && return size(vt, 1)
+    return count(view(observed_mask, :, t))
+end
+
+"""
+    _require_no_partial_periods(y, caller::AbstractString)
+
+Throw an `ArgumentError` if any period of `y` is partially observed, naming the
+first such period and the rows involved.
+
+Paths that handle missingness one period at a time rather than one element at a
+time call this on entry, so a partially observed panel fails immediately instead
+of silently discarding the observed rows of that period.
+"""
+function _require_no_partial_periods(y::AbstractMatrix, caller::AbstractString)
+    for t in axes(y, 2)
+        y_t = view(y, :, t)
+        n_obs = count(!isnan, y_t)
+        if n_obs != 0 && n_obs != length(y_t)
+            observed = [i for i in axes(y_t, 1) if !isnan(y_t[i])]
+            throw(ArgumentError(
+                "$caller handles missing data per period, but period $t is partially " *
+                "observed: rows $observed of $(length(y_t)) are present. Use " *
+                "kalman_filter! / kalman_filter, which handle per-element missingness."))
+        end
+    end
+    return nothing
+end
+
+"""
+    _observed_rows!(rows, y_t) -> Int
+
+Write the indices of the non-NaN elements of `y_t` into the leading entries of
+`rows` and return how many there were. `rows` must be at least as long as `y_t`.
+"""
+function _observed_rows!(rows::AbstractVector{Int}, y_t::AbstractVector)
+    Base.require_one_based_indexing(rows)
+    length(rows) ≥ length(y_t) || throw(DimensionMismatch(
+        "row buffer holds $(length(rows)) entries; need $(length(y_t))"))
+    k = 0
+    for (i, yi) in pairs(y_t)
+        if !isnan(yi)
+            k += 1
+            rows[k] = i
+        end
+    end
+    return k
+end
 
 # ============================================
 # Element type helper for AD compatibility
@@ -87,8 +204,10 @@ y_t = Z * α_t + ε_t,    ε_t ~ N(0, H)
 ```
 
 # Missing Data
-When `y[:, t]` contains any NaN, the observation is treated as missing.
-The filter skips the measurement update and propagates the state:
+NaN marks a missing observation, one element at a time. In a period where only
+some rows are present the measurement update runs on the reduced system formed by
+those rows, so the observed rows still inform the state. A period in which every
+row is NaN carries no information and the update is skipped:
     a_{t+1} = T * a_t
     P_{t+1} = T * P_t * T' + R * Q * R'
 """
@@ -99,7 +218,6 @@ function kalman_loglik(
         P1::AbstractMatrix
 )
     n = size(y, 2)
-    obs_dim = size(y, 1)
     ET = _filter_eltype(p, a1, P1)
 
     a = Vector{ET}(a1)
@@ -107,22 +225,29 @@ function kalman_loglik(
     # RQR' is constant across iterations.
     RQR = p.R * p.Q * transpose(p.R)
     Tt = transpose(p.T)
-    Zt = transpose(p.Z)
     loglik = zero(ET)
-    n_obs = 0
+    n_obs_rows = 0
 
     for t in 1:n
         y_t = view(y, :, t)
 
-        if _has_missing(y_t)
+        if _all_missing(y_t)
             a = p.T * a
             P = p.T * P * Tt + RQR
             continue
         end
 
-        n_obs += 1
-        v = y_t - p.Z * a
-        F = p.Z * P * Zt + p.H
+        # Restrict to the observed rows. When every row is present these are the
+        # full Z, H and y_t and the arithmetic is unchanged.
+        rows = _observed_row_indices(y_t)
+        obs_dim = length(rows)
+        n_obs_rows += obs_dim
+        Zr = _select_rows(p.Z, rows)
+        Hr = _select_rows_cols(p.H, rows)
+        Zrt = transpose(Zr)
+
+        v = y_t[rows] - Zr * a
+        F = Zr * P * Zrt + Hr
 
         if obs_dim == 1
             F_val = F[1, 1]
@@ -136,7 +261,7 @@ function kalman_loglik(
             if !isfinite(loglik)
                 return ET(-Inf)
             end
-            PZt = P * Zt
+            PZt = P * Zrt
             K = p.T * PZt * Finv_val
             a = p.T * a + K * v
             # P_filt = P - PZt * Finv_val * (PZt)'
@@ -163,17 +288,18 @@ function kalman_loglik(
                 return ET(-Inf)
             end
 
-            # M = P * Z' * F^{-1} (m×p) from Cholesky solves on Z*P.
-            PZt = P * Zt
+            # M = P * Z' * F^{-1} (m×pt) from Cholesky solves on Z*P.
+            PZt = P * Zrt
             M = transpose(chol_result \ transpose(PZt))
             K = p.T * M
             a = p.T * a + K * v
             # P_filt = P - M * (Z*P)
-            P = p.T * (P - M * (p.Z * P)) * Tt + RQR
+            P = p.T * (P - M * (Zr * P)) * Tt + RQR
         end
     end
 
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar across the sample.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
     return loglik + const_term
 end
 
@@ -206,6 +332,7 @@ function kalman_loglik(
         P1::SMatrix{M, M}
 ) where {P, M, R}
     n = size(y, 2)
+    _require_no_partial_periods(y, "kalman_loglik (StaticArrays)")
     ET = _filter_eltype(p, a1, P1)
 
     # Initialize state as static types
@@ -375,15 +502,18 @@ Returns a `KalmanFilterResult` with:
 - `vt`: Innovations (p × n), NaN for missing observations
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n), zero for missing observations
-- `missing_mask`: BitVector indicating missing observations (length n)
+- `missing_mask`: BitVector, true where a period has no observed row (length n)
+- `observed_mask`: BitMatrix (p × n), true where an individual value is present
 
 Use accessor methods: `predicted_states`, `filtered_states`, `variances_predicted_states`,
 `variances_filtered_states`, `prediction_errors`, `variances_prediction_errors`,
 `kalman_gains`, `loglikelihood`.
 
 # Missing Data
-When `y[:, t]` contains any NaN, the observation is treated as missing.
-The filter skips the measurement update and propagates the state.
+NaN marks a missing observation, one element at a time. Where only some rows of a
+period are present, the update runs on the reduced system formed by those rows and
+`vt`, `Ft` and `Kt` carry pₜ-sized blocks in their leading rows and columns for
+that period. Where every row is NaN the update is skipped.
 """
 function kalman_filter(
         p::KFParms,
@@ -404,11 +534,12 @@ function kalman_filter(
     Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
     Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
     missing_mask = BitVector(undef, n)
+    observed_mask = BitMatrix(undef, obs_dim, n)
 
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
     loglik = zero(ET)
-    n_obs = 0
+    n_obs_rows = 0
 
     for t in 1:n
         y_t = y[:, t]
@@ -416,7 +547,11 @@ function kalman_filter(
         at_store[:, t] = a_pred
         Pt_store[:, :, t] = P_pred
 
-        if _has_missing(y_t)
+        for i in 1:obs_dim
+            observed_mask[i, t] = !isnan(y_t[i])
+        end
+
+        if _all_missing(y_t)
             missing_mask[t] = true
             vt_store[:, t] .= ET(NaN)
             Ft_store[:, :, t] = p.Z * P_pred * p.Z' + p.H
@@ -427,17 +562,24 @@ function kalman_filter(
             P_pred = p.T * P_pred * p.T' + p.R * p.Q * p.R'
         else
             missing_mask[t] = false
-            n_obs += 1
 
-            v = y_t - p.Z * a_pred
-            F = p.Z * P_pred * p.Z' + p.H
+            # Restrict to the observed rows; the fully observed case selects all
+            # of them and the arithmetic below is unchanged.
+            rows = _observed_row_indices(y_t)
+            pt = length(rows)
+            n_obs_rows += pt
+            Zr = _select_rows(p.Z, rows)
+            Hr = _select_rows_cols(p.H, rows)
 
-            if obs_dim == 1
+            v = y_t[rows] - Zr * a_pred
+            F = Zr * P_pred * Zr' + Hr
+
+            if pt == 1
                 F_val = F[1, 1]
                 if F_val <= zero(ET)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
                 end
                 Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
@@ -448,7 +590,7 @@ function kalman_filter(
                 if !issuccess(chol_result)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
                 end
                 Finv = inv(chol_result)
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -457,13 +599,20 @@ function kalman_filter(
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            K = p.T * P_pred * p.Z' * Finv
-            vt_store[:, t] = v
-            Ft_store[:, :, t] = F
-            Kt_store[:, :, t] = K
+            PZt = P_pred * Zr'
+            K = p.T * PZt * Finv
 
-            a_filt = a_pred + P_pred * p.Z' * Finv * v
-            P_filt = P_pred - P_pred * p.Z' * Finv * p.Z * P_pred
+            # Reduced-system quantities occupy the leading rows and columns; the
+            # rest of the slice marks rows that were not observed.
+            vt_store[:, t] .= ET(NaN)
+            vt_store[1:pt, t] = v
+            Ft_store[:, :, t] .= ET(NaN)
+            Ft_store[1:pt, 1:pt, t] = F
+            Kt_store[:, :, t] .= zero(ET)
+            Kt_store[:, 1:pt, t] = K
+
+            a_filt = a_pred + PZt * Finv * v
+            P_filt = P_pred - PZt * Finv * Zr * P_pred
             att_store[:, t] = a_filt
             Ptt_store[:, :, t] = P_filt
 
@@ -472,7 +621,8 @@ function kalman_filter(
         end
     end
 
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar across the sample.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
 
     return KalmanFilterResult(
         p,
@@ -484,7 +634,8 @@ function kalman_filter(
         vt_store,
         Ft_store,
         Kt_store,
-        missing_mask
+        missing_mask,
+        observed_mask
     )
 end
 
@@ -512,6 +663,7 @@ function kalman_filter(
         P1::SMatrix{M, M}
 ) where {P, M, R}
     n = size(y, 2)
+    _require_no_partial_periods(y, "kalman_filter (StaticArrays)")
     ET = _filter_eltype(p, a1, P1)
 
     # Output storage (heap-allocated, filled with static values)
@@ -569,7 +721,7 @@ function kalman_filter(
                 if !issuccess(chol_result)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
                 end
                 Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -781,6 +933,7 @@ function kalman_loglik_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
+    _require_no_partial_periods(y, "kalman_loglik_diffuse")
     obs_dim = size(y, 1)
 
     ET = _filter_eltype(p, a1, P1_star, P1_inf)
@@ -969,6 +1122,7 @@ function kalman_filter_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
+    _require_no_partial_periods(y, "kalman_filter_diffuse")
     obs_dim = size(y, 1)
     state_dim = length(a1)
 

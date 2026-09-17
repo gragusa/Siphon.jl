@@ -7,7 +7,8 @@ Pure functional implementation that works with automatic differentiation.
 """
 
 """
-    kalman_smoother(Z, T, at, Pt, vt, Ft; compute_crosscov=false, missing_mask=nothing, Ptt=nothing)
+    kalman_smoother(Z, T, at, Pt, vt, Ft; compute_crosscov=false, missing_mask=nothing,
+                    observed_mask=nothing, Ptt=nothing)
 
 AD-compatible RTS smoother. Takes filter outputs and returns smoothed states.
 
@@ -59,6 +60,7 @@ function kalman_smoother(
         Ft::AbstractArray;
         compute_crosscov::Bool = false,
         missing_mask::Union{Nothing, BitVector} = nothing,
+        observed_mask::Union{Nothing, AbstractMatrix{Bool}, BitMatrix} = nothing,
         Ptt::Union{Nothing, AbstractArray} = nothing
 )
     state_dim = size(T, 1)
@@ -106,24 +108,29 @@ function kalman_smoother(
             r_vec = r_new
             N_mat = N_new
         else
-            # Valid observation: full recursion
-            v_t = view(vt, :, t)
-            F_t = view(Ft, :, :, t)
+            # Valid observation. Where the period was only partly observed, the
+            # filter stored the reduced-system v_t and F_t in the leading
+            # positions, so the recursion uses the matching rows of Z.
+            pt = _period_obs_dim(observed_mask, vt, t)
+            rows = _period_obs_rows(observed_mask, vt, t)
+            Zr = _select_rows(Z, rows)
+            v_t = view(vt, 1:pt, t)
+            F_t = view(Ft, 1:pt, 1:pt, t)
 
             # F_t^{-1}
             F_inv = inv(F_t)
 
-            # Kalman gain: K_t = T * P_t * Z' * F_t^{-1}
-            K_t = T * P_t * Z' * F_inv
+            # Kalman gain: K_t = T * P_t * Zr' * F_t^{-1}
+            K_t = T * P_t * Zr' * F_inv
 
-            # L_t = T - K_t * Z
-            L_t = T - K_t * Z
+            # L_t = T - K_t * Zr
+            L_t = T - K_t * Zr
 
-            # Compute r_{t-1} = Z' * F_t^{-1} * v_t + L_t' * r_t
-            r_new = Z' * F_inv * v_t + L_t' * r_vec
+            # Compute r_{t-1} = Zr' * F_t^{-1} * v_t + L_t' * r_t
+            r_new = Zr' * F_inv * v_t + L_t' * r_vec
 
-            # Compute N_{t-1} = Z' * F_t^{-1} * Z + L_t' * N_t * L_t
-            N_new = Z' * F_inv * Z + L_t' * N_mat * L_t
+            # Compute N_{t-1} = Zr' * F_t^{-1} * Zr + L_t' * N_t * L_t
+            N_new = Zr' * F_inv * Zr + L_t' * N_mat * L_t
 
             # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
             alpha_smooth[:, t] = a_t + P_t * r_new
@@ -168,10 +175,12 @@ function kalman_smoother(
                 # Use provided filtered covariances
                 P_upd_t = view(Ptt, :, :, t)
             else
-                # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Z' * inv(F_t) * Z * P_{t|t-1}
-                F_t = view(Ft, :, :, t)
+                # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Zr' * inv(F_t) * Zr * P_{t|t-1}
+                pt = _period_obs_dim(observed_mask, vt, t)
+                Zr = _select_rows(Z, _period_obs_rows(observed_mask, vt, t))
+                F_t = view(Ft, 1:pt, 1:pt, t)
                 F_inv = inv(F_t)
-                P_upd_t = P_pred_t - P_pred_t * Z' * F_inv * Z * P_pred_t
+                P_upd_t = P_pred_t - P_pred_t * Zr' * F_inv * Zr * P_pred_t
             end
 
             # J_t = P_{t|t} * T' * inv(P_{t+1|t}), regularized for numerical stability
@@ -219,6 +228,7 @@ function kalman_smoother(
         result.Ft;
         compute_crosscov = compute_crosscov,
         missing_mask = result.missing_mask,
+        observed_mask = result.observed_mask,
         Ptt = result.Ptt
     )
 end
@@ -268,6 +278,7 @@ function kalman_smoother(
         filt.Ft;
         compute_crosscov = compute_crosscov,
         missing_mask = filt.missing_mask,
+        observed_mask = filt.observed_mask,
         Ptt = filt.Ptt
     )
 
@@ -318,7 +329,8 @@ function kalman_filter_and_smooth(
         filt.Pt,
         filt.vt,
         filt.Ft;
-        missing_mask = filt.missing_mask
+        missing_mask = filt.missing_mask,
+        observed_mask = filt.observed_mask
     )
 
     return (

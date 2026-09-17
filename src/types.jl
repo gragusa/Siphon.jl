@@ -170,7 +170,12 @@ Following FKF (R package) naming conventions:
 - `vt`: Innovations/prediction errors (p × n), NaN for missing
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n), zero for missing
-- `missing_mask`: BitVector indicating missing observations
+- `missing_mask`: BitVector, true where no row of the period was observed
+- `observed_mask`: BitMatrix (p × n), true where an individual value is present
+
+Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
+reduced-system quantities in their leading rows and columns for that period; the
+observed rows are `findall(view(observed_mask, :, t))`.
 
 # Accessor Methods
 Use accessor methods for clear, consistent API:
@@ -205,7 +210,24 @@ struct KalmanFilterResult{T <: Real, P <: KFParms}
     Ft::Array{T, 3}         # p × p × n
     Kt::Array{T, 3}         # m × p × n
     # Missing data
-    missing_mask::BitVector
+    missing_mask::BitVector    # n: true where no row of the period was observed
+    observed_mask::BitMatrix   # p × n: true where an individual value is present
+end
+
+# A result built without a per-element mask is fully observed wherever its period
+# mask says the period was observed.
+function KalmanFilterResult(
+        p::KFParms, loglik::Real, at::AbstractMatrix, Pt::AbstractArray{<:Any, 3},
+        att::AbstractMatrix, Ptt::AbstractArray{<:Any, 3}, vt::AbstractMatrix,
+        Ft::AbstractArray{<:Any, 3}, Kt::AbstractArray{<:Any, 3},
+        missing_mask::BitVector
+)
+    observed_mask = BitMatrix(undef, size(vt, 1), size(vt, 2))
+    for t in axes(observed_mask, 2)
+        observed_mask[:, t] .= !missing_mask[t]
+    end
+    return KalmanFilterResult(
+        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask)
 end
 
 # Accessor methods for KalmanFilterResult
@@ -307,6 +329,27 @@ kalman_gains(r::KalmanFilterResult) = r.Kt
 Return log-likelihood of non-missing observations.
 """
 loglikelihood(r::KalmanFilterResult) = r.loglik
+
+"""
+    missing_mask(r::KalmanFilterResult) -> BitVector
+
+Return the mask that is true for each period in which no row was observed.
+"""
+missing_mask(r::KalmanFilterResult) = r.missing_mask
+
+"""
+    observed_mask(r::KalmanFilterResult) -> BitMatrix
+
+Return the `p × n` mask that is true where an individual observation was present.
+"""
+observed_mask(r::KalmanFilterResult) = r.observed_mask
+
+"""
+    observed_rows(r::KalmanFilterResult, t::Integer) -> Vector{Int}
+
+Return the indices of the rows observed in period `t`, in increasing order.
+"""
+observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
 
 # ============================================
 # KalmanFilterResultScalar - Scalar version

@@ -329,5 +329,8 @@ include("diffuse_tests.jl")
 # Extended Kalman Filter tests
 include("ekf_tests.jl")
 
+# Per-element (partially observed period) missing data
+include("partial_missing_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")
