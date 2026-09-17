@@ -79,7 +79,7 @@ function kalman_smoother(
     @inbounds for t in n_obs:-1:1
         # Get predicted state and covariance at time t
         a_t = view(at, :, t)
-        P_t = view(Pt,:,:,t)
+        P_t = view(Pt, :, :, t)
 
         # Check for missing observation
         is_missing = if missing_mask !== nothing
@@ -108,7 +108,7 @@ function kalman_smoother(
         else
             # Valid observation: full recursion
             v_t = view(vt, :, t)
-            F_t = view(Ft,:,:,t)
+            F_t = view(Ft, :, :, t)
 
             # F_t^{-1}
             F_inv = inv(F_t)
@@ -150,8 +150,8 @@ function kalman_smoother(
         @inbounds for t in 1:(n_obs - 1)
             # Pt[:,:,t] is P_{t|t-1}
             # Pt[:,:,t+1] is P_{t+1|t}
-            P_pred_t = view(Pt,:,:,t)      # P_{t|t-1}
-            P_pred_tp1 = view(Pt,:,:,(t + 1))  # P_{t+1|t}
+            P_pred_t = view(Pt, :, :, t)      # P_{t|t-1}
+            P_pred_tp1 = view(Pt, :, :, (t + 1))  # P_{t+1|t}
 
             # Check if observation at time t is missing
             is_missing_t = if missing_mask !== nothing
@@ -166,10 +166,10 @@ function kalman_smoother(
                 P_upd_t = P_pred_t
             elseif Ptt !== nothing
                 # Use provided filtered covariances
-                P_upd_t = view(Ptt,:,:,t)
+                P_upd_t = view(Ptt, :, :, t)
             else
                 # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Z' * inv(F_t) * Z * P_{t|t-1}
-                F_t = view(Ft,:,:,t)
+                F_t = view(Ft, :, :, t)
                 F_inv = inv(F_t)
                 P_upd_t = P_pred_t - P_pred_t * Z' * F_inv * Z * P_pred_t
             end
@@ -179,7 +179,7 @@ function kalman_smoother(
             J_t = P_upd_t * T' * inv(Symmetric(Matrix(P_pred_tp1) + eps_reg * I))
 
             # V_{t+1} is the smoothed covariance at t+1
-            V_tp1 = view(V_smooth,:,:,(t + 1))
+            V_tp1 = view(V_smooth, :, :, (t + 1))
 
             # P_{t+1,t|n} = V_{t+1} * J_t'
             P_crosslag[:, :, t] = V_tp1 * J_t'

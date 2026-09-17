@@ -514,7 +514,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     @inbounds for t in 1:n
         # Store predicted state/covariance. `copyto!` is contiguous-safe.
         copyto!(view(ws.at, :, t), a_curr)
-        copyto!(view(ws.Pt,:,:,t), P_curr)
+        copyto!(view(ws.Pt, :, :, t), P_curr)
 
         y_t = view(y, :, t)
         if _has_missing(y_t)
@@ -522,13 +522,13 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
             # Mark innovations / gain as missing without wasted matmuls.
             fill!(view(ws.vt, :, t), T(NaN))
-            fill!(view(ws.Ft,:,:,t), T(NaN))
-            fill!(view(ws.Ft_L,:,:,t), zero(T))
-            fill!(view(ws.Kt,:,:,t), zero(T))
+            fill!(view(ws.Ft, :, :, t), T(NaN))
+            fill!(view(ws.Ft_L, :, :, t), zero(T))
+            fill!(view(ws.Kt, :, :, t), zero(T))
 
             # Filtered = predicted for missing observations.
             copyto!(view(ws.att, :, t), a_curr)
-            copyto!(view(ws.Ptt,:,:,t), P_curr)
+            copyto!(view(ws.Ptt, :, :, t), P_curr)
 
             # Propagate: a = T * a, P = T * P * T' + RQR
             mul!(ws.tmp_m2, ws.Tmat, a_curr)
@@ -553,7 +553,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             # F = Z * P * Z' + H; assemble directly into tmp_pp1 then store Ft.
             mul!(ws.tmp_pm, ws.Z, P_curr)             # tmp_pm = Z * P   (p×m)
             mul!(ws.tmp_pp1, ws.tmp_pm, Zt)           # tmp_pp1 = Z*P*Z' (p×p)
-            Ft_view = view(ws.Ft,:,:,t)
+            Ft_view = view(ws.Ft, :, :, t)
             @inbounds for idx in eachindex(ws.tmp_pp1)
                 ws.tmp_pp1[idx] += ws.H[idx]
                 Ft_view[idx] = ws.tmp_pp1[idx]
@@ -565,7 +565,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             L_lower = LowerTriangular(cholF.factors)
 
             # Store lower triangle of L; zero the strict upper for clean reuse.
-            FtL_view = view(ws.Ft_L,:,:,t)
+            FtL_view = view(ws.Ft_L, :, :, t)
             @inbounds for j in 1:p
                 for i in 1:(j - 1)
                     FtL_view[i, j] = zero(T)
@@ -600,7 +600,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             transpose!(ws.tmp_mp, ws.tmp_pm)          # tmp_mp = M
 
             # K_t = T * M
-            K_t = view(ws.Kt,:,:,t)
+            K_t = view(ws.Kt, :, :, t)
             mul!(K_t, ws.Tmat, ws.tmp_mp)
 
             # a_filt = a + M * v
@@ -614,7 +614,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             # tmp_pm, so recompute once (cheap vs. two ldiv!s on p×m we saved).
             mul!(ws.tmp_pm, ws.Z, P_curr)             # Z*P (p×m)
             mul!(ws.tmp_mm2, ws.tmp_mp, ws.tmp_pm)    # M * (Z*P) (m×m)
-            Ptt_view = view(ws.Ptt,:,:,t)
+            Ptt_view = view(ws.Ptt, :, :, t)
             @inbounds for idx in eachindex(P_curr)
                 Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
             end
@@ -669,7 +669,7 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
     @inbounds for t in n:-1:1
         # Views to stored filter results
         a_t = view(ws.at, :, t)
-        P_t = view(ws.Pt,:,:,t)
+        P_t = view(ws.Pt, :, :, t)
 
         if ws.missing_mask[t]
             # Missing observation: r_{t-1} = T' * r_t, N_{t-1} = T' * N_t * T
@@ -700,10 +700,10 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
         else
             # Valid observation
             v_t = view(ws.vt, :, t)
-            K_t = view(ws.Kt,:,:,t)
+            K_t = view(ws.Kt, :, :, t)
 
             # Reconstruct L from stored Ft_L
-            L_t = view(ws.Ft_L,:,:,t)
+            L_t = view(ws.Ft_L, :, :, t)
             L_lower = LowerTriangular(L_t)
 
             # L = T - K * Z
@@ -782,9 +782,9 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
             # where J_{t-1} = P_{t-1|t-1} * T' * inv(P_{t|t-1})
             #             = Ptt[:,:,t-1] * T' * inv(Pt[:,:,t])
 
-            V_t = view(ws.Vs,:,:,t)
-            Ptt_tm1 = view(ws.Ptt,:,:,(t - 1))      # P_{t-1|t-1}
-            Pt_t = view(ws.Pt,:,:,t)            # P_{t|t-1}
+            V_t = view(ws.Vs, :, :, t)
+            Ptt_tm1 = view(ws.Ptt, :, :, (t - 1))      # P_{t-1|t-1}
+            Pt_t = view(ws.Pt, :, :, t)            # P_{t|t-1}
 
             # J_{t-1} = Ptt_{t-1} * T' * inv(Pt_t)
             # tmp_mm1 = Ptt_{t-1} * T'
@@ -829,7 +829,7 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
             # Now J_smooth = J' = (Ptt_{t-1} * T' * inv(Pt_t))'
 
             # P_{t,t-1|n} = V_t * J_{t-1}' = V_t * J_smooth
-            Pcross_t = view(ws.Pcross,:,:,(t - 1))
+            Pcross_t = view(ws.Pcross, :, :, (t - 1))
             mul!(Pcross_t, V_t, ws.J_smooth)
         end
     end
@@ -1300,7 +1300,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
             # Kalman gain K = T * Pstar * Z' * F^{-1}
             mul!(base.tmp_mp, ws.Pstar, base.Z')
-            K_t = view(base.Kt,:,:,t)
+            K_t = view(base.Kt, :, :, t)
             mul!(K_t, base.Tmat, base.tmp_mp)
             L_lower = LowerTriangular(chol.factors)
             rdiv!(K_t, L_lower')
@@ -1326,7 +1326,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
             # Predict next
             a_filt = view(base.att, :, t)
-            P_filt = view(base.Ptt,:,:,t)
+            P_filt = view(base.Ptt, :, :, t)
             mul!(a_curr, base.Tmat, a_filt)
             mul!(base.tmp_mm2, base.Tmat, P_filt)
             mul!(ws.Pstar, base.tmp_mm2, base.Tmat')
@@ -1385,7 +1385,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
                 # Kstar = (T * Pstar * Z' + Kinf * Fstar) * Finf^{-1}
                 # K1 = T * Pstar * Z' (m × p)
                 mul!(base.tmp_mp, ws.Pstar, base.Z')            # tmp_mp = Pstar * Z' (m × p)
-                K_t = view(base.Kt,:,:,t)
+                K_t = view(base.Kt, :, :, t)
                 mul!(K_t, base.Tmat, base.tmp_mp)               # K_t = T * Pstar * Z' (m × p)
 
                 # K2 = Kinf * Fstar (m × p)
@@ -1499,7 +1499,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
                 # Kstar = T * Pstar * Z' * Fstar^{-1}
                 mul!(base.tmp_mp, ws.Pstar, base.Z')
-                K_t = view(base.Kt,:,:,t)
+                K_t = view(base.Kt, :, :, t)
                 mul!(K_t, base.Tmat, base.tmp_mp)
                 L_lower = LowerTriangular(chol.factors)
                 rdiv!(K_t, L_lower')
@@ -1735,7 +1735,7 @@ function compute_sufficient_stats!(
 
     @inbounds for t in 1:n
         α_t = view(kf_ws.αs, :, t)       # Smoothed state E[α_t | Y]
-        V_t = view(kf_ws.Vs,:,:,t)    # Smoothed covariance Var[α_t | Y]
+        V_t = view(kf_ws.Vs, :, :, t)    # Smoothed covariance Var[α_t | Y]
 
         # E[α_t α_t'|Y] = V_t + α_t α_t'. Every time step contributes once to
         # S_αα; interior steps (1<t<n) also contribute to both S_00 and S_11.
@@ -1782,7 +1782,7 @@ function compute_sufficient_stats!(
         # S_10: Σ_{t=2}^{n} E[α_t α_{t-1}'|Y] = Σ (Pcross_{t-1} + α_t α_{t-1}').
         if t > 1
             α_tm1 = view(kf_ws.αs, :, t - 1)
-            Pcross_tm1 = view(kf_ws.Pcross,:,:,(t - 1))
+            Pcross_tm1 = view(kf_ws.Pcross, :, :, (t - 1))
             @simd for j in 1:m
                 @simd for i in 1:m
                     em_ws.S_10[i, j] += Pcross_tm1[i, j] + α_t[i] * α_tm1[j]
@@ -3757,7 +3757,7 @@ function _compute_static_sufficient_stats(
 
     @inbounds for t in 1:n
         alpha_t = view(alpha, :, t)
-        V_t = view(V,:,:,t)
+        V_t = view(V, :, :, t)
 
         # Observation-related statistics: only for non-missing observations
         if !missing_mask[t]
@@ -3787,9 +3787,9 @@ function _compute_static_sufficient_stats(
         # Cross-lag and lagged statistics: for t >= 2
         if t >= 2
             alpha_tm1 = view(alpha, :, t-1)
-            V_tm1 = view(V,:,:,(t - 1))
+            V_tm1 = view(V, :, :, (t - 1))
             # P_crosslag[:,:,t-1] contains Cov[α_t, α_{t-1} | Y]
-            P_cross = view(P_crosslag,:,:,(t - 1))
+            P_cross = view(P_crosslag, :, :, (t - 1))
 
             # S_aa_prev += E[α_{t-1} α_{t-1}' | Y] for t=2:n
             for j in 1:m, i in 1:m
@@ -4859,7 +4859,7 @@ function update_ar_errors!(
 
     # γ(j) from S_ee_lag
     for lag in 1:r
-        γ[lag + 1] = sum(diag(view(dfm_ws.S_ee_lag,:,:,lag))) / (N * (n - r))
+        γ[lag + 1] = sum(diag(view(dfm_ws.S_ee_lag, :, :, lag))) / (N * (n - r))
     end
 
     # Build Yule-Walker system
@@ -5457,7 +5457,7 @@ function forecast(model::DynamicFactorModel{T}, h::Int) where {T}
 
         # Observation covariance: Fₙ₊ⱼ|ₙ = Z Pₙ₊ⱼ|ₙ Z' + H
         mul!(tmp_nm, Z, P_h)
-        mul!(view(obs_cov,:,:,j), tmp_nm, Z')
+        mul!(view(obs_cov, :, :, j), tmp_nm, Z')
         obs_cov[:, :, j] .+= H
 
         # Update for next iteration

@@ -103,7 +103,7 @@ end
     R = [Matrix{Float64}(I, m₀, m₀); zeros(1, m₀)]            # m × m₀
     H_init = 0.01 .* Matrix{Float64}(I, m₀, m₀)
     Q_init = 0.1 .* Matrix{Float64}(I, m₀, m₀)
-    ã1 = zeros(m);
+    ã1 = zeros(m)
     ã1[m] = 1.0
     P̃1 = diagm([10.0, 10.0, 0.0])
 
@@ -166,7 +166,7 @@ end
     R = Matrix{Float64}(I, m, m)
     H_init = 0.01 .* Matrix{Float64}(I, m, m)
     Q_init = 0.1 .* Matrix{Float64}(I, m, m)
-    a1 = zeros(m);
+    a1 = zeros(m)
     P1 = 10.0 .* Matrix{Float64}(I, m, m)
 
     em = _em_general_ssm_full_cov(

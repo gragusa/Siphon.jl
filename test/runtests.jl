@@ -326,5 +326,8 @@ include("arma_tests.jl")
 # Exact diffuse filter tests
 include("diffuse_tests.jl")
 
+# Extended Kalman Filter tests
+include("ekf_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")

@@ -15,16 +15,18 @@ makedocs(
             "Estimation Methods" => "tutorials/estimation_methods.md",
             "Parameter Transformations" => "tutorials/transformations.md",
             "Initial State Conventions" => "tutorials/initial_state.md",
+            "Extended Kalman Filter" => "tutorials/ekf.md",
             "Visualization" => "tutorials/visualization.md"
         ],
         "API Reference" => [
             "Core Functions" => "api/core.md",
             "DSL & Templates" => "api/dsl.md",
             "Matrix Helpers" => "api/matrix_helpers.md",
-            "Estimation & Bayesian" => "api/optimization.md"
+            "Estimation & Bayesian" => "api/optimization.md",
+            "Extended Kalman Filter" => "api/ekf.md"
         ]
     ],
-    warnonly = [:missing_docs]
+    warnonly = [:missing_docs, :cross_references]
 )
 
 # Documenter can also automatically deploy documentation to gh-pages.

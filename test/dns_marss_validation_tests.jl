@@ -201,17 +201,17 @@ end
     R = Matrix(1.0I, m, m)
     P1 = T_init * (100.0 * Matrix(1.0I, m, m)) * T_init' + R * Q_init * R'
 
-    T_dsl = Matrix{Any}(undef, m, m);
+    T_dsl = Matrix{Any}(undef, m, m)
     fill!(T_dsl, 0.0)
     for i in 1:m
         T_dsl[i, i] = FreeParam(Symbol(:B, i); init = B_init[i], lower = -Inf, upper = Inf)
     end
-    H_dsl = Matrix{Any}(undef, p, p);
+    H_dsl = Matrix{Any}(undef, p, p)
     fill!(H_dsl, 0.0)
     for i in 1:p
         H_dsl[i, i] = FreeParam(Symbol(:H, i); init = 0.01, lower = 0.0, upper = Inf)
     end
-    Q_dsl = Matrix{Any}(undef, m, m);
+    Q_dsl = Matrix{Any}(undef, m, m)
     fill!(Q_dsl, 0.0)
     for i in 1:m
         Q_dsl[i, i] = FreeParam(Symbol(:Q, i); init = Q_init_diag[i], lower = 0.0, upper = Inf)

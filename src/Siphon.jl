@@ -9,6 +9,10 @@ include("types.jl")
 include("filter_ad.jl")
 include("smoother_ad.jl")
 
+# EKF extension — types + functional (AD-compatible) likelihood/filter
+include("ekf_types.jl")
+include("ekf_ad.jl")
+
 # Core Kalman filter/smoother exports
 export KFParms, KFParms_static
 export KalmanFilterResult, KalmanFilterResultScalar, SmootherWorkspace
@@ -40,6 +44,10 @@ include("predict.jl")
 # In-place filter/smoother for large models (depends on DSL types)
 include("inplace.jl")
 
+# In-place EKF workspace (depends on inplace.jl loading first so its
+# `set_params!` / `update_params!` exist; we add EKF-typed methods on top.)
+include("ekf_inplace.jl")
+
 # Plotting recipes (depends on filter/smoother types and inplace types)
 include("recipes.jl")
 
@@ -48,6 +56,14 @@ export predict, forecast, forecast_paths
 
 # Missing data utilities
 export missing_to_nan, nan_to_missing, count_missing, ismissing_obs
+
+# EKF extension exports
+export AbstractEKFMeasurement, EKFParms, EKFFilterResult
+export AbstractEKFJacobianMode, ADJacobian, AnalyticJacobian, FiniteDiffJacobian
+export measurement, measurement!, measurement_jacobian, measurement_jacobian!
+export ekf_loglik, ekf_filter
+export EKFWorkspace, ekf_filter!, ekf_smoother!, ekf_filter_and_smooth!
+export predicted_observations, measurement_jacobians
 
 # Re-export DSL components
 export SSMParameter, SSMSpec, FixedValue, ParameterRef, SSMMatrixSpec
@@ -80,6 +96,11 @@ export FlatPrior, NormalPrior, NormalPriorVec, InverseGammaPrior, CompositePrior
 
 # Optimization (Optimization.jl integration)
 export optimize_ssm, optimize_ssm_with_stderr
+
+# EKF DSL surface
+export EKFSpec, MeasurementExpr, custom_ekf
+export build_measurement, build_ekfparms, build_nonlinear_state_space
+export EKFLogDensity, optimize_ekf
 
 # EM algorithm (DSL-based) - main API is fit!(EM(), model, y)
 export EMResult, profile_em_ssm, ProfileEMResult

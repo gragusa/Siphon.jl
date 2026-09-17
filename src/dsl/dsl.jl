@@ -51,6 +51,12 @@ using TransformVariables
 using ..Siphon: KFParms, KFParms_static, kalman_loglik
 using ..Siphon: kalman_filter, kalman_smoother
 using ..Siphon: to_static_if_small, STATIC_THRESHOLD
+# EKF surface used by the DSL extension
+using ..Siphon: AbstractEKFMeasurement, AbstractEKFJacobianMode, ADJacobian,
+                AnalyticJacobian, EKFParms
+# Import (not just `using`) so that a DSL-side definition of `ekf_loglik`
+# extends Siphon's existing function rather than shadowing it.
+import ..Siphon: ekf_loglik
 
 include("types.jl")
 include("codegen.jl")
@@ -61,6 +67,10 @@ include("expressions.jl")
 include("bayesian.jl")
 include("optimization.jl")
 include("em.jl")
+# EKF DSL: builds on builder.jl/codegen.jl/optimization.jl
+include("ekf_spec.jl")
+include("ekf_codegen.jl")
+include("ekf_optim.jl")
 
 # Re-export key functions
 export SSMParameter, SSMSpec, FixedValue, ParameterRef, SSMMatrixSpec
@@ -97,5 +107,10 @@ export optimize_ssm, optimize_ssm_with_stderr
 
 # EM algorithm - main API is fit!(EM(), model, y)
 export EMResult, profile_em_ssm, ProfileEMResult
+
+# EKF DSL surface
+export EKFSpec, MeasurementExpr, custom_ekf
+export build_measurement, build_ekfparms, build_nonlinear_state_space
+export EKFLogDensity, optimize_ekf
 
 end # module DSL
