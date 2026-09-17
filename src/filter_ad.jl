@@ -721,7 +721,7 @@ function kalman_filter(
                 if !issuccess(chol_result)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask)
                 end
                 Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))

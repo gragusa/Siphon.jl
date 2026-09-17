@@ -422,6 +422,7 @@ per-step Jacobian `tmp_Zt` and the measurement linearisation stored in
 function ekf_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
     @assert size(y) == (p, n) "Observation matrix size mismatch"
+    _require_no_partial_periods(y, "ekf_filter!")
 
     ws.loglik = zero(T)
     ws.n_obs_valid = 0

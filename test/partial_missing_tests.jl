@@ -332,3 +332,63 @@ end
               !any(view(Siphon.observed_mask(result), :, t))
     end
 end
+
+# A linear measurement makes the EKF reduce to the Kalman filter, so these tests
+# exercise the guard rather than any nonlinear behavior.
+struct PartialMissingEKFMeasurement{ZT <: AbstractMatrix} <: Siphon.AbstractEKFMeasurement
+    Z::ZT
+end
+
+Siphon.measurement(m::PartialMissingEKFMeasurement, a, t) = m.Z * a
+Siphon.measurement!(out, m::PartialMissingEKFMeasurement, a, t) = (mul!(out, m.Z, a); out)
+Siphon.measurement_jacobian(m::PartialMissingEKFMeasurement, a, t) = m.Z
+function Siphon.measurement_jacobian!(Z, m::PartialMissingEKFMeasurement, a, t)
+    copyto!(Z, m.Z)
+    return Z
+end
+
+@testset "partial missing — the EKF paths reject a partial period" begin
+    s = _partial_missing_setup(; p = 3, m = 2, n = 10)
+    meas = PartialMissingEKFMeasurement(s.Z)
+    parms = EKFParms(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q)
+
+    y = copy(s.y)
+    y[2, 4] = NaN
+
+    # The EKF updates one period at a time, so a partially observed period would
+    # otherwise discard the rows that are present.
+    @test_throws "period 4 is partially observed" ekf_loglik(parms, y, s.a1, s.P1)
+    @test_throws "handles missing data per period" ekf_filter(parms, y, s.a1, s.P1)
+
+    ws = EKFWorkspace(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q, s.a1, s.P1, s.n)
+    @test_throws "period 4 is partially observed" ekf_filter!(ws, y)
+    @test_throws "ekf_filter!" ekf_filter_and_smooth!(ws, y)
+
+    # Fully observed and entirely missing periods remain valid on these paths.
+    y_whole = copy(s.y)
+    y_whole[:, 4] .= NaN
+    @test ekf_loglik(parms, y_whole, s.a1, s.P1) isa Real
+    @test ekf_filter!(ws, y_whole) isa Real
+    @test ekf_loglik(parms, s.y, s.a1, s.P1) isa Real
+end
+
+@testset "partial missing — the static path returns on a singular innovation covariance" begin
+    using StaticArrays
+
+    # A negative eigenvalue in H makes F = Z P Z' + H indefinite, so its Cholesky
+    # reports failure and the filter returns -Inf instead of factoring.
+    Z = SMatrix{2, 2}(Matrix{Float64}(I, 2, 2))
+    H = SMatrix{2, 2}([1.0 0.0; 0.0 -5.0])
+    T = SMatrix{2, 2}([0.5 0.0; 0.0 0.5])
+    R = SMatrix{2, 2}(Matrix{Float64}(I, 2, 2))
+    Q = SMatrix{2, 2}(Matrix{Float64}(I, 2, 2))
+    a1 = SVector{2}(zeros(2))
+    P1 = SMatrix{2, 2}(Matrix{Float64}(I, 2, 2))
+    parms = KFParms(Z, H, T, R, Q)
+    y = [1.0 1.0; 1.0 1.0]
+
+    result = kalman_filter(parms, y, a1, P1)
+    @test loglikelihood(result) == -Inf
+    @test Siphon.missing_mask(result) isa BitVector
+    @test size(Siphon.observed_mask(result)) == (2, 2)
+end

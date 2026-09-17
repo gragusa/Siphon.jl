@@ -91,6 +91,7 @@ function ekf_loglik(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    _require_no_partial_periods(y, "ekf_loglik")
     n = size(y, 2)
     obs_dim = size(y, 1)
     ET = _ekf_filter_eltype(p, a1, P1)
@@ -188,6 +189,7 @@ function ekf_filter(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    _require_no_partial_periods(y, "ekf_filter")
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
