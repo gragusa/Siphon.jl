@@ -3,6 +3,7 @@ module Siphon
 using StaticArrays
 using ForwardDiff
 using LinearAlgebra
+using Random: Random, AbstractRNG, randn!
 using RecipesBase
 
 include("types.jl")
@@ -47,6 +48,9 @@ include("inplace.jl")
 # In-place EKF workspace (depends on inplace.jl loading first so its
 # `set_params!` / `update_params!` exist; we add EKF-typed methods on top.)
 include("ekf_inplace.jl")
+
+# Simulation smoother (depends on the in-place workspace)
+include("simsmooth.jl")
 
 # Plotting recipes (depends on filter/smoother types and inplace types)
 include("recipes.jl")
@@ -113,6 +117,10 @@ export set_params!, set_initial!, update_params!
 # Note: Use kalman_filter!(ws::DiffuseKalmanWorkspace, y) - workspace type determines diffuse
 export DiffuseKalmanWorkspace
 export set_initial_diffuse!
+
+# Simulation smoother (Durbin & Koopman 2002)
+export SimulationSmootherWorkspace, simulation_smoother, simulation_smoother!
+export refresh_factors!
 
 # In-place EM algorithm
 export EMWorkspace, compute_sufficient_stats!, em_estimate!

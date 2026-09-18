@@ -86,7 +86,17 @@ enabling zero-allocation iterations after initial construction.
 - `Ft`: Innovation covariances (p × p × n)
 - `Ft_L`: Cholesky factors (lower triangular) of Ft (p × p × n)
 - `Kt`: Kalman gains (m × p × n)
-- `missing_mask`: BitVector indicating missing observations
+- `missing_mask`: BitVector, true where period t has no observed row at all
+- `observed_mask`: BitMatrix (p × n), true where yₜ[i] is observed
+- `n_observed`: Vector{Int} (n), the number of observed rows pₜ in each period
+- `obs_rows`: Matrix{Int} (p × n), the observed row indices of each period in the
+  first `n_observed[t]` entries of column t
+
+When a period is partially observed the filter works on the reduced system formed
+by those rows, so `vt`, `Ft`, `Ft_L` and `Kt` carry pₜ-sized blocks in their
+leading rows and columns for that period; entries beyond pₜ are `NaN` for `vt` and
+`Ft` and zero for `Ft_L` and `Kt`. Use `observed_rows(ws, t)` to recover which
+original row each leading position corresponds to.
 
 ## Smoother storage
 - `αs`: Smoothed states E[αₜ|y₁:ₙ] (m × n)
@@ -129,6 +139,9 @@ mutable struct KalmanWorkspace{T <: Real}
     Ft_L::Array{T, 3}      # p × p × n: Cholesky factors (lower tri)
     Kt::Array{T, 3}        # m × p × n: Kalman gains
     missing_mask::BitVector
+    observed_mask::BitMatrix  # p × n: true where y[i,t] is observed
+    n_observed::Vector{Int}   # n: number of observed rows per period
+    obs_rows::Matrix{Int}     # p × n: observed row indices, first n_observed[t] entries valid
 
     # Smoother storage
     αs::Matrix{T}         # m × n: smoothed states
@@ -143,6 +156,7 @@ mutable struct KalmanWorkspace{T <: Real}
     tmp_pp2::Matrix{T}    # p × p
     tmp_mp::Matrix{T}     # m × p
     tmp_pm::Matrix{T}     # p × m
+    tmp_pm2::Matrix{T}    # p × m
     tmp_mr::Matrix{T}     # m × r
     tmp_m1::Vector{T}     # m
     tmp_m2::Vector{T}     # m
@@ -158,6 +172,7 @@ mutable struct KalmanWorkspace{T <: Real}
     # Scalars
     loglik::T
     n_obs_valid::Int
+    n_obs_rows::Int
 end
 
 """
@@ -201,6 +216,9 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         Array{T, 3}(undef, p, p, n),  # Ft_L
         Array{T, 3}(undef, m, p, n),  # Kt
         BitVector(undef, n),         # missing_mask
+        BitMatrix(undef, p, n),      # observed_mask
+        Vector{Int}(undef, n),       # n_observed
+        Matrix{Int}(undef, p, n),    # obs_rows
 
         # Smoother storage
         Matrix{T}(undef, m, n),      # αs
@@ -215,6 +233,7 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         Matrix{T}(undef, p, p),      # tmp_pp2
         Matrix{T}(undef, m, p),      # tmp_mp
         Matrix{T}(undef, p, m),      # tmp_pm
+        Matrix{T}(undef, p, m),      # tmp_pm2
         Matrix{T}(undef, m, r),      # tmp_mr
         Vector{T}(undef, m),         # tmp_m1
         Vector{T}(undef, m),         # tmp_m2
@@ -229,7 +248,8 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
 
         # Scalars
         zero(T),                     # loglik
-        0                            # n_obs_valid
+        0,                           # n_obs_valid
+        0                            # n_obs_rows
     )
 end
 
@@ -350,9 +370,42 @@ loglikelihood(ws::KalmanWorkspace) = ws.loglik
 """
     missing_mask(ws::KalmanWorkspace) -> BitVector
 
-Return BitVector indicating which observations are missing.
+Return a BitVector that is true for each period in which no row was observed.
+For periods that are partially observed, see [`observed_mask`](@ref).
 """
 missing_mask(ws::KalmanWorkspace) = ws.missing_mask
+
+"""
+    observed_mask(ws::KalmanWorkspace) -> BitMatrix
+
+Return the `p × n` mask that is true where an individual observation was present.
+`missing_mask(ws)[t]` is true exactly when column `t` of this mask is all false.
+"""
+observed_mask(ws::KalmanWorkspace) = ws.observed_mask
+
+"""
+    observed_rows(ws::KalmanWorkspace, t::Integer) -> SubArray{Int}
+
+Return the indices of the rows observed in period `t`, in increasing order.
+
+The filter stores `vt`, `Ft`, `Ft_L` and `Kt` for a partially observed period in
+the leading rows and columns of their slices, so position `k` of those blocks
+corresponds to row `observed_rows(ws, t)[k]` of the full observation vector.
+"""
+function observed_rows(ws::KalmanWorkspace, t::Integer)
+    1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
+    return view(ws.obs_rows, 1:ws.n_observed[t], t)
+end
+
+"""
+    n_observed(ws::KalmanWorkspace, t::Integer) -> Int
+
+Return the number of rows observed in period `t`.
+"""
+function n_observed(ws::KalmanWorkspace, t::Integer)
+    1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
+    return ws.n_observed[t]
+end
 
 # ============================================
 # Parameter setters
@@ -500,6 +553,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     # Reset scalars
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
+    ws.n_obs_rows = 0
 
     # Working state/covariance held in scratch space (tmp_m1 / tmp_mm1).
     a_curr = ws.tmp_m1
@@ -517,7 +571,14 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
         copyto!(view(ws.Pt, :, :, t), P_curr)
 
         y_t = view(y, :, t)
-        if _has_missing(y_t)
+        obs_rows_t = view(ws.obs_rows, :, t)
+        pt = _observed_rows!(obs_rows_t, y_t)
+        ws.n_observed[t] = pt
+        @inbounds for i in 1:p
+            ws.observed_mask[i, t] = !isnan(y_t[i])
+        end
+
+        if pt == 0
             ws.missing_mask[t] = true
 
             # Mark innovations / gain as missing without wasted matmuls.
@@ -542,78 +603,98 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
         else
             ws.missing_mask[t] = false
             ws.n_obs_valid += 1
+            ws.n_obs_rows += pt
 
-            # Innovation: v = y - Z * a
-            mul!(ws.tmp_p1, ws.Z, a_curr)
-            v_t = view(ws.vt, :, t)
-            @inbounds for i in 1:p
-                v_t[i] = y_t[i] - ws.tmp_p1[i]
+            rows = view(obs_rows_t, 1:pt)
+
+            # The measurement update runs on the reduced system (Z_t, H_t, y_t)
+            # formed by the observed rows. Every p-shaped buffer is used at its
+            # leading pt rows and columns, so a partially observed period costs a
+            # pt-sized factorization rather than a p-sized one. When pt == p the
+            # gather is the identity and this is the fully observed recursion.
+            Zr = view(ws.tmp_pm, 1:pt, :)             # Z_t (pt×m)
+            @inbounds for j in 1:m, (k, i) in pairs(rows)
+
+                Zr[k, j] = ws.Z[i, j]
             end
 
-            # F = Z * P * Z' + H; assemble directly into tmp_pp1 then store Ft.
-            mul!(ws.tmp_pm, ws.Z, P_curr)             # tmp_pm = Z * P   (p×m)
-            mul!(ws.tmp_pp1, ws.tmp_pm, Zt)           # tmp_pp1 = Z*P*Z' (p×p)
+            # Innovation: v = y_t - Z_t * a
+            v_full = view(ws.vt, :, t)
+            fill!(v_full, T(NaN))
+            v_t = view(v_full, 1:pt)
+            tmp_p1r = view(ws.tmp_p1, 1:pt)
+            mul!(tmp_p1r, Zr, a_curr)
+            @inbounds for (k, i) in pairs(rows)
+                v_t[k] = y_t[i] - tmp_p1r[k]
+            end
+
+            # F = Z_t * P * Z_t' + H_t, assembled into the leading block of
+            # tmp_pp1 and stored in the leading block of Ft.
+            ZrP = view(ws.tmp_pm2, 1:pt, :)           # Z_t * P (pt×m)
+            mul!(ZrP, Zr, P_curr)
+            Fr = view(ws.tmp_pp1, 1:pt, 1:pt)
+            mul!(Fr, ZrP, transpose(Zr))
             Ft_view = view(ws.Ft, :, :, t)
-            @inbounds for idx in eachindex(ws.tmp_pp1)
-                ws.tmp_pp1[idx] += ws.H[idx]
-                Ft_view[idx] = ws.tmp_pp1[idx]
+            fill!(Ft_view, T(NaN))
+            @inbounds for (l, j) in pairs(rows), (k, i) in pairs(rows)
+
+                Fr[k, l] += ws.H[i, j]
+                Ft_view[k, l] = Fr[k, l]
             end
 
             # Cholesky on Symmetric(:L) reads only the lower triangle, so we do
-            # not need to symmetrize tmp_pp1 first.
-            cholF = cholesky!(Symmetric(ws.tmp_pp1, :L))
+            # not need to symmetrize Fr first.
+            cholF = cholesky!(Symmetric(Fr, :L))
             L_lower = LowerTriangular(cholF.factors)
 
-            # Store lower triangle of L; zero the strict upper for clean reuse.
+            # Store lower triangle of L; zero the rest for clean reuse.
             FtL_view = view(ws.Ft_L, :, :, t)
-            @inbounds for j in 1:p
-                for i in 1:(j - 1)
-                    FtL_view[i, j] = zero(T)
-                end
-                for i in j:p
-                    FtL_view[i, j] = L_lower[i, j]
-                end
+            fill!(FtL_view, zero(T))
+            @inbounds for j in 1:pt, i in j:pt
+
+                FtL_view[i, j] = L_lower[i, j]
             end
 
             # log|F| = 2 * Σ log L[i,i]
             logdetF = zero(T)
-            @inbounds for i in 1:p
+            @inbounds for i in 1:pt
                 logdetF += log(L_lower[i, i])
             end
             logdetF += logdetF  # multiply by 2
 
             # quad form: v' * F^{-1} * v = || L^{-1} v ||^2
-            copyto!(ws.tmp_p2, v_t)
-            ldiv!(L_lower, ws.tmp_p2)                 # tmp_p2 = L^{-1} v
+            tmp_p2r = view(ws.tmp_p2, 1:pt)
+            copyto!(tmp_p2r, v_t)
+            ldiv!(L_lower, tmp_p2r)                   # tmp_p2r = L^{-1} v
             quad_form = zero(T)
-            @inbounds for i in 1:p
-                quad_form += ws.tmp_p2[i]^2
+            @inbounds for i in 1:pt
+                quad_form += tmp_p2r[i]^2
             end
             ws.loglik += -T(0.5) * (logdetF + quad_form)
 
-            # Core quantity: M = P * Z' * F^{-1} (m×p). Reused for K, att, Ptt.
-            # Compute as (F^{-1} * Z * P)' via two ldiv! on Z*P, then transpose.
-            # (tmp_pm already holds Z*P).
-            ldiv!(L_lower, ws.tmp_pm)                 # L^{-1} (Z*P)
-            ldiv!(transpose(L_lower), ws.tmp_pm)      # L^{-T} L^{-1} (Z*P) = F^{-1} (Z*P)
-            # M = (F^{-1} Z P)' → transpose into tmp_mp (m×p)
-            transpose!(ws.tmp_mp, ws.tmp_pm)          # tmp_mp = M
+            # Core quantity: M = P * Z_t' * F^{-1} (m×pt). Reused for K, att, Ptt.
+            # Compute as (F^{-1} * Z_t * P)' via two ldiv! on Z_t*P, then transpose.
+            ldiv!(L_lower, ZrP)                       # L^{-1} (Z_t*P)
+            ldiv!(transpose(L_lower), ZrP)            # F^{-1} (Z_t*P)
+            Mr = view(ws.tmp_mp, :, 1:pt)
+            transpose!(Mr, ZrP)                       # Mr = M
 
-            # K_t = T * M
-            K_t = view(ws.Kt, :, :, t)
-            mul!(K_t, ws.Tmat, ws.tmp_mp)
+            # K_t = T * M, stored in the leading pt columns.
+            K_view = view(ws.Kt, :, :, t)
+            fill!(K_view, zero(T))
+            mul!(view(K_view, :, 1:pt), ws.Tmat, Mr)
 
             # a_filt = a + M * v
-            mul!(ws.tmp_m2, ws.tmp_mp, v_t)
+            mul!(ws.tmp_m2, Mr, v_t)
             att_view = view(ws.att, :, t)
             @inbounds for i in 1:m
                 att_view[i] = a_curr[i] + ws.tmp_m2[i]
             end
 
-            # P_filt = P - M * (Z * P). We need Z*P; the ldiv!s above overwrote
-            # tmp_pm, so recompute once (cheap vs. two ldiv!s on p×m we saved).
-            mul!(ws.tmp_pm, ws.Z, P_curr)             # Z*P (p×m)
-            mul!(ws.tmp_mm2, ws.tmp_mp, ws.tmp_pm)    # M * (Z*P) (m×m)
+            # P_filt = P - M * (Z_t * P). The ldiv!s above overwrote ZrP, so
+            # recompute it once.
+            mul!(ZrP, Zr, P_curr)
+            mul!(ws.tmp_mm2, Mr, ZrP)                 # M * (Z_t*P) (m×m)
             Ptt_view = view(ws.Ptt, :, :, t)
             @inbounds for idx in eachindex(P_curr)
                 Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
@@ -629,7 +710,9 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
         end
     end
 
-    ws.loglik += -p * ws.n_obs_valid * log2pi / 2
+    # The Gaussian constant counts every observed scalar, which is Σₜ pₜ rather
+    # than p times the number of periods carrying any observation.
+    ws.loglik += -ws.n_obs_rows * log2pi / 2
     return ws.loglik
 end
 
@@ -698,45 +781,59 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
                 ws.Vs[i, j, t] = P_t[i, j] - ws.tmp_mm2[i, j]
             end
         else
-            # Valid observation
-            v_t = view(ws.vt, :, t)
-            K_t = view(ws.Kt, :, :, t)
+            # Valid observation. The filter stored pt-sized blocks for this
+            # period, so the recursion runs against the same reduced system:
+            # Z_t is the observed rows of Z, and K_t and L_t are its leading
+            # pt columns.
+            pt = ws.n_observed[t]
+            rows = view(ws.obs_rows, 1:pt, t)
 
-            # Reconstruct L from stored Ft_L
-            L_t = view(ws.Ft_L, :, :, t)
+            v_t = view(ws.vt, 1:pt, t)
+            K_t = view(ws.Kt, :, 1:pt, t)
+
+            # Reconstruct L from the stored leading block of Ft_L
+            L_t = view(ws.Ft_L, 1:pt, 1:pt, t)
             L_lower = LowerTriangular(L_t)
 
-            # L = T - K * Z
-            # L_smooth = T - K * Z
-            mul!(ws.L_smooth, K_t, ws.Z)           # L_smooth = K * Z
+            Zr = view(ws.tmp_pm, 1:pt, :)          # Z_t (pt×m)
+            @inbounds for j in 1:m, (k, i) in pairs(rows)
+
+                Zr[k, j] = ws.Z[i, j]
+            end
+
+            # L_smooth = T - K_t * Z_t
+            mul!(ws.L_smooth, K_t, Zr)
             for j in 1:m, i in 1:m
 
                 ws.L_smooth[i, j] = ws.Tmat[i, j] - ws.L_smooth[i, j]
             end
 
             # F^{-1} * v: solve L * L' * x = v
-            copyto!(ws.tmp_p1, v_t)
-            ldiv!(L_lower, ws.tmp_p1)
-            ldiv!(L_lower', ws.tmp_p1)             # tmp_p1 = F^{-1} * v
+            tmp_p1r = view(ws.tmp_p1, 1:pt)
+            copyto!(tmp_p1r, v_t)
+            ldiv!(L_lower, tmp_p1r)
+            ldiv!(L_lower', tmp_p1r)               # tmp_p1r = F^{-1} * v
 
-            # F^{-1} * Z: solve F * X = Z for X
-            # F = L * L', so F^{-1} = L'^{-1} * L^{-1}
-            # F^{-1} * Z = L'^{-1} * L^{-1} * Z
-            copyto!(ws.tmp_pm, ws.Z)               # tmp_pm = Z (p × m)
-            ldiv!(L_lower, ws.tmp_pm)              # tmp_pm := L^{-1} * Z
-            ldiv!(L_lower', ws.tmp_pm)             # tmp_pm := L'^{-1} * tmp_pm = F^{-1} * Z
-
-            # r_{t-1} = Z' * F^{-1} * v + L' * r
-            # = Z' * tmp_p1 + L_smooth' * r_smooth
-            mul!(ws.tmp_m1, ws.Z', ws.tmp_p1)      # Z' * F^{-1} * v
+            # r_{t-1} = Z_t' * F^{-1} * v + L' * r
+            mul!(ws.tmp_m1, transpose(Zr), tmp_p1r)
             mul!(ws.tmp_m2, ws.L_smooth', ws.r_smooth)  # L' * r
             for i in 1:m
                 ws.r_smooth[i] = ws.tmp_m1[i] + ws.tmp_m2[i]
             end
 
-            # N_{t-1} = Z' * F^{-1} * Z + L' * N * L
-            # = Z' * tmp_pm + L' * N * L
-            mul!(ws.tmp_mm1, ws.Z', ws.tmp_pm)     # Z' * F^{-1} * Z (m × m)
+            # F^{-1} * Z_t: solve F * X = Z_t. Done after r_{t-1} because it
+            # overwrites Zr in place.
+            ldiv!(L_lower, Zr)                     # Zr := L^{-1} * Z_t
+            ldiv!(L_lower', Zr)                    # Zr := F^{-1} * Z_t
+
+            # N_{t-1} = Z_t' * F^{-1} * Z_t + L' * N * L. Rebuild Z_t' from the
+            # gathered rows, since Zr now holds F^{-1} Z_t.
+            ZrT = view(ws.tmp_mp, :, 1:pt)
+            @inbounds for (k, i) in pairs(rows), j in 1:m
+
+                ZrT[j, k] = ws.Z[i, j]
+            end
+            mul!(ws.tmp_mm1, ZrT, Zr)              # Z_t' * F^{-1} * Z_t (m × m)
             mul!(ws.tmp_mm2, ws.L_smooth', ws.N_smooth)  # L' * N
             mul!(ws.tmp_mm3, ws.tmp_mm2, ws.L_smooth)    # L' * N * L
             for j in 1:m, i in 1:m
@@ -1148,10 +1245,12 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
     @assert size(y) == (p, n) "Observation matrix size mismatch"
+    _require_no_partial_periods(y, "kalman_filter_diffuse!")
 
     # Reset state
     base.loglik = zero(T)
     base.n_obs_valid = 0
+    base.n_obs_rows = 0
     ws.d = 0
     ws.diffuse_ended = false
 
@@ -3458,6 +3557,7 @@ function fit!(
     p_obs, n = size(y)
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
     @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _require_no_partial_periods(y, "fit!(EM(), ...)")
 
     # All models route through the in-place EM path. Benchmarks show the
     # in-place workspace beats the pure/static EM by 1.6–2.6× even on the
@@ -5322,6 +5422,7 @@ function fit!(
         "Data has $n time periods but model workspace allocated for $(model.kf_ws.n_times)",
     ),
     )
+    _require_no_partial_periods(y, "fit!(EM(), ::DynamicFactorModel, ...)")
 
     if verbose
         println("Fitting DynamicFactorModel via EM:")
