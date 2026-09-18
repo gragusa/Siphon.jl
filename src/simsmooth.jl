@@ -214,7 +214,8 @@ which has the mean of `α̂` and the covariance of the conditional distribution.
 `ws` must already carry the model parameters and initial conditions. It is left
 holding the filter and smoother results for `y⁺`, not for `y`, so a caller that
 needs the smoothed mean of the real data should keep the `smoothed` copy this
-function makes rather than reading `ws` afterwards.
+function makes rather than reading `ws` afterwards. Only the means are computed:
+`ws.Vs` is left holding whatever an earlier pass wrote and must not be read.
 
 # Arguments
 - `out`: destination, `m × n`
@@ -243,7 +244,7 @@ function simulation_smoother!(
 
     # α̂: smoothed states of the real data.
     if smoothed === nothing
-        filter_and_smooth!(ws, y; crosscov = false)
+        filter_and_smooth!(ws, y; crosscov = false, covariances = false)
         copyto!(sws.α_hat, ws.αs)
     else
         size(smoothed) == (m, n) || throw(DimensionMismatch(
@@ -261,7 +262,7 @@ function simulation_smoother!(
     _simulate_path!(sws, ws, rng, sws.obs_pattern)
 
     # α̂⁺: smoothed states of the synthetic data.
-    filter_and_smooth!(ws, sws.y_plus; crosscov = false)
+    filter_and_smooth!(ws, sws.y_plus; crosscov = false, covariances = false)
 
     for t in 1:n, i in 1:m
 
@@ -296,7 +297,7 @@ function simulation_smoother(
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)
 
-    filter_and_smooth!(ws, y; crosscov = false)
+    filter_and_smooth!(ws, y; crosscov = false, covariances = false)
     α_hat = copy(ws.αs)
 
     if n_draws == 1
