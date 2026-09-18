@@ -332,5 +332,8 @@ include("ekf_tests.jl")
 # Per-element (partially observed period) missing data
 include("partial_missing_tests.jl")
 
+# Simulation smoother (Durbin & Koopman 2002)
+include("simsmooth_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")
