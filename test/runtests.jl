@@ -335,5 +335,8 @@ include("partial_missing_tests.jl")
 # Simulation smoother (Durbin & Koopman 2002)
 include("simsmooth_tests.jl")
 
+# Companion-structured propagation and the smoothed-mean-only backward pass
+include("companion_smoother_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")

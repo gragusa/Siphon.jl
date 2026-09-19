@@ -173,6 +173,10 @@ mutable struct KalmanWorkspace{T <: Real}
     loglik::T
     n_obs_valid::Int
     n_obs_rows::Int
+
+    # Declared block width of a companion transition, or 0 for a general `Tmat`.
+    # Set only by `set_companion_structure!`; never inferred from `Tmat`.
+    companion_block::Int
 end
 
 """
@@ -249,7 +253,8 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         # Scalars
         zero(T),                     # loglik
         0,                           # n_obs_valid
-        0                            # n_obs_rows
+        0,                           # n_obs_rows
+        0                            # companion_block
     )
 end
 
@@ -384,6 +389,67 @@ Return the `p × n` mask that is true where an individual observation was presen
 observed_mask(ws::KalmanWorkspace) = ws.observed_mask
 
 """
+    set_companion_structure!(ws::KalmanWorkspace, block::Integer) -> ws
+
+Declare that `ws.Tmat` is block-companion with `block × block` blocks, so that the
+filter may use the structured form of `T P T'`.
+
+A block-companion transition of state dimension `m = block * lags` has an
+arbitrary leading `block × m` row and a shifted identity below it:
+
+    T = [ A₁ A₂ … A_lags ;  I 0 … 0 ]
+
+`T P T'` is then a dense product only against that leading row; the rest is a copy
+of `P`'s leading blocks. The filter falls back to the general product when `block`
+is 0.
+
+The claim is checked against `Tmat`: the subdiagonal must be exactly the shifted
+identity, and a transition that is not of this form raises rather than being
+filtered with the wrong recursion. It is rechecked on every filter pass, so a
+sampler that redraws only the leading block row keeps the declaration without
+restating it, while one that installs a transition of another shape raises.
+
+Pass `block = 0` to return to the general path.
+
+# Example
+```julia
+set_params!(ws, Z, H, Φ, R, Q)          # Φ companion for an n-variable VAR
+set_companion_structure!(ws, n)
+```
+"""
+function set_companion_structure!(ws::KalmanWorkspace{T}, block::Integer) where {T}
+    m = ws.state_dim
+    if block == 0
+        ws.companion_block = 0
+        return ws
+    end
+    block > 0 || throw(ArgumentError("block must be non-negative, got $block"))
+    m % block == 0 || throw(ArgumentError(
+        "state dimension $m is not a multiple of the block width $block"))
+
+    # Rows below the leading block must be the shift [I 0].
+    k = m - block
+    @inbounds for j in 1:m, i in 1:k
+
+        want = (j == i) ? one(T) : zero(T)
+        ws.Tmat[block + i, j] == want || throw(ArgumentError(
+            "transition is not block-companion with block width $block: " *
+            "Tmat[$(block + i), $j] is $(ws.Tmat[block + i, j]), expected $want"))
+    end
+
+    ws.companion_block = block
+    return ws
+end
+
+"""
+    companion_block(ws::KalmanWorkspace) -> Int
+
+Return the declared companion block width, or 0 when the transition is treated as
+a general matrix.
+"""
+companion_block(ws::KalmanWorkspace) = ws.companion_block
+
+"""
     observed_rows(ws::KalmanWorkspace, t::Integer) -> SubArray{Int}
 
 Return the indices of the rows observed in period `t`, in increasing order.
@@ -447,6 +513,34 @@ function set_params!(
     copyto!(ws.Q, Q)
     _update_RQR!(ws)
     return ws
+end
+
+"""
+    _check_companion(ws::KalmanWorkspace) -> Int
+
+Return the declared companion block width after confirming `ws.Tmat` still has
+the shift structure, or 0 when none is declared.
+
+The filter calls this once per pass rather than trusting a declaration made
+before an unknown number of parameter updates. A transition that has stopped
+being companion raises here, where the wrong recursion would otherwise be
+applied silently; the cost is `O(m²)` against the `O(n m³)` of a filter pass.
+"""
+function _check_companion(ws::KalmanWorkspace{T}) where {T}
+    block = ws.companion_block
+    block == 0 && return 0
+    m = ws.state_dim
+    k = m - block
+    @inbounds for j in 1:m, i in 1:k
+
+        want = (j == i) ? one(T) : zero(T)
+        ws.Tmat[block + i, j] == want || throw(ArgumentError(
+            "workspace declares a companion transition of block width $block, " *
+            "but Tmat[$(block + i), $j] is $(ws.Tmat[block + i, j]), expected " *
+            "$want. Clear the declaration with set_companion_structure!(ws, 0) " *
+            "before installing a transition that is not block-companion."))
+    end
+    return block
 end
 
 """
@@ -527,6 +621,47 @@ end
 # ============================================
 
 """
+    _propagate_cov!(dest, ws, P, block) -> dest
+
+Overwrite `dest` with `T P T' + R Q R'`, the one-step predicted state covariance.
+
+With `block == 0` this is two general `m × m` products. With `block == b` the
+transition is block-companion,
+
+    T = [ A₁ … A_lags ;  I 0 … 0 ],
+
+so `T P` has the dense rows `A P` on top and rows `1 : m - b` of `P` beneath,
+and the same shift applies on the right. The two `m³` products collapse to
+`2 b m²`, a factor of `m / 2b` fewer multiplications — at a 17-variable VAR with
+17 lags, `289 / 34`.
+
+`dest` and `P` must not alias.
+"""
+function _propagate_cov!(
+        dest::AbstractMatrix{T}, ws::KalmanWorkspace{T}, P::AbstractMatrix{T},
+        block::Int) where {T}
+    m = ws.state_dim
+
+    if block == 0
+        mul!(ws.tmp_mm2, ws.Tmat, P)
+        mul!(dest, ws.tmp_mm2, transpose(ws.Tmat))
+    else
+        k = m - block
+        A = view(ws.Tmat, 1:block, :)
+        W = ws.tmp_mm2                      # W = T P
+        mul!(view(W, 1:block, :), A, P)
+        copyto!(view(W, (block + 1):m, :), view(P, 1:k, :))
+        mul!(view(dest, :, 1:block), W, transpose(A))
+        copyto!(view(dest, :, (block + 1):m), view(W, :, 1:k))
+    end
+
+    @inbounds for idx in eachindex(dest)
+        dest[idx] += ws.RQR[idx]
+    end
+    return dest
+end
+
+"""
     kalman_filter!(ws::KalmanWorkspace, y::AbstractMatrix) -> loglik
 
 Run Kalman filter in-place, storing results in workspace.
@@ -544,11 +679,16 @@ Access via: `predicted_states(ws)`, `filtered_states(ws)`, etc.
 # Notes
 Uses BLAS Level 3 operations where possible for performance.
 Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
+
+When `set_companion_structure!` has declared a block-companion transition, the
+covariance propagation uses the structured form; see `_propagate_cov!`.
 """
 function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
 
     @assert size(y) == (p, n) "Observation matrix size mismatch"
+
+    block = _check_companion(ws)
 
     # Reset scalars
     ws.loglik = zero(T)
@@ -562,8 +702,6 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     copyto!(P_curr, ws.P1)
 
     log2pi = log(T(2π))
-    Zt = transpose(ws.Z)
-    Tt = transpose(ws.Tmat)
 
     @inbounds for t in 1:n
         # Store predicted state/covariance. `copyto!` is contiguous-safe.
@@ -595,11 +733,8 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             mul!(ws.tmp_m2, ws.Tmat, a_curr)
             copyto!(a_curr, ws.tmp_m2)
 
-            mul!(ws.tmp_mm2, ws.Tmat, P_curr)
-            mul!(ws.tmp_mm3, ws.tmp_mm2, Tt)
-            @inbounds for idx in eachindex(P_curr)
-                P_curr[idx] = ws.tmp_mm3[idx] + ws.RQR[idx]
-            end
+            _propagate_cov!(ws.tmp_mm3, ws, P_curr, block)
+            copyto!(P_curr, ws.tmp_mm3)
         else
             ws.missing_mask[t] = false
             ws.n_obs_valid += 1
@@ -702,11 +837,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
             # Predict next: a = T * a_filt, P = T * P_filt * T' + RQR
             mul!(a_curr, ws.Tmat, att_view)
-            mul!(ws.tmp_mm2, ws.Tmat, Ptt_view)
-            mul!(P_curr, ws.tmp_mm2, Tt)
-            @inbounds for idx in eachindex(P_curr)
-                P_curr[idx] += ws.RQR[idx]
-            end
+            _propagate_cov!(P_curr, ws, Ptt_view, block)
         end
     end
 
@@ -721,26 +852,44 @@ end
 # ============================================
 
 """
-    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=true)
+    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=true, covariances::Bool=true)
 
 Run RTS smoother in-place using filter results stored in workspace.
 
 # Arguments
 - `ws`: Workspace with filter results (must call `kalman_filter!` first)
 - `crosscov`: If true, compute cross-lag covariances for EM (default: true)
+- `covariances`: If true, compute smoothed covariances (default: true). When
+  false, only the smoothed means are produced and `Vs` is left holding whatever
+  the previous pass wrote; `crosscov` must then also be false.
 
 # Stored Results
 - `αs`: Smoothed states E[αₜ|y₁:ₙ]
-- `Vs`: Smoothed covariances Var[αₜ|y₁:ₙ]
+- `Vs`: Smoothed covariances Var[αₜ|y₁:ₙ] (if covariances=true)
 - `Pcross`: Cross-lag covariances Cov[αₜ₊₁,αₜ|y₁:ₙ] (if crosscov=true)
 
 # Notes
 Implements Durbin & Koopman (2012) backward recursion.
 Cross-lag covariances computed during the same backward pass for efficiency.
+
+The mean recursion `r_{t-1} = Zₜ' Fₜ⁻¹ vₜ + Lₜ' rₜ` does not involve `N`, which
+enters only the covariance. With `covariances=false` the `N` recursion and the
+two `m × m` products forming `Vₜ` are therefore skipped, and `Lₜ' rₜ` is
+evaluated as `T' rₜ - Zₜ'(Kₜ' rₜ)` so that the `m × m` matrix `Lₜ` is never
+formed. What remains is `O(m²)` per period instead of `O(m³)`.
 """
-function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {T}
+function kalman_smoother!(
+        ws::KalmanWorkspace{T}; crosscov::Bool = true,
+        covariances::Bool = true) where {T}
     m, n = ws.state_dim, ws.n_times
     p = ws.obs_dim
+
+    if !covariances
+        crosscov && throw(ArgumentError(
+            "crosscov=true requires covariances=true: the cross-lag covariance " *
+            "is built from the smoothed covariance"))
+        return _kalman_smoother_mean!(ws)
+    end
 
     # Initialize smoother recursion: r = 0, N = 0
     fill!(ws.r_smooth, zero(T))
@@ -934,12 +1083,70 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
     return nothing
 end
 
+"""
+    _kalman_smoother_mean!(ws::KalmanWorkspace) -> nothing
+
+Backward recursion for the smoothed means alone, writing `ws.αs`.
+
+Runs `r_{t-1} = Zₜ' Fₜ⁻¹ vₜ + Lₜ' rₜ` and `αₜ = aₜ + Pₜ rₜ`. The identity
+`Lₜ' rₜ = T' rₜ - Zₜ'(Kₜ' rₜ)` keeps every operation at matrix-vector cost, so a
+period costs `O(m²)` against the `O(m³)` of the covariance recursion.
+"""
+function _kalman_smoother_mean!(ws::KalmanWorkspace{T}) where {T}
+    m, n = ws.state_dim, ws.n_times
+
+    fill!(ws.r_smooth, zero(T))
+
+    @inbounds for t in n:-1:1
+        a_t = view(ws.at, :, t)
+        P_t = view(ws.Pt, :, :, t)
+
+        # r_{t-1} = L_t' r_t (+ the observation term below, when there is one).
+        mul!(ws.tmp_m1, transpose(ws.Tmat), ws.r_smooth)
+
+        if !ws.missing_mask[t]
+            pt = ws.n_observed[t]
+            rows = view(ws.obs_rows, 1:pt, t)
+            v_t = view(ws.vt, 1:pt, t)
+            K_t = view(ws.Kt, :, 1:pt, t)
+            L_lower = LowerTriangular(view(ws.Ft_L, 1:pt, 1:pt, t))
+
+            # F_t^{-1} v_t, then subtract K_t' r_t to complete L_t' r_t.
+            tmp_p1r = view(ws.tmp_p1, 1:pt)
+            copyto!(tmp_p1r, v_t)
+            ldiv!(L_lower, tmp_p1r)
+            ldiv!(transpose(L_lower), tmp_p1r)
+
+            tmp_p2r = view(ws.tmp_p2, 1:pt)
+            mul!(tmp_p2r, transpose(K_t), ws.r_smooth)
+            for k in 1:pt
+                tmp_p2r[k] = tmp_p1r[k] - tmp_p2r[k]
+            end
+
+            # Scatter Z_t' (F_t^{-1} v_t - K_t' r_t) back over the m state rows.
+            for (k, i) in pairs(rows), j in 1:m
+
+                ws.tmp_m1[j] += ws.Z[i, j] * tmp_p2r[k]
+            end
+        end
+
+        copyto!(ws.r_smooth, ws.tmp_m1)
+
+        mul!(ws.tmp_m2, P_t, ws.r_smooth)
+        for i in 1:m
+            ws.αs[i, t] = a_t[i] + ws.tmp_m2[i]
+        end
+    end
+
+    return nothing
+end
+
 # ============================================
 # Combined filter and smooth
 # ============================================
 
 """
-    filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool=true) -> loglik
+    filter_and_smooth!(ws, y; crosscov=true, covariances=true) -> loglik
 
 Run filter and smoother in one call.
 
@@ -947,13 +1154,17 @@ Run filter and smoother in one call.
 - `ws`: Pre-allocated workspace
 - `y`: Observations (p × n)
 - `crosscov`: Compute cross-lag covariances (default: true)
+- `covariances`: Compute smoothed covariances (default: true). See
+  `kalman_smoother!` for what is skipped when this is false.
 
 # Returns
 - `loglik`: Log-likelihood
 """
-function filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true)
+function filter_and_smooth!(
+        ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true,
+        covariances::Bool = true)
     loglik = kalman_filter!(ws, y)
-    kalman_smoother!(ws; crosscov = crosscov)
+    kalman_smoother!(ws; crosscov = crosscov, covariances = covariances)
     return loglik
 end
 

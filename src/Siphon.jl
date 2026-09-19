@@ -113,6 +113,7 @@ export EMResult, profile_em_ssm, ProfileEMResult
 export KalmanWorkspace
 export kalman_filter!, kalman_smoother!, filter_and_smooth!
 export set_params!, set_initial!, update_params!
+export set_companion_structure!, companion_block
 # In-place diffuse filter (exact diffuse initialization)
 # Note: Use kalman_filter!(ws::DiffuseKalmanWorkspace, y) - workspace type determines diffuse
 export DiffuseKalmanWorkspace
