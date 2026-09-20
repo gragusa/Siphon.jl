@@ -1039,6 +1039,20 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
             end
 
+            # P_filt must stay symmetric. The subtraction above is symmetric
+            # only up to rounding, and the asymmetric part is propagated by
+            # P = T P_filt T' + RQR, so a transition with spectral radius above
+            # one amplifies it by ρ(T)² each period. Left alone it reaches the
+            # scale of F = Z P Z', whose Cholesky reads the lower triangle only,
+            # and the factorization then fails on a matrix that is positive
+            # definite in exact arithmetic.
+            for j in 1:m, i in 1:(j - 1)
+
+                avg = (Ptt_view[i, j] + Ptt_view[j, i]) / 2
+                Ptt_view[i, j] = avg
+                Ptt_view[j, i] = avg
+            end
+
             # Predict next: a = T * a_filt, P = T * P_filt * T' + RQR
             mul!(a_curr, ws.Tmat, att_view)
             _propagate_cov!(P_curr, ws, Ptt_view, block)
