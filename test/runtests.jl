@@ -338,5 +338,8 @@ include("simsmooth_tests.jl")
 # Companion-structured propagation and the smoothed-mean-only backward pass
 include("companion_smoother_tests.jl")
 
+# Rank-revealing measurement update for a singular innovation covariance
+include("singular_innovation_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")

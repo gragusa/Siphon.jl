@@ -84,7 +84,11 @@ enabling zero-allocation iterations after initial construction.
 - `Ptt`: Filtered covariances (m × m × n)
 - `vt`: Innovations yₜ - Z*aₜ (p × n)
 - `Ft`: Innovation covariances (p × p × n)
-- `Ft_L`: Cholesky factors (lower triangular) of Ft (p × p × n)
+- `Ft_L`: Lower-triangular Cholesky factor of Ft (p × p × n). On the
+  rank-revealing path it instead holds `G`, the pseudo-inverse square root with
+  `Fₜ⁺ = G G'`, in its leading `pₜ × Ft_rank[t]` block
+- `Ft_rank`: Rank of Ft per period (n). On the Cholesky path this is the number
+  of observed rows pₜ; on the rank-revealing path it is the numerical rank
 - `Kt`: Kalman gains (m × p × n)
 - `missing_mask`: BitVector, true where period t has no observed row at all
 - `observed_mask`: BitMatrix (p × n), true where yₜ[i] is observed
@@ -157,6 +161,7 @@ mutable struct KalmanWorkspace{T <: Real}
     tmp_mp::Matrix{T}     # m × p
     tmp_pm::Matrix{T}     # p × m
     tmp_pm2::Matrix{T}    # p × m
+    tmp_pm3::Matrix{T}    # p × m
     tmp_mr::Matrix{T}     # m × r
     tmp_m1::Vector{T}     # m
     tmp_m2::Vector{T}     # m
@@ -177,6 +182,12 @@ mutable struct KalmanWorkspace{T <: Real}
     # Declared block width of a companion transition, or 0 for a general `Tmat`.
     # Set only by `set_companion_structure!`; never inferred from `Tmat`.
     companion_block::Int
+
+    # Rank-revealing measurement update. Set only by `set_rank_revealing!`.
+    rank_revealing::Bool
+    rank_rtol::T
+    support_rtol::T
+    Ft_rank::Vector{Int}   # n: rank of Fₜ used in the measurement update
 end
 
 """
@@ -238,6 +249,7 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         Matrix{T}(undef, m, p),      # tmp_mp
         Matrix{T}(undef, p, m),      # tmp_pm
         Matrix{T}(undef, p, m),      # tmp_pm2
+        Matrix{T}(undef, p, m),      # tmp_pm3
         Matrix{T}(undef, m, r),      # tmp_mr
         Vector{T}(undef, m),         # tmp_m1
         Vector{T}(undef, m),         # tmp_m2
@@ -254,7 +266,13 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         zero(T),                     # loglik
         0,                           # n_obs_valid
         0,                           # n_obs_rows
-        0                            # companion_block
+        0,                           # companion_block
+
+        # Rank-revealing declaration
+        false,                       # rank_revealing
+        sqrt(eps(T)),                # rank_rtol
+        sqrt(eps(T)),                # support_rtol
+        zeros(Int, n)                # Ft_rank
     )
 end
 
@@ -448,6 +466,113 @@ Return the declared companion block width, or 0 when the transition is treated a
 a general matrix.
 """
 companion_block(ws::KalmanWorkspace) = ws.companion_block
+
+"""
+    set_rank_revealing!(ws::KalmanWorkspace, on::Bool; rank_rtol, support_rtol) -> ws
+
+Declare whether the measurement update factors the innovation covariance `Fₜ`
+with a rank-revealing method instead of a Cholesky decomposition.
+
+With `on = false`, the default, `Fₜ` is assumed positive definite and a
+`cholesky!` that meets a nonpositive pivot raises. With `on = true` the filter
+takes a symmetric eigendecomposition of `Fₜ`, keeps the eigenvalues above
+`rank_rtol` times the largest, and updates on that range: a singular `Fₜ` is then
+a supported case rather than an error. `Fₜ` is singular whenever the state
+covariance is rank-deficient in the observed directions and the observation noise
+does not fill them in — a state space driven by fewer shocks than states and
+observed without measurement error, for instance.
+
+The observation must still lie on the support. When the component of the
+innovation `vₜ` orthogonal to the range of `Fₜ` exceeds `support_rtol` times the
+scale of the period's observed quantities, the observation cannot have come from
+the model and the filter raises [`InnovationSupportError`](@ref).
+
+The log-likelihood on this path is the density of the singular Gaussian on its
+support: `log|Fₜ|` is the sum of the retained eigenvalues' logarithms, and the
+Gaussian constant counts the rank rather than the number of observed rows.
+
+Implemented for `KalmanWorkspace`; a `DiffuseKalmanWorkspace` raises when its
+base workspace carries the declaration.
+
+# Example
+```julia
+set_params!(ws, Z, H, Tmat, R, Q)       # rank-deficient R Q R', H = 0
+set_rank_revealing!(ws, true)
+```
+
+See also: [`rank_revealing`](@ref), [`innovation_ranks`](@ref).
+"""
+function set_rank_revealing!(
+        ws::KalmanWorkspace{T}, on::Bool;
+        rank_rtol::Real = sqrt(eps(T)), support_rtol::Real = sqrt(eps(T))) where {T}
+    isfinite(rank_rtol) && rank_rtol >= 0 || throw(ArgumentError(
+        "rank_rtol must be finite and non-negative, got $rank_rtol"))
+    isfinite(support_rtol) && support_rtol >= 0 || throw(ArgumentError(
+        "support_rtol must be finite and non-negative, got $support_rtol"))
+
+    ws.rank_revealing = on
+    ws.rank_rtol = rank_rtol
+    ws.support_rtol = support_rtol
+    return ws
+end
+
+"""
+    rank_revealing(ws::KalmanWorkspace) -> Bool
+
+Return whether the measurement update uses the rank-revealing factorization of
+`Fₜ`. See [`set_rank_revealing!`](@ref).
+"""
+rank_revealing(ws::KalmanWorkspace) = ws.rank_revealing
+
+"""
+    innovation_ranks(ws::KalmanWorkspace) -> Vector{Int}
+
+Return the rank of `Fₜ` used in each period's measurement update, as the live
+buffer the filter writes rather than a copy.
+
+On the Cholesky path this is the number of observed rows in the period, and 0
+where nothing is observed. On the rank-revealing path it is the numerical rank of
+`Fₜ`, which is the number of directions the period's observation informs.
+"""
+innovation_ranks(ws::KalmanWorkspace) = ws.Ft_rank
+
+"""
+    InnovationSupportError <: Exception
+
+The observation of period `t` is incompatible with the model: its innovation has
+a component outside the range of the innovation covariance `Fₜ`.
+
+Raised by `kalman_filter!` on the rank-revealing path; see
+[`set_rank_revealing!`](@ref).
+
+# Fields
+- `t`: The period whose observation is off-support
+- `rank`: Numerical rank of `Fₜ`
+- `n_rows`: Number of observed rows in the period
+- `residual`: Norm of the innovation's component outside the range of `Fₜ`
+- `scale`: Scale of the period's observed quantities
+- `tol`: Relative tolerance; the residual is accepted when it is at most
+  `tol * scale`
+"""
+struct InnovationSupportError <: Exception
+    t::Int
+    rank::Int
+    n_rows::Int
+    residual::Float64
+    scale::Float64
+    tol::Float64
+end
+
+function Base.showerror(io::IO, e::InnovationSupportError)
+    print(io, "InnovationSupportError: at period ", e.t,
+        " the innovation has a component of norm ", e.residual,
+        " outside the range of the innovation covariance (rank ", e.rank,
+        " of ", e.n_rows, " observed rows; tolerance ", e.tol, " × ", e.scale,
+        " = ", e.tol * e.scale, ").")
+    print(io, " The observation is incompatible with the model: no state path",
+        " the model admits can produce it.")
+    return nothing
+end
 
 """
     observed_rows(ws::KalmanWorkspace, t::Integer) -> SubArray{Int}
@@ -682,6 +807,12 @@ Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 
 When `set_companion_structure!` has declared a block-companion transition, the
 covariance propagation uses the structured form; see `_propagate_cov!`.
+
+When `set_rank_revealing!` has been declared, the measurement update takes a
+symmetric eigendecomposition of `Fₜ` in place of the Cholesky factorization and
+updates on the range of `Fₜ`, so a singular innovation covariance is supported.
+That factorization allocates, unlike the rest of the pass. An observation whose
+innovation leaves the range of `Fₜ` raises `InnovationSupportError`.
 """
 function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
@@ -718,6 +849,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
         if pt == 0
             ws.missing_mask[t] = true
+            ws.Ft_rank[t] = 0
 
             # Mark innovations / gain as missing without wasted matmuls.
             fill!(view(ws.vt, :, t), T(NaN))
@@ -738,7 +870,6 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
         else
             ws.missing_mask[t] = false
             ws.n_obs_valid += 1
-            ws.n_obs_rows += pt
 
             rows = view(obs_rows_t, 1:pt)
 
@@ -777,42 +908,115 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 Ft_view[k, l] = Fr[k, l]
             end
 
-            # Cholesky on Symmetric(:L) reads only the lower triangle, so we do
-            # not need to symmetrize Fr first.
-            cholF = cholesky!(Symmetric(Fr, :L))
-            L_lower = LowerTriangular(cholF.factors)
-
-            # Store lower triangle of L; zero the rest for clean reuse.
             FtL_view = view(ws.Ft_L, :, :, t)
-            fill!(FtL_view, zero(T))
-            @inbounds for j in 1:pt, i in j:pt
-
-                FtL_view[i, j] = L_lower[i, j]
-            end
-
-            # log|F| = 2 * Σ log L[i,i]
-            logdetF = zero(T)
-            @inbounds for i in 1:pt
-                logdetF += log(L_lower[i, i])
-            end
-            logdetF += logdetF  # multiply by 2
-
-            # quad form: v' * F^{-1} * v = || L^{-1} v ||^2
-            tmp_p2r = view(ws.tmp_p2, 1:pt)
-            copyto!(tmp_p2r, v_t)
-            ldiv!(L_lower, tmp_p2r)                   # tmp_p2r = L^{-1} v
-            quad_form = zero(T)
-            @inbounds for i in 1:pt
-                quad_form += tmp_p2r[i]^2
-            end
-            ws.loglik += -T(0.5) * (logdetF + quad_form)
-
-            # Core quantity: M = P * Z_t' * F^{-1} (m×pt). Reused for K, att, Ptt.
-            # Compute as (F^{-1} * Z_t * P)' via two ldiv! on Z_t*P, then transpose.
-            ldiv!(L_lower, ZrP)                       # L^{-1} (Z_t*P)
-            ldiv!(transpose(L_lower), ZrP)            # F^{-1} (Z_t*P)
             Mr = view(ws.tmp_mp, :, 1:pt)
-            transpose!(Mr, ZrP)                       # Mr = M
+
+            if ws.rank_revealing
+                # Eigenfactor the symmetric Fr and update on its range. Unlike
+                # the Cholesky branch this allocates: `eigen!` builds fresh
+                # factors rather than writing into workspace storage.
+                eig = eigen!(Symmetric(Fr, :L))
+                λ = eig.values
+                V = eig.vectors
+
+                λ_max = max(maximum(λ), zero(T))
+                keep = λ .> ws.rank_rtol * λ_max
+                rk = count(keep)
+                ws.n_obs_rows += rk
+
+                # The innovation must lie in the range of F: a component along a
+                # discarded eigenvector is an observation the model cannot make.
+                res = zero(T)
+                for k in eachindex(λ)
+                    keep[k] && continue
+                    c = zero(T)
+                    for i in 1:pt
+                        c += V[i, k] * v_t[i]
+                    end
+                    res += c^2
+                end
+                res = sqrt(res)
+
+                scale = zero(T)
+                for (k, i) in pairs(rows)
+                    scale = max(scale, abs(y_t[i]), abs(tmp_p1r[k]), abs(v_t[k]))
+                end
+                if res > ws.support_rtol * scale
+                    throw(InnovationSupportError(
+                        t, rk, pt, Float64(res), Float64(scale),
+                        Float64(ws.support_rtol)))
+                end
+
+                # G = V_r Λ_r^{-1/2}, so F⁺ = G G' and G' v whitens the
+                # innovation on the range.
+                fill!(FtL_view, zero(T))
+                G = view(FtL_view, 1:pt, 1:rk)
+                logdetF = zero(T)
+                c = 0
+                for k in eachindex(λ)
+                    keep[k] || continue
+                    c += 1
+                    logdetF += log(λ[k])
+                    invsqrt = inv(sqrt(λ[k]))
+                    for i in 1:pt
+                        G[i, c] = V[i, k] * invsqrt
+                    end
+                end
+                ws.Ft_rank[t] = rk
+
+                # quad form on the support: v' F⁺ v = || G' v ||^2
+                tmp_p2r = view(ws.tmp_p2, 1:rk)
+                mul!(tmp_p2r, transpose(G), v_t)
+                quad_form = zero(T)
+                for i in 1:rk
+                    quad_form += tmp_p2r[i]^2
+                end
+                ws.loglik += -T(0.5) * (logdetF + quad_form)
+
+                # M = P Z_t' F⁺ = (G (G' (Z_t P)))'
+                GZrP = view(ws.tmp_pm3, 1:rk, :)
+                mul!(GZrP, transpose(G), ZrP)
+                mul!(ZrP, G, GZrP)                    # ZrP := F⁺ (Z_t P)
+                transpose!(Mr, ZrP)
+            else
+                ws.n_obs_rows += pt
+
+                # Cholesky on Symmetric(:L) reads only the lower triangle, so we
+                # do not need to symmetrize Fr first.
+                cholF = cholesky!(Symmetric(Fr, :L))
+                L_lower = LowerTriangular(cholF.factors)
+
+                # Store lower triangle of L; zero the rest for clean reuse.
+                fill!(FtL_view, zero(T))
+                @inbounds for j in 1:pt, i in j:pt
+
+                    FtL_view[i, j] = L_lower[i, j]
+                end
+                ws.Ft_rank[t] = pt
+
+                # log|F| = 2 * Σ log L[i,i]
+                logdetF = zero(T)
+                @inbounds for i in 1:pt
+                    logdetF += log(L_lower[i, i])
+                end
+                logdetF += logdetF  # multiply by 2
+
+                # quad form: v' * F^{-1} * v = || L^{-1} v ||^2
+                tmp_p2r = view(ws.tmp_p2, 1:pt)
+                copyto!(tmp_p2r, v_t)
+                ldiv!(L_lower, tmp_p2r)                   # tmp_p2r = L^{-1} v
+                quad_form = zero(T)
+                @inbounds for i in 1:pt
+                    quad_form += tmp_p2r[i]^2
+                end
+                ws.loglik += -T(0.5) * (logdetF + quad_form)
+
+                # Core quantity: M = P * Z_t' * F^{-1} (m×pt). Reused for K, att, Ptt.
+                # Compute as (F^{-1} * Z_t * P)' via two ldiv! on Z_t*P, then transpose.
+                ldiv!(L_lower, ZrP)                       # L^{-1} (Z_t*P)
+                ldiv!(transpose(L_lower), ZrP)            # F^{-1} (Z_t*P)
+                transpose!(Mr, ZrP)                       # Mr = M
+            end
 
             # K_t = T * M, stored in the leading pt columns.
             K_view = view(ws.Kt, :, :, t)
@@ -826,8 +1030,8 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 att_view[i] = a_curr[i] + ws.tmp_m2[i]
             end
 
-            # P_filt = P - M * (Z_t * P). The ldiv!s above overwrote ZrP, so
-            # recompute it once.
+            # P_filt = P - M * (Z_t * P). The measurement update overwrote ZrP
+            # with F⁻¹ (Z_t P), so recompute it once.
             mul!(ZrP, Zr, P_curr)
             mul!(ws.tmp_mm2, Mr, ZrP)                 # M * (Z_t*P) (m×m)
             Ptt_view = view(ws.Ptt, :, :, t)
@@ -850,6 +1054,40 @@ end
 # ============================================
 # In-place Kalman smoother
 # ============================================
+
+"""
+    _apply_Finv!(x, ws, t, pt, scratch) -> x
+
+Overwrite `x` with `Fₜ⁻¹ x`, where `x` is a `pₜ`-vector or a `pₜ × m` matrix.
+
+On the Cholesky path this is the pair of triangular solves against the stored
+factor. On the rank-revealing path `Ft_L` holds `G` with `Fₜ⁺ = G G'`, and the
+product is formed through `scratch`, whose leading `Ft_rank[t]` rows (or rows and
+all `m` columns) take `G' x`. Directions outside the range of `Fₜ` are annihilated,
+which is what makes the smoother recursions well defined when `Fₜ` is singular.
+"""
+function _apply_Finv!(
+        x::AbstractVecOrMat, ws::KalmanWorkspace, t::Int, pt::Int,
+        scratch::AbstractVecOrMat)
+    if ws.rank_revealing
+        rk = ws.Ft_rank[t]
+        G = view(ws.Ft_L, 1:pt, 1:rk, t)
+        if x isa AbstractVector
+            w = view(scratch, 1:rk)
+            mul!(w, transpose(G), x)
+            mul!(x, G, w)
+        else
+            w = view(scratch, 1:rk, axes(x, 2))
+            mul!(w, transpose(G), x)
+            mul!(x, G, w)
+        end
+    else
+        L_lower = LowerTriangular(view(ws.Ft_L, 1:pt, 1:pt, t))
+        ldiv!(L_lower, x)
+        ldiv!(transpose(L_lower), x)
+    end
+    return x
+end
 
 """
     kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=true, covariances::Bool=true)
@@ -940,10 +1178,6 @@ function kalman_smoother!(
             v_t = view(ws.vt, 1:pt, t)
             K_t = view(ws.Kt, :, 1:pt, t)
 
-            # Reconstruct L from the stored leading block of Ft_L
-            L_t = view(ws.Ft_L, 1:pt, 1:pt, t)
-            L_lower = LowerTriangular(L_t)
-
             Zr = view(ws.tmp_pm, 1:pt, :)          # Z_t (pt×m)
             @inbounds for j in 1:m, (k, i) in pairs(rows)
 
@@ -957,11 +1191,9 @@ function kalman_smoother!(
                 ws.L_smooth[i, j] = ws.Tmat[i, j] - ws.L_smooth[i, j]
             end
 
-            # F^{-1} * v: solve L * L' * x = v
             tmp_p1r = view(ws.tmp_p1, 1:pt)
             copyto!(tmp_p1r, v_t)
-            ldiv!(L_lower, tmp_p1r)
-            ldiv!(L_lower', tmp_p1r)               # tmp_p1r = F^{-1} * v
+            _apply_Finv!(tmp_p1r, ws, t, pt, ws.tmp_p2)  # tmp_p1r = F^{-1} v
 
             # r_{t-1} = Z_t' * F^{-1} * v + L' * r
             mul!(ws.tmp_m1, transpose(Zr), tmp_p1r)
@@ -970,10 +1202,8 @@ function kalman_smoother!(
                 ws.r_smooth[i] = ws.tmp_m1[i] + ws.tmp_m2[i]
             end
 
-            # F^{-1} * Z_t: solve F * X = Z_t. Done after r_{t-1} because it
-            # overwrites Zr in place.
-            ldiv!(L_lower, Zr)                     # Zr := L^{-1} * Z_t
-            ldiv!(L_lower', Zr)                    # Zr := F^{-1} * Z_t
+            # F^{-1} Z_t, after r_{t-1} because it overwrites Zr in place.
+            _apply_Finv!(Zr, ws, t, pt, ws.tmp_pm3)
 
             # N_{t-1} = Z_t' * F^{-1} * Z_t + L' * N * L. Rebuild Z_t' from the
             # gathered rows, since Zr now holds F^{-1} Z_t.
@@ -1109,13 +1339,11 @@ function _kalman_smoother_mean!(ws::KalmanWorkspace{T}) where {T}
             rows = view(ws.obs_rows, 1:pt, t)
             v_t = view(ws.vt, 1:pt, t)
             K_t = view(ws.Kt, :, 1:pt, t)
-            L_lower = LowerTriangular(view(ws.Ft_L, 1:pt, 1:pt, t))
 
             # F_t^{-1} v_t, then subtract K_t' r_t to complete L_t' r_t.
             tmp_p1r = view(ws.tmp_p1, 1:pt)
             copyto!(tmp_p1r, v_t)
-            ldiv!(L_lower, tmp_p1r)
-            ldiv!(transpose(L_lower), tmp_p1r)
+            _apply_Finv!(tmp_p1r, ws, t, pt, ws.tmp_p2)
 
             tmp_p2r = view(ws.tmp_p2, 1:pt)
             mul!(tmp_p2r, transpose(K_t), ws.r_smooth)
@@ -1181,7 +1409,14 @@ innovations(ws::KalmanWorkspace) = ws.vt
 """Return innovation covariances as view (alias for variances_prediction_errors)."""
 innovation_covs(ws::KalmanWorkspace) = ws.Ft
 
-"""Return stored Cholesky factors of Ft as view."""
+"""
+Return the stored factors of Ft as a view.
+
+Each slice holds the lower-triangular Cholesky factor of the period's innovation
+covariance in its leading `n_observed[t]` rows and columns. On the rank-revealing
+path it instead holds `G`, with `Fₜ⁺ = G G'`, in its leading
+`n_observed[t] × innovation_ranks(ws)[t]` block; see [`set_rank_revealing!`](@ref).
+"""
 cholesky_factors(ws::KalmanWorkspace) = ws.Ft_L
 
 """Return count of non-missing observations."""
@@ -1457,6 +1692,10 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
     @assert size(y) == (p, n) "Observation matrix size mismatch"
     _require_no_partial_periods(y, "kalman_filter_diffuse!")
+    base.rank_revealing && throw(ArgumentError(
+        "the rank-revealing measurement update is implemented for " *
+        "KalmanWorkspace only; clear it with set_rank_revealing!(ws.base, false) " *
+        "before filtering with a DiffuseKalmanWorkspace"))
 
     # Reset state
     base.loglik = zero(T)
