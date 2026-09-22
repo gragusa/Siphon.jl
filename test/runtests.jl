@@ -341,5 +341,8 @@ include("companion_smoother_tests.jl")
 # Rank-revealing measurement update for a singular innovation covariance
 include("singular_innovation_tests.jl")
 
+# Filtering across a transition whose spectral radius exceeds one
+include("explosive_transition_tests.jl")
+
 # Aqua.jl quality assurance tests
 include("Aqua.jl")
