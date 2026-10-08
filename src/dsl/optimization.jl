@@ -27,11 +27,21 @@ for gradient computation.
 - `method`: Optimization algorithm (default: L-BFGS)
 - `θ0`: Initial parameter values (constrained). A vector in `param_names(spec)` order,
   or a NamedTuple giving any subset of the parameters by name (the rest start at
-  their spec initial values). Default: `initial_values(spec)`
+  their default starting values). Default: the spec initial values, with template
+  default variances rescaled to the data (see below)
 - `ad_backend`: AD backend for gradients (default: `Optimization.AutoForwardDiff()`)
 - `use_static::Bool=true`: Use StaticArrays for small matrices (dimensions ≤ 13)
 - `prob_kwargs`: NamedTuple of kwargs passed to `OptimizationProblem`
 - `kwargs...`: All other kwargs passed to `Optimization.solve`
+
+# Default starting values
+A variance on the diagonal of `H` or `Q` whose initial value comes from a template
+default (for example `local_level()` rather than `local_level(var_obs=(init=…,))`)
+starts at that default times the variance of the first differences of `y`. An
+observation variance uses the series it applies to; a state variance uses the mean
+over series. Differences keep the scale meaningful for trending series, where
+`var(y)` is dominated by the trend. Initial values set by the user, and all other
+parameters, are used as given.
 
 # Common solve kwargs
 - `maxiters`: Maximum iterations (default: 1000)
@@ -107,7 +117,7 @@ end
 # the likelihood, and including it would move the optimum.
 function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs...)
     t = build_transformation(spec)
-    θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0))
+    θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0, y))
 
     negloglik(θ_u, _) = -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y,
         use_static)
@@ -125,17 +135,54 @@ end
 
 # Starting values in constrained space, in `param_names(spec)` order. A
 # NamedTuple may give any subset of the parameters; the rest start at their
-# spec initial values.
-function _initial_constrained(spec, θ0)
-    θ0 === nothing && return initial_values(spec)
-    θ0 isa NamedTuple || return θ0
+# default starting values.
+function _initial_constrained(spec, θ0, y)
+    θ0 isa AbstractVector && return θ0
+    init = _default_initial_values(spec, y)
+    θ0 === nothing && return init
     names = param_names(spec)
     unknown = setdiff(keys(θ0), names)
     isempty(unknown) ||
         throw(ArgumentError("θ0 has unknown parameters $(Tuple(unknown)); " *
                             "the model's parameters are $(Tuple(names))"))
-    init = initial_values(spec)
     return [haskey(θ0, n) ? Float64(θ0[n]) : init[i] for (i, n) in enumerate(names)]
+end
+
+# Spec initial values, with each template-default variance on the diagonal of H
+# or Q multiplied by the variance of the first differences of y. Template
+# variances default to 1.0, and from there L-BFGS can stop at a degenerate
+# optimum when the data's scale is far from 1.
+_default_initial_values(spec, y) = initial_values(spec)
+
+function _default_initial_values(spec::SSMSpec, y)
+    init = initial_values(spec)
+    any(p -> p.default_init, spec.params) || return init
+    s2 = [_diff_variance(view(y, i, :)) for i in axes(y, 1)]
+    for (k, p) in enumerate(spec.params)
+        p.default_init || continue
+        ref = ParameterRef(p.name)
+        rows = [i for i in 1:spec.n_obs if get(spec.H.elements, (i, i), nothing) == ref]
+        scale = if !isempty(rows)
+            mean(s2[rows])
+        elseif any(j -> get(spec.Q.elements, (j, j), nothing) == ref, 1:spec.n_shocks)
+            mean(s2)
+        else
+            continue
+        end
+        v = p.init * scale
+        p.lower < v < p.upper && (init[k] = v)
+    end
+    return init
+end
+
+# Variance of the differences between consecutive observed values of a series,
+# falling back to the variance of the observed values and then to 1.0.
+function _diff_variance(x)
+    obs = filter(!isnan, x)
+    for v in (length(obs) > 2 ? var(diff(obs)) : NaN, length(obs) > 1 ? var(obs) : NaN)
+        isfinite(v) && v > 0 && return v
+    end
+    return 1.0
 end
 
 """

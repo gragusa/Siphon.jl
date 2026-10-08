@@ -34,13 +34,6 @@ end
 
 @testset "Known bugs" begin
 
-@testset "default starting values match the data's scale" begin
-    # Template variances start at 1.0; on the Nile data (variances ~1e4) L-BFGS
-    # then reaches a degenerate optimum with var_obs ≈ 0.
-    res = optimize_ssm(local_level(), y_bug)
-    @test_broken res.loglik ≈ -641.5856 atol = 1e-3
-end
-
 @testset "exact diffuse initialisation through a spec" begin
     # SSMSpec.P1_inf is never read, so diffuse = :exact runs with P1 = 0.
     θ = (var_obs = 15099.0, var_level = 1469.1)

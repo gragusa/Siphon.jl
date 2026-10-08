@@ -17,24 +17,30 @@ Represents a single estimable parameter in a state-space model.
 - `lower::T`: Lower bound for optimization (use -Inf for unbounded)
 - `upper::T`: Upper bound for optimization (use Inf for unbounded)
 - `init::T`: Initial value for optimization
+- `default_init::Bool`: `true` when `init` is a template default rather than a
+  value the user gave. Maximum likelihood then rescales a default variance to the
+  data before optimising (see [`optimize_ssm`](@ref)).
 """
 struct SSMParameter{T <: Real}
     name::Symbol
     lower::T
     upper::T
     init::T
+    default_init::Bool
 
-    function SSMParameter(name::Symbol, lower::T, upper::T, init::T) where {T <: Real}
+    function SSMParameter(name::Symbol, lower::T, upper::T, init::T,
+            default_init::Bool = false) where {T <: Real}
         lower <= init <= upper || throw(
             ArgumentError("Initial value $init for $name must be in [$lower, $upper]"),
         )
-        new{T}(name, lower, upper, init)
+        new{T}(name, lower, upper, init, default_init)
     end
 end
 
 # Convenience constructors
-function SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = 0.0)
-    SSMParameter(name, Float64(lower), Float64(upper), Float64(init))
+function SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = 0.0,
+        default_init::Bool = false)
+    SSMParameter(name, Float64(lower), Float64(upper), Float64(init), default_init)
 end
 
 SSMParameter(name::Symbol, init::Real) = SSMParameter(name, -Inf, Inf, Float64(init))

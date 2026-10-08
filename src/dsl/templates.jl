@@ -71,7 +71,8 @@ function parse_param_spec(
             name;
             lower = default_lower,
             upper = default_upper,
-            init = default_init
+            init = default_init,
+            default_init = true
         )
     )
 end
@@ -96,7 +97,11 @@ function parse_param_spec(
     init = get(spec, :init, default_init)
     lower = get(spec, :lower, default_lower)
     upper = get(spec, :upper, default_upper)
-    (true, SSMParameter(name; lower = lower, upper = upper, init = init))
+    (
+        true,
+        SSMParameter(name; lower = lower, upper = upper, init = init,
+            default_init = !haskey(spec, :init))
+    )
 end
 
 """
@@ -362,15 +367,18 @@ function ar1(;
 end
 
 """
-    arma(p::Int, q::Int; ar_init=nothing, ma_init=nothing, var_init=1.0, diffuse=true)
+    arma(p::Int, q::Int; ar_init=nothing, ma_init=nothing, var_init=nothing, diffuse=true)
 
 Create specification for ARMA(p,q) model in state-space form.
 
 Uses the innovations state-space representation.
 
 Parameters: ar coefficients φ₁...φₚ, ma coefficients θ₁...θᵧ, var (innovation variance)
+
+When `var_init` is `nothing`, the innovation variance starts at 1.0 and maximum
+likelihood rescales it to the data (see [`optimize_ssm`](@ref)).
 """
-function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1.0)
+function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = nothing)
     # State dimension is max(p, q+1)
     r = max(p, q + 1)
 
@@ -402,7 +410,9 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     end
 
     # Innovation variance
-    push!(params, SSMParameter(:var; lower = 0.0, upper = Inf, init = var_init))
+    push!(params,
+        SSMParameter(:var; lower = 0.0, upper = Inf, init = something(var_init, 1.0),
+            default_init = var_init === nothing))
 
     # Z = [1 0 ... 0]
     Z = SSMMatrixSpec((1, r))
@@ -449,8 +459,8 @@ end
 
 """
     dynamic_factor(n_obs, n_factors; factor_lags=1, obs_lags=0, correlated_errors=false,
-                   loadings_init=0.5, ar_init=0.5, var_obs_init=1.0,
-                   var_factor_init=1.0, diffuse=true)
+                   loadings_init=0.5, ar_init=0.5, var_obs_init=nothing,
+                   var_factor_init=nothing, diffuse=true)
 
 Create specification for a dynamic factor model with VAR factor dynamics and
 optional lagged factor loadings.
@@ -490,8 +500,11 @@ All other loadings (including lagged) are free parameters.
                                    If false, H is diagonal (exact DFM).
 - `loadings_init::Real=0.5`: Initial value for free factor loadings
 - `ar_init::Real=0.5`: Initial value for AR coefficients (divided by lag number)
-- `var_obs_init::Real=1.0`: Initial value for observation error variances
-- `var_factor_init::Real=1.0`: Initial value for factor innovation variances
+- `var_obs_init=nothing`: Initial value for observation error variances
+- `var_factor_init=nothing`: Initial value for factor innovation variances
+
+  When a variance init is `nothing`, the variances start at 1.0 and maximum
+  likelihood rescales them to the data (see [`optimize_ssm`](@ref)).
 - `diffuse::Bool=true`: Use diffuse initialization for factors
 
 # State Space Representation
@@ -547,8 +560,8 @@ function dynamic_factor(
         correlated_errors::Bool = false,
         loadings_init::Real = 0.5,
         ar_init::Real = 0.5,
-        var_obs_init::Real = 1.0,
-        var_factor_init::Real = 1.0,
+        var_obs_init::Union{Nothing, Real} = nothing,
+        var_factor_init::Union{Nothing, Real} = nothing,
         diffuse::Bool = true
 )
     # Validation
@@ -642,7 +655,7 @@ function dynamic_factor(
                         pname;
                         lower = 0.0,
                         upper = Inf,
-                        init = sqrt(var_obs_init)
+                        init = sqrt(something(var_obs_init, 1.0))
                     )
                 )
                 push!(param_set, pname)
@@ -672,7 +685,9 @@ function dynamic_factor(
             pname = Symbol("var_obs_$i")
             push!(
                 params,
-                SSMParameter(pname; lower = 0.0, upper = Inf, init = var_obs_init)
+                SSMParameter(pname; lower = 0.0, upper = Inf,
+                    init = something(var_obs_init, 1.0),
+                    default_init = var_obs_init === nothing)
             )
             push!(param_set, pname)
             H.elements[(i, i)] = ParameterRef(pname)
@@ -739,7 +754,10 @@ function dynamic_factor(
     Q = SSMMatrixSpec((n_shocks, n_shocks))
     for i in 1:n_factors
         pname = Symbol("var_factor_$i")
-        push!(params, SSMParameter(pname; lower = 0.0, upper = Inf, init = var_factor_init))
+        push!(params,
+            SSMParameter(pname; lower = 0.0, upper = Inf,
+                init = something(var_factor_init, 1.0),
+                default_init = var_factor_init === nothing))
         push!(param_set, pname)
         Q.elements[(i, i)] = ParameterRef(pname)
     end

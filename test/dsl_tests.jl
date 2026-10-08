@@ -5,7 +5,8 @@ Tests for the DSL module: templates, custom_ssm, matrix helpers, MatrixExpr, and
 using Test
 using Siphon
 using LinearAlgebra
-using Statistics: cor
+using Statistics: cor, var
+using Random
 using ForwardDiff
 using CSV
 using DataFrames
@@ -980,6 +981,45 @@ end
     res3 = optimize_ssm(spec, y; θ0 = (var_obs = 1e4,))
     @test res3.loglik ≈ res.loglik atol = 1e-4
     @test_throws ArgumentError optimize_ssm(spec, y; θ0 = (σ_obs = 1.0,))
+end
+
+@testset "default starting values match the data's scale" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+
+    # Template variances start at 1.0. Without rescaling, L-BFGS stops at a
+    # degenerate optimum on the Nile data (var_obs → 0, loglik ≈ −656).
+    res = optimize_ssm(local_level(), y)
+    @test res.loglik ≈ -641.5856 atol = 1e-3
+    model = fit!(MLE(), StateSpaceModel(local_level(), size(y, 2)), y)
+    @test model.loglik ≈ -641.5856 atol = 1e-3
+
+    # Only template defaults are flagged; inits the user gives are not
+    @test all(p -> p.default_init, local_level().params)
+    @test [p.default_init for p in local_level(var_obs = (init = 5.0,)).params] ==
+          [false, true]
+    @test local_level(var_obs = (lower = 1.0,)).params[1].default_init
+    @test last(arma(1, 0).params).default_init
+    @test !last(arma(1, 0; var_init = 3.0).params).default_init
+    @test !SSMParameter(:x; init = 1.0, lower = 0.0).default_init
+
+    # A user-given init is used as given; a defaulted one is rescaled
+    init = Siphon.DSL._initial_constrained(local_level(var_obs = (init = 5.0,)), nothing, y)
+    @test init[1] == 5.0
+    @test init[2] ≈ var(diff(vec(y)))
+    # Defaults keep the template's ratios between variances
+    init = Siphon.DSL._initial_constrained(local_linear_trend(), (var_slope = 2.0,), y)
+    @test init[2] / init[1] ≈ 0.01
+    @test init[3] == 2.0
+
+    # On a trending series the scale comes from differences, not levels
+    rng = Random.Xoshiro(1)
+    n = 200
+    μ = cumsum(cumsum(0.5 .+ 0.1 .* randn(rng, n)) .+ 2 .* randn(rng, n))
+    yt = reshape(1000 .+ μ .+ 5 .* randn(rng, n), 1, :)
+    spec = local_linear_trend()
+    ref = optimize_ssm(spec, yt; θ0 = (var_obs = 25.0, var_level = 4.0, var_slope = 0.01))
+    @test optimize_ssm(spec, yt).loglik ≈ ref.loglik atol = 1e-3
 end
 
 @testset "optimize_ssm_with_stderr uses the delta method" begin
