@@ -369,10 +369,21 @@ Other author answers, verbatim:
 - **Description**: Found while doing CHUNK-011. With `error_lags > 0`, `DynamicFactorModel` puts the idiosyncratic errors in the state and sets `H = 0`. Then `y_t − e_t = Λ f_t` holds exactly in the smoothed posterior, and the EM loadings update returns the old Λ: the loadings never leave their random initial values. δ and σ² do move.
   - Reparameterise so EM can identify Λ. Recommended: quasi-difference the observation equation, `y_t − δ(L) y_t = λ(L)(1 − δ(L)) f_t + v_t` with `H = diag(σ²)`, augment the factor state with the extra lags, and alternate (ECM) between δ and the remaining parameters. The alternative is a small fixed `H` (Bańbura–Modugno), which converges very slowly.
   - Flip the "DynamicFactorModel EM moves the loadings with AR errors" pin in `test/known_bugs_tests.jl` and move it to `test/dfm_tests.jl`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-011
 - **Cluster**: correctness
 - **Notes**:
+  - **Representation (recommended option taken):** with `r > 0` the state is the factor lags only, `s = max(q, p + r + 1)`. The observation equation is quasi-differenced, `X̃ₜ = Xₜ − Σ δₗ Xₜ₋ₗ = Λ W(δ) αₜ + vₜ`, with `H = diag(σ²)`. `_dfm_composite_loadings!` builds `Z = Λ W(δ)` (with r = 0 it is `[Λ₀ … Λₚ 0…]`). R is now `m × k` and Q is `Σ_η` in both cases; the idle idiosyncratic shock columns are gone.
+  - **ECM** (`_update_dfm_ar!`), after `update_T!`/`update_Q!`:
+    1. Λ by regression on `W αₜ` over the valid periods;
+    2. δ by WLS on `S_cc = Σ E[cc′]`, with `cₗ = Xₜ₋ₗ − Λ Bₗ αₜ`, all functions of αₜ, so no cross-covariances are needed (stationarity guard kept);
+    3. σ².
+  - It uses its own S_yα/S_αα over the valid periods (see Open Questions).
+  - **Likelihood** is now conditional on `X_{1:r}`. A period contributes only if it and its r predecessors are observed. The smoothed factors at t ≤ r come from the dynamics only. Documented in the `fit!` docstring and the DFM tutorial.
+  - **Forecast** with AR errors (`_forecast_dfm_ar`) iterates the augmented state `[αₜ; Xₜ…Xₜ₋ᵣ₊₁]` from `att[:, n]` and the stored `y_tail`. It throws `ArgumentError` if one of the last r observations is missing.
+  - **Removed internals:** `compute_error_sufficient_stats!`, `update_ar_errors!`, and the workspace fields `factor_state_dim`/`error_state_dim`/`total_state_dim`/`S_ee`/`S_xe`/`S_xx`. Added `state_dim`, `y_qd`, `y_tail`, `S_cc`. None were exported.
+  - **Tests** (`dfm_tests.jl`): AR(1) recovery at n = 2000 (loading ratios within 0.1, δ within 0.05, σ², the Z structure, monotone); AR(2) + `loading_lags = 1` at n = 3000; a missing block of periods; forecast h = 1, 2 against the analytic recursion, and the missing-tail throw. The pin was removed from `known_bugs_tests.jl`. At n = 5000 the loading ratios are within 0.03 and δ̂ = 0.599.
+  - The r = 0 path is unchanged apart from the shock dimension; its tests pass with the same thresholds.
 
 ### CHUNK-012: introduce-abstract-supertypes-and-accessor-vocabulary
 - **Kind**: `implement`
@@ -731,6 +742,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-036 (partial-periods-in-exact-diffuse-filters) → next: CHUNK-038
 - 2026-10-08 CHUNK-038 (fix-exact-diffuse-update-sign) → next: CHUNK-039
 - 2026-10-08 CHUNK-039 (exact-diffuse-singular-finf) → next: CHUNK-037
+- 2026-10-08 CHUNK-037 (fix-dfm-ar-error-loadings) → next: CHUNK-012
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -740,3 +752,5 @@ Other author answers, verbatim:
 - Templates do `diffuse ? 1e7 : 1e4` after testing `=== :exact`, so `diffuse = :foo` throws a `TypeError` rather than a clear `ArgumentError`. Fold this into CHUNK-013 (failure model).
 - The `_ssm_fit_em_static!` in `src/inplace.jl` has no callers. Delete it in CHUNK-019 or CHUNK-030.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
+- `compute_sufficient_stats!` sums `S_αα` over all periods but `S_yα`/`S_yy` only over observed ones. So `update_Z!` and `update_H!` are biased whenever whole periods are missing, in the general EM and the white-noise DFM. The AR-error DFM path uses its own valid-period moments. Fix in CHUNK-019 (consolidate EM).
+- `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.

@@ -1,6 +1,7 @@
 """
 Tests for DynamicFactorModel: constructor validation, EM recovery of the
-idiosyncratic variances and loadings, and monotonicity of the EM log-likelihood.
+idiosyncratic variances, loadings and AR error coefficients, monotonicity of the
+EM log-likelihood, and forecasting with AR errors.
 """
 
 using Test
@@ -69,15 +70,84 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         @test _abscor(vec(factors(model)), f) > 0.95
     end
 
-    @testset "EM with AR(1) errors updates δ and σ²" begin
-        y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6)
+    @testset "EM with AR(1) errors recovers loadings, δ and σ²" begin
+        y, f = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 2000)
         Random.seed!(3)
         model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
-        fit!(EM(), model, y; maxiter = 200)
+        fit!(EM(), model, y; maxiter = 1000)
+        @test isconverged(model)
         @test _monotone(model.loglik_history)
-        # δ starts at 0.3 and σ² at 1.0; both must move.
-        @test abs(ar_coefficients(model)[1] - 0.3) > 0.1
-        @test maximum(abs.(idiosyncratic_variances(model) .- 1.0)) > 0.5
+
+        Λ = vec(loadings(model)[1])
+        @test maximum(abs.(Λ ./ Λ[1] .- DFM_λ ./ DFM_λ[1])) < 0.1
+        @test abs(ar_coefficients(model)[1] - 0.6) < 0.05
+        @test all(abs.(idiosyncratic_variances(model) .- DFM_σ²) .<= 0.15 .* DFM_σ² .+ 0.03)
+        @test _abscor(vec(factors(model)), f) > 0.95
+
+        # The observation equation is quasi-differenced: Z = Λ₀ (1 - δL) on the
+        # factor state [fₜ; fₜ₋₁], and H holds the innovation variances.
+        δ = ar_coefficients(model)[1]
+        @test model.kf_ws.Z ≈ [Λ -δ .* Λ]
+        @test diag(model.kf_ws.H) ≈ idiosyncratic_variances(model)
+    end
+
+    @testset "EM with AR(2) errors and dynamic loadings" begin
+        rng = MersenneTwister(4)
+        n, N = 3000, length(DFM_λ)
+        λ1 = [0.5, 0.0, -0.3, 0.2, 0.4, 0.0]
+        f = zeros(n)
+        e = zeros(N, n)
+        for t in 3:n
+            f[t] = 0.7 * f[t - 1] + randn(rng)
+            e[:, t] .= 0.5 .* e[:, t - 1] .+ 0.2 .* e[:, t - 2] .+ sqrt.(DFM_σ²) .* randn(rng, N)
+        end
+        y = DFM_λ * f' .+ λ1 * circshift(f, 1)' .+ e
+        Random.seed!(3)
+        model = DynamicFactorModel(N, 1, n; error_lags = 2, loading_lags = 1)
+        fit!(EM(), model, y; maxiter = 2000)
+        @test _monotone(model.loglik_history)
+        @test ar_coefficients(model) ≈ [0.5, 0.2] atol = 0.05
+        L = loadings(model)
+        s = L[1][1]
+        @test vec(L[1]) ./ s ≈ DFM_λ ./ DFM_λ[1] atol = 0.1
+        @test vec(L[2]) ./ s ≈ λ1 ./ DFM_λ[1] atol = 0.1
+    end
+
+    @testset "AR errors with a missing period" begin
+        y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 400)
+        y[:, 100:102] .= NaN
+        Random.seed!(3)
+        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        fit!(EM(), model, y; maxiter = 300)
+        @test _monotone(model.loglik_history)
+        @test isfinite(loglikelihood(model))
+        @test abs(ar_coefficients(model)[1] - 0.6) < 0.1
+    end
+
+    @testset "forecast with AR errors" begin
+        y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 300)
+        Random.seed!(3)
+        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        fit!(EM(), model, y; maxiter = 300)
+        kf, n = model.kf_ws, size(y, 2)
+        δ = ar_coefficients(model)[1]
+        Z, Tm = kf.Z, kf.Tmat
+        fc = forecast(model, 2)
+
+        # Xₙ₊₁ = δ Xₙ + Z αₙ₊₁ + vₙ₊₁ and Xₙ₊₂ = δ Xₙ₊₁ + Z αₙ₊₂ + vₙ₊₂.
+        a1 = Tm * kf.att[:, n]
+        P1 = Tm * kf.Ptt[:, :, n] * Tm' + kf.RQR
+        @test fc.obs_mean[:, 1] ≈ δ .* y[:, n] .+ Z * a1
+        @test fc.obs_cov[:, :, 1] ≈ Z * P1 * Z' + kf.H
+        @test fc.obs_mean[:, 2] ≈ δ .* fc.obs_mean[:, 1] .+ Z * Tm * a1
+        @test fc.state_mean[:, 1] ≈ a1
+        @test fc.factor_mean ≈ fc.state_mean[1:1, :]
+
+        y[:, end] .= NaN
+        Random.seed!(3)
+        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        fit!(EM(), model, y; maxiter = 5)
+        @test_throws ArgumentError forecast(model, 1)
     end
 end
 

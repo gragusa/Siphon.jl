@@ -4,28 +4,28 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-039: exact-diffuse-singular-finf
-A diffuse period where `Finf = Z_t Pinf Z_t'` is singular but nonzero is now processed one row at a time (Koopman & Durbin 2000), and is marked with the new flag `2`. Before, these periods took the Fstar step, so the diffuse period never ended and the likelihood was wrong. All three diffuse filters share one non-allocating kernel, `_univariate_diffuse_update!` in `src/filter_ad.jl`, which decorrelates a non-diagonal `H_t` by its unit-LDL factor first.
+CHUNK-037: fix-dfm-ar-error-loadings
+`DynamicFactorModel` with AR idiosyncratic errors no longer puts the errors in the state with `H = 0`, which made the EM loadings update a fixed point. The observation equation is now quasi-differenced (`X̃ₜ = λ(L)(1 − δ(L)L) fₜ + vₜ`, `H = diag(σ²)`), and the EM alternates loadings, δ and σ² (ECM). Forecasting with AR errors iterates an augmented state of factors plus the last r observations.
 
 ## Key decisions / shim choices
-- New flag value `2`. Flag `0` now means only "Finf is zero". Classification is in `_diffuse_step_flag`; `_safe_inverse` was deleted.
-- A flag-2 step stores `Ft = Finf`, `Kt = T G` (the gain with `a_filt = a + G v`) and `Ptt` = the filtered Pstar, so the predict identities hold in every period.
-- Likelihood convention: like the flag-1 step, diffuse rows drop their `log Finf,ᵢ` and 2π terms.
-- The multivariate flag-1 step is unchanged (the two forms are not cross-checked against each other directly, but both match the κ-limit).
+- With AR errors the likelihood is conditional on the first r observations. A period contributes only if it and its r predecessors are observed. Documented in the `fit!` docstring and the DFM tutorial.
+- The shock dimension is now k for all DFMs (R = [I_k; 0], Q = Σ_η). The unused idiosyncratic shock columns were dropped.
+- Internal helpers `compute_error_sufficient_stats!` and `update_ar_errors!` were replaced by `_update_dfm_ar!`. Workspace fields changed (all internal, none exported).
 
 ## State of the codebase
-- Files modified: `src/filter_ad.jl`, `src/inplace.jl`, `src/types.jl`, `test/diffuse_tests.jl`, `test/known_bugs_tests.jl`
-- Test suite: pass (`Pkg.test()`); Known bugs shows 3 broken pins (DFM AR-error loadings, profile_em_ssm θ, EM diagonal T)
+- Files modified: `src/inplace.jl`, `test/dfm_tests.jl`, `test/known_bugs_tests.jl`, `docs/src/tutorials/dynamic_factor.md`
+- Test suite: pass (`Pkg.test()`); Known bugs shows 2 broken pins (profile_em_ssm θ, EM diagonal T)
 - Ambiguity count: 0 (no change)
-- Staged but uncommitted: yes (src and test files)
+- Staged but uncommitted: yes
 
 ## Cluster status
-- correctness: 10 of 11 complete (CHUNK-037 remains)
+- correctness: 11 of 11 complete
 
 ## Next chunk
-CHUNK-037: fix-dfm-ar-error-loadings — with `error_lags > 0` the DFM sets H = 0 and the EM loadings update is a fixed point. Reparameterise (quasi-difference the observation equation) so EM can move Λ.
+CHUNK-012: introduce-abstract-supertypes-and-accessor-vocabulary. This is the first breaking chunk. It adds the abstract result and workspace types, one accessor vocabulary (`filtered_states_cov` style), `parameters` / `system_matrices` semantics, and renames the setter `update_*!` functions that collide with the EM M-step names. It must create `docs/src/conversion_guide.md` and add it to `docs/make.jl`.
 
 ## Watch out for
-- Float64 approximate-diffuse references at κ = 1e8 lose precision through cancellation when several rows load on one diffuse direction. The new tests use BigFloat at κ = 1e20 (`setprecision(BigFloat, 256)`); the functional filters accept BigFloat `KFParms`.
-- The flag-2 failure path (`Fstar,ᵢ < −tol`) returns `-Inf`; the in-place filter returns early and leaves the remaining periods unwritten. CHUNK-013 (failure model) should cover this.
+- CHUNK-012 renames the single-matrix setters `update_Z!` … `update_Q!` (inplace.jl ~505-519), which share names with the EM M-step functions the DFM still calls (`update_T!`, `update_Q!`, `update_Z!`, `update_H!`).
+- The DFM tests use `Random.seed!(3)` before construction because the initial loadings use the global RNG. A CHUNK-022/026 `rng` keyword should keep that draw order or update the tests.
+- New Open Questions: `compute_sufficient_stats!` has an S_αα vs S_yα period mismatch with missing periods (for CHUNK-019), and the DFM tutorial has a stray `include("src/inplace.jl")` (for CHUNK-032).
 - The `no-plan-comments.py` PostToolUse hook in the user's settings points at a missing file; it errors after every Edit or Write, but the edits apply.

@@ -71,13 +71,24 @@ f = factors(model)              # k × n smoothed factors
 
 ### State Dimension
 
-The state vector stacks current and lagged factors (and errors if r > 0):
+The state vector stacks current and lagged factors:
 
 ```math
-\alpha_t = [f_t', f_{t-1}', \ldots, f_{t-s+1}', e_t', e_{t-1}', \ldots, e_{t-r+1}']'
+\alpha_t = [f_t', f_{t-1}', \ldots, f_{t-s+1}']'
 ```
 
-where ``s = \max(q, p+1)``. State dimension: ``m = k \times s + N \times r``.
+where ``s = \max(q, p+r+1)``. State dimension: ``m = k \times s``.
+
+With AR errors (``r > 0``) the idiosyncratic errors are not states. The model is
+estimated on the quasi-differenced data
+
+```math
+\tilde x_t = x_t - \delta_1 x_{t-1} - \cdots - \delta_r x_{t-r}
+  = \lambda(L)\,(1 - \delta(L)L)\, f_t + v_t,
+```
+
+so the log-likelihood is conditional on the first ``r`` observations, and the EM
+alternates the loadings, ``\delta`` and the idiosyncratic variances.
 
 ## DSL Approach: dynamic_factor Template
 
