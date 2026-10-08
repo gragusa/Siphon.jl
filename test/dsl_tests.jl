@@ -635,9 +635,9 @@ end
     result = kalman_filter(p, y, a1, P1)
 
     # Run smoother
-    smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
 
     @test size(alpha_smooth) == (1, 30)
     @test size(V_smooth) == (1, 1, 30)
@@ -674,9 +674,9 @@ end
 
     # Run filter and smoother
     result = kalman_filter(p, y, a1, P1)
-    smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
 
     # The last smoothed value should match D&K closely (t=100: 798.4)
     # since by then the initialization effect has dissipated
@@ -715,8 +715,7 @@ end
         Q_new = [θ[2];;]
         p_new = Siphon.KFParms(Z, H_new, T, R, Q_new)
         result = kalman_filter(p_new, y, a1, P1)
-        smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-        return sum(smooth.alpha)
+        return sum(smoothed_states(kalman_smoother(result)))
     end
 
     θ = [100.0, 50.0]
@@ -738,17 +737,13 @@ end
     p = Siphon.KFParms(Z, H, T, R, Q)
     y = randn(1, 30) .* 10 .+ 100
 
-    result = kalman_filter_and_smooth(p, y, a1, P1)
+    filt, smooth = kalman_filter_and_smooth(p, y, a1, P1)
 
-    @test haskey(result, :loglik)
-    @test haskey(result, :a_filtered)
-    @test haskey(result, :P_filtered)
-    @test haskey(result, :alpha_smooth)
-    @test haskey(result, :V_smooth)
-
-    @test isfinite(result.loglik)
-    @test size(result.alpha_smooth) == (1, 30)
-    @test all(result.V_smooth[1, 1, :] .> 0)
+    @test isfinite(loglikelihood(filt))
+    @test size(smoothed_states(smooth)) == (1, 30)
+    @test all(smoothed_states_cov(smooth)[1, 1, :] .> 0)
+    @test crosslag_covs(last(kalman_filter_and_smooth(p, y, a1, P1; crosscov = true))) ≈
+          crosslag_covs(kalman_smoother(filt; crosscov = true))
 end
 
 @testset "kalman_smoother_scalar" begin
@@ -766,8 +761,7 @@ end
     result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
 
     # Run scalar smoother
-    alpha_smooth,
-    V_smooth = kalman_smoother_scalar(
+    smooth_scalar = kalman_smoother_scalar(
         Z,
         T,
         result_scalar.at,
@@ -775,6 +769,8 @@ end
         result_scalar.vt,
         result_scalar.Ft
     )
+    alpha_smooth = vec(smoothed_states(smooth_scalar))
+    V_smooth = vec(smoothed_states_cov(smooth_scalar))
 
     @test length(alpha_smooth) == 30
     @test length(V_smooth) == 30
@@ -792,9 +788,9 @@ end
 
     p = Siphon.KFParms(Z_m, H_m, T_m, R_m, Q_m)
     result = kalman_filter(p, y_m, a1_m, P1_m)
-    smooth_m = kalman_smoother(Z_m, T_m, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth_m = smooth_m.alpha
-    V_smooth_m = smooth_m.V
+    smooth_m = kalman_smoother(result)
+    alpha_smooth_m = smoothed_states(smooth_m)
+    V_smooth_m = smoothed_states_cov(smooth_m)
 
     @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol = 1e-10)
     @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol = 1e-10)
@@ -922,10 +918,10 @@ end
     θ_vec = [θ.var_obs, θ.var_level]
     ss = build_linear_state_space(spec, θ_vec, y)
     filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-    smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+    smooth = kalman_smoother(filt)
 
     @test ll_new ≈ filt.loglik rtol=1e-10
-    @test alpha_new ≈ smooth.alpha rtol=1e-10
+    @test alpha_new ≈ smoothed_states(smooth) rtol=1e-10
 end
 
 @testset "StateSpaceModel with local_linear_trend" begin

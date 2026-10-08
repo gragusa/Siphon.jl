@@ -49,7 +49,7 @@ const fail_state_accessors = (predicted_states, predicted_states_cov, filtered_s
     @test system_matrices(r) === p
 
     # Nothing downstream runs on a failed result.
-    @test_throws "stopped in period 3" kalman_smoother(r, fail_Z, fail_T)
+    @test_throws "stopped in period 3" kalman_smoother(r)
     @test_throws "stopped in period 3" kalman_smoother(p, y, fail_a1, fail_P1)
     @test_throws "stopped in period 3" predict(p, y, fail_a1, fail_P1)
     @test_throws "stopped in period 3" forecast(p, y, fail_a1, fail_P1, 2)
@@ -124,7 +124,7 @@ end
     @test loglikelihood(ws) == -Inf
     @test_throws "stopped in period 3" filtered_states(ws)
     @test_throws "stopped in period 3" kalman_smoother!(ws)
-    @test filter_and_smooth!(ws, y) == -Inf
+    @test kalman_filter_and_smooth!(ws, y) == -Inf
     @test_throws "stopped in period 3" smoothed_states(ws)
 
     # The same workspace recovers once the parameters are valid.
@@ -134,10 +134,10 @@ end
     @test loglikelihood(ws) == ll
     @test size(filtered_states(ws)) == (1, 10)
     @test_throws "Call kalman_smoother!(ws) first" smoothed_states(ws)
-    kalman_smoother!(ws; crosscov = false)
+    kalman_smoother!(ws)
     @test size(smoothed_states(ws)) == (1, 10)
     @test_throws "crosscov = true" crosslag_covs(ws)
-    kalman_smoother!(ws)
+    kalman_smoother!(ws; crosscov = true)
     @test size(crosslag_covs(ws), 3) == 9
     # A new filter run invalidates the smoother output.
     kalman_filter!(ws, y)

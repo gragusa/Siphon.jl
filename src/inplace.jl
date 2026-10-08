@@ -15,7 +15,7 @@ Pre-allocated workspace for in-place Kalman filter and smoother operations.
 - `KalmanWorkspace{T}` struct with all storage
 - `kalman_filter!` - in-place filter with missing data handling
 - `kalman_smoother!` - in-place RTS smoother with cross-lag covariances
-- `filter_and_smooth!` - combined operation
+- `kalman_filter_and_smooth!` - combined operation
 
 ## EMWorkspace (lines ~890-1400)
 EM algorithm infrastructure:
@@ -308,6 +308,24 @@ end
 system_matrices(ws::KalmanWorkspace) = KFParms(ws.Z, ws.H, ws.Tmat, ws.R, ws.Q)
 
 """
+    KalmanFilterResult(ws::KalmanWorkspace) -> KalmanFilterResult
+
+Copy the filter output of `ws`, with its system matrices, into a `KalmanFilterResult`.
+Later runs on `ws` don't change the result, which supports everything a result of
+`kalman_filter` does, such as `kalman_smoother(result)`.
+
+Throws an `ArgumentError` if no filter has run on `ws`. After a failed run the result is
+a failed result: its log-likelihood is `-Inf` and its state accessors throw.
+"""
+function KalmanFilterResult(ws::KalmanWorkspace)
+    ws.status == _NOT_RUN && _require_output(ws, :KalmanFilterResult)
+    p = KFParms(copy(ws.Z), copy(ws.H), copy(ws.Tmat), copy(ws.R), copy(ws.Q))
+    return KalmanFilterResult(p, ws.loglik, copy(ws.at), copy(ws.Pt), copy(ws.att),
+        copy(ws.Ptt), copy(ws.vt), copy(ws.Ft), copy(ws.Kt), copy(ws.missing_mask),
+        copy(ws.observed_mask), ws.status)
+end
+
+"""
     observed_mask(ws::KalmanWorkspace) -> BitMatrix
 
 Return the `p × n` mask that is true where an individual observation was present.
@@ -424,29 +442,25 @@ end
     update_params!(ws; Z=nothing, H=nothing, T=nothing, R=nothing, Q=nothing)
 
 Selectively update parameters. Only non-nothing arguments are updated.
-Recomputes RQR if R or Q change. `Tmat` is accepted as an alias for `T`.
+Recomputes RQR if R or Q change.
 """
 function update_params!(
         ws::KalmanWorkspace;
         Z::Union{Nothing, AbstractMatrix} = nothing,
         H::Union{Nothing, AbstractMatrix} = nothing,
         T::Union{Nothing, AbstractMatrix} = nothing,
-        Tmat::Union{Nothing, AbstractMatrix} = nothing,
         R::Union{Nothing, AbstractMatrix} = nothing,
         Q::Union{Nothing, AbstractMatrix} = nothing
 )
-    T !== nothing && Tmat !== nothing &&
-        throw(ArgumentError("update_params!: pass T or Tmat, not both"))
-    Tmat = something(T, Tmat, Some(nothing))
-    _check_params(ws, "update_params!"; Z, H, Tmat, R, Q)
+    _check_params(ws, "update_params!"; Z, H, Tmat = T, R, Q)
     if Z !== nothing
         copyto!(ws.Z, Z)
     end
     if H !== nothing
         copyto!(ws.H, H)
     end
-    if Tmat !== nothing
-        copyto!(ws.Tmat, Tmat)
+    if T !== nothing
+        copyto!(ws.Tmat, T)
     end
 
     update_RQR = false
@@ -713,14 +727,15 @@ end
 # ============================================
 
 """
-    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=true)
+    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=false)
 
 Run RTS smoother in-place using filter results stored in workspace.
 
 # Arguments
 - `ws`: Workspace with filter results (must call `kalman_filter!` first; throws an
   `ArgumentError` if the filter has not run or failed)
-- `crosscov`: If true, compute cross-lag covariances for EM (default: true)
+- `crosscov`: If true, also compute the cross-lag covariances, which EM needs
+  (default: false)
 
 # Stored Results
 - `αs`: Smoothed states E[αₜ|y₁:ₙ]
@@ -731,7 +746,7 @@ Run RTS smoother in-place using filter results stored in workspace.
 Implements Durbin & Koopman (2012) backward recursion.
 Cross-lag covariances computed during the same backward pass for efficiency.
 """
-function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {T}
+function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = false) where {T}
     _require_output(ws, :kalman_smoother!)
     m, n = ws.state_dim, ws.n_times
     p = ws.obs_dim
@@ -935,20 +950,20 @@ end
 # ============================================
 
 """
-    filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool=true) -> loglik
+    kalman_filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool=false) -> loglik
 
 Run filter and smoother in one call.
 
 # Arguments
 - `ws`: Pre-allocated workspace
 - `y`: Observations (p × n)
-- `crosscov`: Compute cross-lag covariances (default: true)
+- `crosscov`: Also compute the cross-lag covariances (default: false)
 
 # Returns
 - `loglik`: Log-likelihood. When the filter fails it is `-Inf` and the smoother is
   skipped.
 """
-function filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true)
+function kalman_filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = false)
     y = _nan_obs(y)
     loglik = kalman_filter!(ws, y)
     ws.status == 0 && kalman_smoother!(ws; crosscov = crosscov)
@@ -2353,7 +2368,7 @@ function em_estimate!(
         iter = i
 
         # E-step: Filter and smooth
-        filter_and_smooth!(kf_ws, y)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
         ll = kf_ws.loglik
         loglik_history[i] = ll
 
@@ -2421,7 +2436,7 @@ function em_estimate!(
     # just updated and the workspace is stale).
     failed_at = kf_ws.status
     if !converged && failed_at == 0
-        filter_and_smooth!(kf_ws, y)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
         failed_at = kf_ws.status
     end
     warn && _warn_em(converged, iter, failed_at, tol)
@@ -2457,7 +2472,7 @@ end
 # the `allow_degen` opt-in path of `em_estimate!`. Mirrors MARSS's
 # `degen.test`: for each diagonal cell of `H` (when `what === :H`) or `Q`
 # (when `what === :Q`) whose current value is below `degen_lim`, tentatively
-# zero the cell, run `filter_and_smooth!`, and commit the freeze iff loglik
+# zero the cell, run `kalman_filter_and_smooth!`, and commit the freeze iff loglik
 # is finite and does not decrease beyond `√eps`. On a failed freeze the prior
 # value is restored. When any trial ran, the filter and smoother are re-run at
 # the end so the workspace matches the committed parameters. Returns the number
@@ -2485,7 +2500,7 @@ function _try_degenerate!(
             h_save < threshold || continue
             kf_ws.H[i, i] = zero(T)
             n_trials += 1
-            ll_new = filter_and_smooth!(kf_ws, y)
+            ll_new = kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
             if isfinite(ll_new) && ll_new >= ll_old - eps_tol
                 em_ws.H_zero[i] = true
                 ll_old = ll_new
@@ -2511,7 +2526,7 @@ function _try_degenerate!(
             end
             _update_RQR!(kf_ws)
             n_trials += 1
-            ll_new = filter_and_smooth!(kf_ws, y)
+            ll_new = kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
             if isfinite(ll_new) && ll_new >= ll_old - eps_tol
                 em_ws.Q_zero[i] = true
                 ll_old = ll_new
@@ -2529,7 +2544,7 @@ function _try_degenerate!(
     # Re-sync the workspace with the committed parameters so subsequent M-step
     # calls see the up-to-date sufficient statistics.
     if n_trials > 0
-        filter_and_smooth!(kf_ws, y)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
     end
 
     return n_frozen
@@ -3143,14 +3158,13 @@ function _ssm_compute_smoother!(model::StateSpaceModel)
     kfparms = Siphon.build_kfparms(model.spec, theta_nt)
 
     # Run smoother using stored filter results
-    alpha,
-    V = Siphon.kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
+    sm = _kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
         missing_mask = model.missing_mask, observed_mask = model.observed_mask,
         Ptt = model.Ptt)
 
     # Cache results
-    copyto!(model.smoothed_alpha, alpha)
-    copyto!(model.smoothed_V, V)
+    copyto!(model.smoothed_alpha, sm.αs)
+    copyto!(model.smoothed_V, sm.Vs)
     model.smoother_computed = true
     return nothing
 end
@@ -4209,22 +4223,22 @@ function _ssm_fit_em_static!(
         loglik_prev = loglik_curr
 
         # E-step: Run smoother with cross-covariances for M-step
-        smooth = Siphon.kalman_smoother(
+        smooth = _kalman_smoother(
             ss.p.Z,
             ss.p.T,
             filt.at,
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true
+            crosscov = true
         )
 
         # Compute sufficient statistics from smoother output
         stats = _compute_static_sufficient_stats(
             y,
-            smooth.alpha,
-            smooth.V,
-            smooth.P_crosslag,
+            smooth.αs,
+            smooth.Vs,
+            smooth.Pcross,
             filt.missing_mask
         )
 
@@ -4876,7 +4890,7 @@ function _em_dfm!(
 
         # E-step: Filter and smooth
         y_f = filter_data!()
-        filter_and_smooth!(kf_ws, y_f)
+        kalman_filter_and_smooth!(kf_ws, y_f; crosscov = true)
         ll = kf_ws.loglik
         loglik_history[i] = ll
         kf_ws.status == 0 || break
@@ -4929,7 +4943,7 @@ function _em_dfm!(
     # so the workspace already holds the run at the current parameters.
     if kf_ws.status == 0
         sync_params_to_ssm!(kf_ws, dfm_ws)
-        filter_and_smooth!(kf_ws, filter_data!())
+        kalman_filter_and_smooth!(kf_ws, filter_data!(); crosscov = true)
     end
     warn && _warn_em(converged, iter, kf_ws.status, tol)
     if r > 0

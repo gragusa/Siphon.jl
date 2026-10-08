@@ -29,21 +29,17 @@ using Random
     filt = kalman_filter(p, y, a1, P1)
 
     # Without cross-covariances
-    result1 = kalman_smoother(
-        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = false)
-    @test haskey(result1, :alpha)
-    @test haskey(result1, :V)
-    @test size(result1.alpha) == (1, 30)
-    @test size(result1.V) == (1, 1, 30)
+    result1 = kalman_smoother(filt)
+    @test size(smoothed_states(result1)) == (1, 30)
+    @test size(smoothed_states_cov(result1)) == (1, 1, 30)
+    @test result1.Pcross === nothing
 
     # With cross-covariances
-    result2 = kalman_smoother(
-        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
-    @test haskey(result2, :P_crosslag)
-    @test size(result2.P_crosslag) == (1, 1, 29)  # n-1 cross-covariances
+    result2 = kalman_smoother(filt; crosscov = true)
+    @test size(crosslag_covs(result2)) == (1, 1, 29)  # n-1 cross-covariances
 
     # Cross-covariances should be positive for local level
-    @test all(result2.P_crosslag .> 0)
+    @test all(crosslag_covs(result2) .> 0)
 end
 
 @testset "fit!(EM(), ...) local_level basic" begin
@@ -203,18 +199,10 @@ end
         p = KFParms(Z, H, T, R, Q)
 
         filt = kalman_filter(p, y, a1, P1)
-        smooth = kalman_smoother(
-            Z,
-            T,
-            filt.at,
-            filt.Pt,
-            filt.vt,
-            filt.Ft;
-            compute_crosscov = true
-        )
+        smooth = kalman_smoother(filt; crosscov = true)
 
         # Sum of smoothed states and cross-covariances
-        return sum(smooth.alpha) + sum(smooth.P_crosslag)
+        return sum(smoothed_states(smooth)) + sum(crosslag_covs(smooth))
     end
 
     theta = [100.0, 50.0]
@@ -523,14 +511,14 @@ end
     # Run filter and smoother
     kfp = KFParms(Z, H, T, R, Q)
     filt = kalman_filter(kfp, y, a1, P1)
-    smooth = kalman_smoother(
-        Z, T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
+    smooth = kalman_smoother(filt; crosscov = true)
 
     # Run M-step
     Z_new, T_new,
     H_new,
     Q_new = Siphon.DSL._mstep_full_cov(
-        Z, T, R, y, smooth.alpha, smooth.V, smooth.P_crosslag)
+        Z, T, R, y, smoothed_states(smooth), smoothed_states_cov(smooth),
+        crosslag_covs(smooth))
 
     # Check symmetry
     @test H_new ≈ H_new' atol=1e-10

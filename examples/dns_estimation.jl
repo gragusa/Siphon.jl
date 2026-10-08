@@ -275,12 +275,12 @@ P1 = 1e4 * Matrix{Float64}(I, 3, 3)
 
 p_final = KFParms(Z_final, H_final, Matrix(T_final), R_final, Matrix(Q_final))
 filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(Z_final, Matrix(T_final), filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 println("\n=== Smoothed Factors ===")
 println("Correlation between true and smoothed factors:")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    corr = cor(factors[i, :], smooth.alpha[i, :])
+    corr = cor(factors[i, :], smoothed_states(smooth)[i, :])
     println("  $name: ", round(corr, digits = 4))
 end
 
@@ -438,19 +438,12 @@ if isfile(data_path)
 
     p_real = KFParms(Z_real, H_real, Matrix(T_real), R_real, Matrix(Q_real))
     filt_real = kalman_filter(p_real, selected_yields, a1_real, P1_real)
-    smooth_real = kalman_smoother(
-        Z_real,
-        Matrix(T_real),
-        filt_real.at,
-        filt_real.Pt,
-        filt_real.vt,
-        filt_real.Ft
-    )
+    smooth_real = kalman_smoother(filt_real)
 
     # Factor statistics
     println("Smoothed factor statistics:")
     for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-        factor = smooth_real.alpha[i, :]
+        factor = smoothed_states(smooth_real)[i, :]
         println(
             "  $name: mean = ",
             round(mean(factor), digits = 2),

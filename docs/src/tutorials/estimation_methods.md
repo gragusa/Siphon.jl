@@ -118,11 +118,11 @@ ss = build_linear_state_space(spec, result_mle.θ, yields)
 
 # Run filter and smoother
 filt = kalman_filter(ss.p, yields, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 # Compare with true factors
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    corr = cor(factors[i, :], smooth.alpha[i, :])
+    corr = cor(factors[i, :], smoothed_states(smooth)[i, :])
     println("$name correlation: ", round(corr, digits=4))
 end
 ```
@@ -274,19 +274,19 @@ a1 = zeros(3)
 P1 = 1e4 * Matrix{Float64}(I, 3, 3)
 
 filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(Z_opt, T_opt, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 # 6. ANALYZE FACTORS
 println("\n=== Factor Analysis ===")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    f = smooth.alpha[i, :]
+    f = smoothed_states(smooth)[i, :]
     println("$name: mean=$(round(mean(f), digits=2)), std=$(round(std(f), digits=2))")
 end
 
 # 7. FORECAST (optional)
 # Build forecast from final state
 h = 12  # 12-period ahead
-f_last = smooth.alpha[:, end]
+f_last = smoothed_states(smooth)[:, end]
 f_forecast = zeros(3, h)
 for t in 1:h
     f_forecast[:, t] = T_opt^t * f_last

@@ -193,15 +193,15 @@ end
     @test loglikelihood(result) ≈ ref.loglik
     @test filtered_states(result) ≈ ref.a_filt
 
-    smoothed = kalman_smoother(result, s.Z, s.T)
-    @test smoothed.alpha ≈ ref.α
-    @test smoothed.V ≈ ref.V
+    smoothed = kalman_smoother(result)
+    @test smoothed_states(smoothed) ≈ ref.α
+    @test smoothed_states_cov(smoothed) ≈ ref.V
 
     ws = _workspace(s)
     @test kalman_filter!(ws, y) ≈ loglikelihood(result)
     kalman_smoother!(ws)
-    @test smoothed_states(ws) ≈ smoothed.alpha
-    @test smoothed_states_cov(ws) ≈ smoothed.V
+    @test smoothed_states(ws) ≈ smoothed_states(smoothed)
+    @test smoothed_states_cov(ws) ≈ smoothed_states_cov(smoothed)
 end
 
 @testset "partial missing — mixed-frequency censoring" begin
@@ -571,16 +571,14 @@ end
     # The model smoother uses the observed-row mask
     model = StateSpaceModel(spec, θ, n)
     @test kalman_filter!(model, y) ≈ filt.loglik
-    @test smoothed_states(model) ≈ ref.α
-    @test smoothed_states_cov(model) ≈ ref.V
+    @test smoothed_states(model) ≈ smoothed_states(ref)
+    @test smoothed_states_cov(model) ≈ smoothed_states_cov(ref)
 
     model = StateSpaceModel(spec, n)
     fit!(MLE(), model, y)
     ss_fit = build_linear_state_space(spec, parameters(model), y; use_static = false)
-    @test smoothed_states(model) ≈ kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1).α
-
-    # SmootherResult's convenience constructor uses the mask too
-    @test SmootherResult(ss.p, y, ss.a1, ss.P1).alpha ≈ ref.α
+    @test smoothed_states(model) ≈
+          smoothed_states(kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1))
 
     @test_throws "Use fit!(MLE(), ...)" fit!(EM(), StateSpaceModel(spec, n), y)
 end

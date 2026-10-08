@@ -23,6 +23,7 @@ kalman_loglik_scalar
 ```@docs
 kalman_filter
 kalman_filter_scalar
+KalmanFilterResult
 ```
 
 ## Kalman Smoother
@@ -31,6 +32,7 @@ kalman_filter_scalar
 kalman_smoother
 kalman_smoother_scalar
 kalman_filter_and_smooth
+SmootherResult
 ```
 
 ## Prediction and Forecasting

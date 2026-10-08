@@ -216,9 +216,15 @@ end
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     result = kalman_filter(p, y, a1_nile, P1_nile)
 
-    smooth = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    @test smooth isa SmootherResult
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
+    @test_throws ArgumentError crosslag_covs(smooth)
+    @test size(crosslag_covs(kalman_smoother(result; crosscov = true))) == (1, 1, size(y, 2) - 1)
+
+    # One call does the filtering too
+    @test smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile)) == alpha_smooth
 
     n = size(y, 2)
     @test size(alpha_smooth) == (1, n)
@@ -245,8 +251,7 @@ end
         Q = [theta[2];;]
         p = KFParms(Z_nile, H, T_nile, R_nile, Q)
         result = kalman_filter(p, y, a1_nile, P1_nile)
-        smooth = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
-        return sum(smooth.alpha)
+        return sum(smoothed_states(kalman_smoother(result)))
     end
 
     theta = [15099.0, 1469.1]
@@ -258,17 +263,15 @@ end
 
 @testset "kalman_filter_and_smooth" begin
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
-    result = kalman_filter_and_smooth(p, y, a1_nile, P1_nile)
+    filt, smooth = kalman_filter_and_smooth(p, y, a1_nile, P1_nile)
 
-    @test haskey(result, :loglik)
-    @test haskey(result, :a_filtered)
-    @test haskey(result, :P_filtered)
-    @test haskey(result, :alpha_smooth)
-    @test haskey(result, :V_smooth)
+    @test filt isa KalmanFilterResult
+    @test smooth isa SmootherResult
 
     # Compare with separate calls
     ll = kalman_loglik(p, y, a1_nile, P1_nile)
-    @test isapprox(result.loglik, ll, rtol = 1e-10)
+    @test isapprox(loglikelihood(filt), ll, rtol = 1e-10)
+    @test smoothed_states(smooth) == smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile))
 end
 
 @testset "kalman_smoother_scalar" begin
@@ -279,8 +282,7 @@ end
     # Check struct type
     @test result_scalar isa Siphon.KalmanFilterResultScalar
 
-    alpha,
-    V = kalman_smoother_scalar(
+    smooth_scalar = kalman_smoother_scalar(
         1.0,
         1.0,
         result_scalar.at,
@@ -288,18 +290,19 @@ end
         result_scalar.vt,
         result_scalar.Ft
     )
+    @test smooth_scalar isa SmootherResult
 
     n = length(nile_vec)
-    @test length(alpha) == n
-    @test length(V) == n
+    @test size(smoothed_states(smooth_scalar)) == (1, n)
+    @test size(smoothed_states_cov(smooth_scalar)) == (1, 1, n)
 
     # Should match matrix version
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
-    result = kalman_filter(p, y, a1_nile, P1_nile)
-    alpha_mat,
-    V_mat = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
+    smooth = kalman_smoother(p, y, a1_nile, P1_nile)
 
-    @test isapprox(alpha, vec(alpha_mat), rtol = 1e-10)
+    @test isapprox(smoothed_states(smooth_scalar), smoothed_states(smooth), rtol = 1e-10)
+    @test isapprox(smoothed_states_cov(smooth_scalar), smoothed_states_cov(smooth),
+        rtol = 1e-10)
 end
 
 # DSL tests
@@ -334,6 +337,9 @@ include("ekf_tests.jl")
 
 # Accessors shared by results, workspaces and models
 include("accessor_tests.jl")
+
+# One smoother result type and the result/workspace conversions
+include("smoother_interface_tests.jl")
 
 # Failure model: -Inf objectives, guarded accessors, shape errors, warnings
 include("failure_tests.jl")

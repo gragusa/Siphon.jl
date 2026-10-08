@@ -95,7 +95,7 @@ For repeated calls (MLE inner loop, EM, large panels):
 ```julia
 ws = EKFWorkspace(measurement, AnalyticJacobian(), H, T, R, Q, a1, P1, n)
 ll = ekf_filter!(ws, y)
-ekf_smoother!(ws; crosscov=true)
+ekf_smoother!(ws)                 # crosscov=true also fills crosslag_covs(ws)
 αs = smoothed_states(ws)
 Vs = smoothed_states_cov(ws)
 ```
@@ -108,7 +108,7 @@ Analytic and AD modes (the AD path uses a workspace-owned
 To swap parameters between calls without rebuilding the workspace:
 
 ```julia
-update_params!(ws; H=H_new, Tmat=T_new, Q=Q_new)   # selective in-place update
+update_params!(ws; H=H_new, T=T_new, Q=Q_new)   # selective in-place update
 set_initial!(ws, a1_new, P1_new)
 ll_new = ekf_filter!(ws, y)
 ```

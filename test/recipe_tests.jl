@@ -106,25 +106,15 @@ end
     @test all(lower .< mean .< upper)
 end
 
-@testset "SmootherResult wrapper" begin
-
-    # Test wrapping NamedTuple
+@testset "SmootherResult accessors" begin
     m, n = 2, 10
-    nt = (alpha = rand(m, n), V = rand(m, m, n))
-    sr = SmootherResult(nt)
+    αs, Vs, Pcross = rand(m, n), rand(m, m, n), rand(m, m, n - 1)
+    sr = SmootherResult(αs, Vs, nothing)
 
-    @test sr.alpha == nt.alpha
-    @test sr.V == nt.V
-    @test sr.p === nothing
-    @test sr.time === nothing
-
-    # With optional arguments
-    sr2 = SmootherResult(nt; time = 1:n)
-    @test sr2.time == 1:n
-
-    # Accessor methods
-    @test smoothed_states(sr) == sr.alpha
-    @test smoothed_states_cov(sr) == sr.V
+    @test smoothed_states(sr) === αs
+    @test smoothed_states_cov(sr) === Vs
+    @test_throws "crosscov = true" crosslag_covs(sr)
+    @test crosslag_covs(SmootherResult(αs, Vs, Pcross)) === Pcross
 end
 
 @testset "ForecastResult wrapper" begin
@@ -154,7 +144,7 @@ end
     @test forecast_states(fr) == fr.a
 end
 
-@testset "SmootherResult convenience constructor" begin
+@testset "kalman_smoother returns a SmootherResult" begin
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
@@ -166,12 +156,12 @@ end
     a1 = [0.0]
     P1 = [1e7;;]
 
-    # Convenience constructor runs filter + smoother
-    sr = SmootherResult(p, y, a1, P1)
+    # One call runs filter + smoother
+    sr = kalman_smoother(p, y, a1, P1)
 
-    @test size(sr.alpha) == (1, size(y, 2))
-    @test size(sr.V) == (1, 1, size(y, 2))
-    @test sr.p === p
+    @test sr isa SmootherResult
+    @test size(smoothed_states(sr)) == (1, size(y, 2))
+    @test size(smoothed_states_cov(sr)) == (1, 1, size(y, 2))
 end
 
 @testset "KalmanFilterResult recipe produces series" begin
@@ -211,10 +201,12 @@ end
     a1 = [0.0]
     P1 = [1e7;;]
 
-    sr = SmootherResult(p, y, a1, P1)
+    sr = kalman_smoother(p, y, a1, P1)
 
     rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), sr)
     @test !isempty(rec)
+    rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:time => 1871:1970), sr)
+    @test !isempty(rec2)
 end
 
 @testset "ForecastResult recipe produces series" begin
@@ -243,10 +235,8 @@ end
     a1 = [0.0]
     P1 = [1e7;;]
 
-    filt = kalman_filter(p, y, a1, P1)
-    smooth = SmootherResult(p, y, a1, P1)
-
-    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), (filt, smooth))
+    # The tuple from kalman_filter_and_smooth plots directly
+    rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), kalman_filter_and_smooth(p, y, a1, P1))
     @test !isempty(rec)
 end
 
@@ -413,8 +403,8 @@ end
 
     # Create SmootherResult from workspace
     sr = SmootherResult(ws)
-    @test size(sr.alpha) == (1, n)
-    @test size(sr.V) == (1, 1, n)
+    @test size(smoothed_states(sr)) == (1, n)
+    @test size(smoothed_states_cov(sr)) == (1, 1, n)
 
     # Recipe should work
     rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), sr)

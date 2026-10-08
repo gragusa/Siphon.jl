@@ -70,7 +70,8 @@ with the EM M-step functions:
 | `Siphon.update_R!(ws, R)` | `Siphon.set_R!(ws, R)` |
 | `Siphon.update_Q!(ws, Q)` | `Siphon.set_Q!(ws, Q)` |
 
-`set_params!` and `update_params!` are unchanged.
+`set_params!` is unchanged. `update_params!` takes the transition matrix as `T`, on
+`KalmanWorkspace` and `EKFWorkspace` alike; the `Tmat` keyword is gone.
 
 ## Failures and errors
 
@@ -82,7 +83,7 @@ definite, and every path reports this the same way:
 | `kalman_filter!(ws, y)`, `ekf_filter!(ws, y)` or `kalman_filter_diffuse!` on such a period | threw `PosDefException` | returns `-Inf`; the workspace accessors then throw |
 | `kalman_filter(p, y, a1, P1)` and the other functional filters | returned `-Inf` plus arrays holding uninitialised memory | return a result with `loglikelihood(r) == -Inf`; its state and innovation accessors throw, and the arrays past the failure hold `NaN` |
 | `kalman_filter_scalar` and the static one-observable filter | threw `DomainError` | return a failed result, as above |
-| `filter_and_smooth!`, `ekf_filter_and_smooth!` | threw | return `-Inf` and skip the smoother |
+| `kalman_filter_and_smooth!` (formerly `filter_and_smooth!`), `ekf_filter_and_smooth!` | threw | return `-Inf` and skip the smoother |
 | `kalman_smoother`, `predict`, `forecast`, `forecast_paths` on a failed filter | ran on garbage | throw `ArgumentError` |
 | EM (`fit!(EM(), …)`, `em_estimate!`) whose filter fails | threw `PosDefException` | stops, returns `converged = false` and warns |
 
@@ -163,3 +164,45 @@ functional filter reported `Z P Z' + H` there and the in-place filter reported `
 
 These three accessors now return new arrays on workspaces as well as on results. The
 packed layout remains in the fields `vt`, `Ft` and `Kt`, together with `observed_rows`.
+
+## Smoothing
+
+The smoothers return one type, `SmootherResult`, read through the accessors
+`smoothed_states`, `smoothed_states_cov` and `crosslag_covs`. The cross-lag covariances
+are requested with `crosscov`, which defaults to `false` everywhere.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `kalman_smoother(Z, T, at, Pt, vt, Ft; compute_crosscov)` returned `(alpha, V, P_crosslag)` | `kalman_smoother(kalman_filter(p, y, a1, P1); crosscov)` returns a `SmootherResult` |
+| `kalman_smoother(result, Z, T)` | `kalman_smoother(result)`: the system matrices come from `result` |
+| `kalman_smoother(p, y, a1, P1)` returned `(α, V)` | returns a `SmootherResult` |
+| `kalman_smoother_scalar(...)` returned a tuple of vectors | returns a `SmootherResult` with one state (1 × n) |
+| `kalman_filter_and_smooth(p, y, a1, P1)` returned `(loglik, a_filtered, P_filtered, alpha_smooth, V_smooth)` | returns the tuple `(filter, smoother)` of a `KalmanFilterResult` and a `SmootherResult` |
+| `compute_crosscov = true` (functional) | `crosscov = true` |
+| `kalman_smoother!(ws)`, `ekf_smoother!(ws)` computed the cross-lag covariances by default | pass `crosscov = true` |
+| `filter_and_smooth!(ws, y)` | `kalman_filter_and_smooth!(ws, y)`; pass `crosscov = true` for `crosslag_covs(ws)` |
+| `SmootherResult(nt)` wrapping the smoother's NamedTuple | not needed: `kalman_smoother` returns a `SmootherResult` |
+| `SmootherResult(p, y, a1, P1)` | `kalman_smoother(p, y, a1, P1)` |
+| `SmootherResult(ws)` aliased the workspace storage | copies it, so later runs on `ws` don't change it |
+| `SmootherResult(…; time = t)`, then `plot(sr)` | `plot(sr; time = t)` |
+| `sr.alpha`, `sr.V`, `result.alpha_smooth`, `nt.P_crosslag` | `smoothed_states(sr)`, `smoothed_states_cov(sr)`, `crosslag_covs(sr)` |
+
+```julia
+# Siphon 0.1
+filt = kalman_filter(p, y, a1, P1)
+sm = kalman_smoother(p.Z, p.T, filt.at, filt.Pt, filt.vt, filt.Ft; compute_crosscov = true)
+sm.alpha, sm.P_crosslag
+
+# Now
+filt, sm = kalman_filter_and_smooth(p, y, a1, P1; crosscov = true)
+smoothed_states(sm), crosslag_covs(sm)
+plot((filt, sm))
+```
+
+New conversions:
+
+- `KalmanFilterResult(ws)` copies the filter output of a `KalmanWorkspace` into a result,
+  which `kalman_smoother` and the plot recipes accept.
+- `SmootherResult(model)` copies the smoothed states of a fitted `StateSpaceModel`.
+- `kalman_smoother` on an exact diffuse result (`DiffuseFilterResult`) throws an
+  `ArgumentError`. Before, it was a `MethodError`.

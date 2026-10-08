@@ -349,11 +349,12 @@ println("  φ_2_1 = ", round(result.θ.φ_2_1, digits=3), " (true: 0.7)")
 # Extract smoothed factors
 ss = build_linear_state_space(spec, result.θ, y)
 filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
+f_hat = smoothed_states(smooth)
 
 println("\nCorrelation with true factors:")
-println("  Factor 1: ", round(cor(smooth.alpha[1, :], f[1, :]), digits=3))
-println("  Factor 2: ", round(cor(smooth.alpha[2, :], f[2, :]), digits=3))
+println("  Factor 1: ", round(cor(f_hat[1, :], f[1, :]), digits=3))
+println("  Factor 2: ", round(cor(f_hat[2, :], f[2, :]), digits=3))
 ```
 
 ## Forecasting

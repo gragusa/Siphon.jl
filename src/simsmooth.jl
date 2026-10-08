@@ -244,7 +244,7 @@ function simulation_smoother!(
 
     # α̂: smoothed states of the real data.
     if smoothed === nothing
-        filter_and_smooth!(ws, y; crosscov = false)
+        kalman_filter_and_smooth!(ws, y)
         copyto!(sws.α_hat, smoothed_states(ws))
     else
         size(smoothed) == (m, n) || throw(DimensionMismatch(
@@ -262,7 +262,7 @@ function simulation_smoother!(
     _simulate_path!(sws, ws, rng, sws.obs_pattern)
 
     # α̂⁺: smoothed states of the synthetic data.
-    filter_and_smooth!(ws, sws.y_plus; crosscov = false)
+    kalman_filter_and_smooth!(ws, sws.y_plus)
     α_hat_plus = smoothed_states(ws)
 
     for t in 1:n, i in 1:m
@@ -299,7 +299,7 @@ function simulation_smoother(
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)
 
-    filter_and_smooth!(ws, y; crosscov = false)
+    kalman_filter_and_smooth!(ws, y)
     α_hat = copy(smoothed_states(ws))
 
     if n_draws == 1

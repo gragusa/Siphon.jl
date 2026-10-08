@@ -382,8 +382,8 @@ end
 # Get smoothed states
 ss = build_linear_state_space(spec, result.θ, y)
 filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
-println("\nSmoothed state at t=100: ", smooth.alpha[:, 100])
+smooth = kalman_smoother(filt)
+println("\nSmoothed state at t=100: ", smoothed_states(smooth)[:, 100])
 ```
 
 ## Tips and Best Practices

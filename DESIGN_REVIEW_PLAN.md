@@ -514,11 +514,33 @@ Other author answers, verbatim:
   - **Combined function.** Rename `filter_and_smooth!` to `kalman_filter_and_smooth!` to match the functional name. Make `kalman_filter_and_smooth` return the same structured types.
   - **Interconversion.** Add `KalmanFilterResult(ws)`. Make the `SmootherResult` constructors accept every smoother output. `SmootherResult(ws)` (`recipes.jl:221`) must copy rather than alias `ws.αs`/`ws.Vs`.
   - **Workspace keywords.** Reconcile `update_params!`'s `Tmat` keyword with the `T` naming used elsewhere.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-012
 - **Cluster**: api-unification
 - **Notes**:
+  - **`SmootherResult`** is now a real type, defined in `smoother_ad.jl` and exported with the core types. Its fields are `αs`, `Vs`, and `Pcross::Union{Nothing,Array}`; it has accessors `smoothed_states`, `smoothed_states_cov` and `crosslag_covs` (which throws if not computed). The `p` and `time` fields are gone. `time` is now a plot attribute, as on `KalmanFilterResult`. The recipes read `αs`/`Vs`.
+  - **Functional API:**
+    - `kalman_smoother(result::KalmanFilterResult; crosscov=false)` reads Z/T/masks/Ptt from the result.
+    - `kalman_smoother(p, y, a1, P1; crosscov)` = smoother on `kalman_filter`.
+    - `kalman_filter_and_smooth(...; crosscov)` returns the tuple `(KalmanFilterResult, SmootherResult)`, which plots directly through the existing tuple recipe. A failed filter makes it throw (through `kalman_smoother`).
+    - `kalman_smoother(::DiffuseFilterResult)` throws `ArgumentError` (was a `MethodError`); CHUNK-027 replaces it.
+    - `kalman_smoother_scalar` returns a 1-state `SmootherResult`; CHUNK-016 removes the name.
+  - **Array kernel:** `kalman_smoother(Z, T, at, Pt, vt, Ft; …)` became the internal `_kalman_smoother` (returns a `SmootherResult`), used by the model smoother, the dead static EM and the DSL EMs (imported into DSL). The `(result, Z, T)` method was removed.
+  - **One keyword:** `crosscov`, default `false` everywhere (`kalman_smoother`, `kalman_filter_and_smooth`, `kalman_smoother!`, `kalman_filter_and_smooth!`, `ekf_smoother!`, `ekf_filter_and_smooth!`). Internal EM callers (`em_estimate!` E-step/final, `_try_degenerate!`, DFM `_em_dfm!`) pass `crosscov = true` explicitly.
+  - **Rename:** `filter_and_smooth!` → `kalman_filter_and_smooth!` (export and all callers). `ekf_filter_and_smooth!` is left for CHUNK-016.
+  - **Interconversion:**
+    - `KalmanFilterResult(ws::KalmanWorkspace)` copies the output plus the system matrices. It throws only before any run; a failed run gives a failed result.
+    - `SmootherResult(ws::AbstractFilterWorkspace)` copies, including `Pcross` when `crosscov` ran, and works for EKF too.
+    - New `SmootherResult(model::StateSpaceModel)`.
+    - Removed: `SmootherResult(nt)` and `SmootherResult(p, y, a1, P1)`.
+    - Not added: `DiffuseFilterResult(ws)`, because the diffuse workspace keeps no `Pinf_store`/`Pstar_store` (see Open Questions).
+  - **`update_params!`:** the keyword is `T` only, on both `KalmanWorkspace` and `EKFWorkspace` (EKF used `Tmat`). The `Tmat` alias is gone.
+  - **Docs:** a "Smoothing" section in the conversion guide (table + before/after snippet), plus the `update_params!` note. Also updated: `api/core.md` (both copies; adds `KalmanFilterResult`, `SmootherResult`), the tutorials (visualization, estimation_methods, custom_models, dynamic_factor, ekf) and both DNS examples. The docs build was not run.
+  - **Tests:**
+    - New `test/smoother_interface_tests.jl` (35 checks): functional = in-place, defaults, `KalmanFilterResult(ws)` copy/failure semantics, `SmootherResult(ws)`/`(model)` copies, the diffuse throw, AD through `kalman_filter_and_smooth`.
+    - Migrated: runtests, dsl, em, recipe, partial_missing, failure, missing_input, simsmooth, accessor, api_coverage.
+  - **Verification:** `Pkg.test()` passes (2 broken pins unchanged, Aqua 10/10); ambiguities 0.
 
 ### CHUNK-016: dispatch-based-variant-selection
 - **Kind**: `implement`
@@ -815,6 +837,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-012 (introduce-abstract-supertypes-and-accessor-vocabulary) → next: CHUNK-013
 - 2026-10-08 CHUNK-013 (apply-failure-model) → next: CHUNK-014
 - 2026-10-08 CHUNK-014 (apply-missing-data-model) → next: CHUNK-015
+- 2026-10-08 CHUNK-015 (unify-filter-smoother-interfaces) → next: CHUNK-016
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -827,3 +850,5 @@ Other author answers, verbatim:
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `compute_sufficient_stats!` sums `S_αα` over all periods but `S_yα`/`S_yy` only over observed ones. So `update_Z!` and `update_H!` are biased whenever whole periods are missing, in the general EM and the white-noise DFM. The AR-error DFM path uses its own valid-period moments. Fix in CHUNK-019 (consolidate EM).
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
+- `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
+- `ForecastResult` still carries a `time` field, while `SmootherResult` and `KalmanFilterResult` take `time` as a plot attribute. Align in CHUNK-017.

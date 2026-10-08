@@ -133,102 +133,40 @@ function select_vars(vars, n_vars::Int)
 end
 
 # ============================================================================
-# Wrapper Types for Plotting
+# Smoother and forecast results
 # ============================================================================
 
 """
-    SmootherResult{T<:Real}
+    SmootherResult(ws::AbstractFilterWorkspace)
 
-Wrapper for Kalman smoother output to enable plot recipes.
-
-This is a convenience wrapper around the NamedTuple returned by `kalman_smoother()`.
-The underlying `kalman_smoother()` function is unchanged and continues to return
-its original NamedTuple format.
-
-# Fields
-- `alpha::Matrix{T}`: Smoothed states E[αₜ | y₁:ₙ] (m × n)
-- `V::Array{T,3}`: Smoothed covariances Var[αₜ | y₁:ₙ] (m × m × n)
-- `p::Union{KFParms, Nothing}`: Optional model parameters for observable predictions
-- `time::Union{AbstractVector, Nothing}`: Optional time axis for plotting
-
-# Constructors
-```julia
-# Wrap existing smoother output
-nt = kalman_smoother(Z, T, at, Pt, vt, Ft)
-sr = SmootherResult(nt)
-
-# Convenience: run filter+smoother and wrap
-sr = SmootherResult(p, y, a1, P1)
-```
-"""
-struct SmootherResult{T <: Real}
-    alpha::Matrix{T}
-    V::Array{T, 3}
-    p::Union{KFParms, Nothing}
-    time::Union{AbstractVector, Nothing}
-end
-
-# Constructor from NamedTuple (output of kalman_smoother)
-function SmootherResult(
-        nt::NamedTuple;
-        p::Union{KFParms, Nothing} = nothing,
-        time::Union{AbstractVector, Nothing} = nothing
-)
-    SmootherResult(nt.alpha, nt.V, p, time)
-end
-
-# Convenience constructor: run filter+smoother (functional API)
-function SmootherResult(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1,
-        P1;
-        time::Union{AbstractVector, Nothing} = nothing
-)
-    y = _nan_obs(y)
-    filt = kalman_filter(p, y, a1, P1)
-    nt = kalman_smoother(
-        p.Z,
-        p.T,
-        filt.at,
-        filt.Pt,
-        filt.vt,
-        filt.Ft;
-        missing_mask = filt.missing_mask,
-        observed_mask = filt.observed_mask,
-        Ptt = filt.Ptt
-    )
-    SmootherResult(nt; p = p, time = time)
-end
-
-# Constructor from KalmanWorkspace (in-place API - RECOMMENDED)
-"""
-    SmootherResult(ws::KalmanWorkspace; time=nothing)
-
-Create SmootherResult from a KalmanWorkspace after running `kalman_smoother!(ws)`.
-
-This is the recommended approach for large models as it uses the
-zero-allocation in-place filter and smoother.
+Copy the smoother output of `ws` into a [`SmootherResult`](@ref). Needs a prior
+`kalman_smoother!(ws)` (or `ekf_smoother!(ws)`) run. The cross-lag covariances are
+copied when that run computed them. Later runs on `ws` don't change the result.
 
 # Example
 ```julia
 ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
-kalman_filter!(ws, y)
-kalman_smoother!(ws)
+kalman_filter_and_smooth!(ws, y)
 smooth = SmootherResult(ws)
 plot(smooth)
 ```
 """
-function SmootherResult(
-        ws::KalmanWorkspace{T};
-        time::Union{AbstractVector, Nothing} = nothing
-) where {T}
-    SmootherResult{T}(smoothed_states(ws), smoothed_states_cov(ws), nothing, time)
+function SmootherResult(ws::AbstractFilterWorkspace)
+    store = _filter_store(_require_smoothed(ws, :SmootherResult))
+    Pcross = store.crosscov ? copy(store.Pcross) : nothing
+    return SmootherResult(copy(store.αs), copy(store.Vs), Pcross)
 end
 
-# Accessor methods
-smoothed_states(r::SmootherResult) = r.alpha
-smoothed_states_cov(r::SmootherResult) = r.V
+"""
+    SmootherResult(model::StateSpaceModel)
+
+Copy the smoothed states and covariances of a fitted model into a
+[`SmootherResult`](@ref). The smoother runs first if it has not yet.
+"""
+function SmootherResult(model::StateSpaceModel)
+    return SmootherResult(copy(smoothed_states(model)), copy(smoothed_states_cov(model)),
+        nothing)
+end
 
 """
     ForecastResult{T<:Real}
@@ -508,9 +446,11 @@ Plot smoothed states with confidence bands.
 - `level=0.95`: Confidence level for bands
 - `band=true`: Show confidence bands
 
+- `time=nothing`: Custom time axis (default: 1:n)
+
 # Examples
 ```julia
-smooth = SmootherResult(p, y, a1, P1)
+smooth = kalman_smoother(p, y, a1, P1)
 plot(smooth)                       # All smoothed states
 plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
 ```
@@ -519,16 +459,17 @@ plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
     vars = get(plotattributes, :vars, :all)
     level = get(plotattributes, :level, 0.95)
     band = get(plotattributes, :band, true)
+    time_axis = get(plotattributes, :time, nothing)
 
-    alpha = result.alpha
-    V = result.V
+    alpha = result.αs
+    V = result.Vs
 
     m, n = size(alpha)
     var_indices = select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
-    t_axis = result.time !== nothing ? result.time : 1:n
+    t_axis = time_axis !== nothing ? time_axis : 1:n
 
     if n_vars > 1
         layout --> (n_vars, 1)
@@ -672,12 +613,11 @@ Plot filtered and smoothed states together for comparison.
 - `vars=:all`: Which state variables to plot
 - `level=0.95`: Confidence level for bands (applied to smoother only)
 - `band=true`: Show confidence bands for smoother
+- `time=nothing`: Custom time axis (default: 1:n)
 
 # Example
 ```julia
-result = kalman_filter(p, y, a1, P1)
-smooth = SmootherResult(p, y, a1, P1)
-plot((result, smooth), vars=1)  # Compare state 1
+plot(kalman_filter_and_smooth(p, y, a1, P1), vars=1)  # Compare state 1
 ```
 """
 @recipe function f(results::Tuple{KalmanFilterResult, SmootherResult})
@@ -686,13 +626,14 @@ plot((result, smooth), vars=1)  # Compare state 1
     vars = get(plotattributes, :vars, :all)
     level = get(plotattributes, :level, 0.95)
     band = get(plotattributes, :band, true)
+    time_axis = get(plotattributes, :time, nothing)
 
     m, n = size(filt.att)
     var_indices = select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
-    t_axis = smooth.time !== nothing ? smooth.time : 1:n
+    t_axis = time_axis !== nothing ? time_axis : 1:n
 
     if n_vars > 1
         layout --> (n_vars, 1)
@@ -705,8 +646,8 @@ plot((result, smooth), vars=1)  # Compare state 1
     for (subplot_idx, var_idx) in enumerate(var_indices)
         # Smoother confidence band (if requested)
         if band
-            smooth_mean = smooth.alpha[var_idx, :]
-            smooth_var = [smooth.V[var_idx, var_idx, t] for t in 1:n]
+            smooth_mean = smooth.αs[var_idx, :]
+            smooth_var = [smooth.Vs[var_idx, var_idx, t] for t in 1:n]
             lower, upper = confidence_bands(smooth_mean, smooth_var, level)
 
             @series begin
@@ -741,7 +682,7 @@ plot((result, smooth), vars=1)  # Compare state 1
             linecolor --> SMOOTHER_COLOR
             label --> "Smoothed"
             ylabel --> "State $var_idx"
-            t_axis, smooth.alpha[var_idx, :]
+            t_axis, smooth.αs[var_idx, :]
         end
     end
 end

@@ -19,7 +19,7 @@ include("ekf_ad.jl")
 
 # Core Kalman filter/smoother exports
 export KFParms, KFParms_static
-export KalmanFilterResult, KalmanFilterResultScalar, SmootherWorkspace
+export KalmanFilterResult, KalmanFilterResultScalar, SmootherResult, SmootherWorkspace
 export DiffuseFilterResult  # Exact diffuse initialization
 export STATIC_THRESHOLD, to_static_if_small, select_backend
 export kalman_loglik, kalman_loglik_scalar
@@ -116,7 +116,7 @@ export EMResult, profile_em_ssm, ProfileEMResult
 
 # In-place Kalman filter/smoother (zero-allocation for large models)
 export KalmanWorkspace
-export kalman_filter!, kalman_smoother!, filter_and_smooth!
+export kalman_filter!, kalman_smoother!, kalman_filter_and_smooth!
 export set_params!, set_initial!, update_params!
 # In-place diffuse filter (exact diffuse initialization)
 # Note: Use kalman_filter!(ws::DiffuseKalmanWorkspace, y) - workspace type determines diffuse
@@ -141,7 +141,7 @@ export factors, loadings, var_coefficients
 export isconverged, niterations, innovation_cov, ar_coefficients, idiosyncratic_variances
 
 # Plotting recipes (RecipesBase)
-export SmootherResult, ForecastResult, ObservablePlot
+export ForecastResult, ObservablePlot
 export confidence_bands, select_vars, quantile_normal
 export forecast_observations, forecast_states
 export forecast_states_cov, forecast_observations_cov

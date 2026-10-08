@@ -31,13 +31,14 @@ using StaticArrays
     @test kalman_loglik(ps, ym, SVector{2}(a1), SMatrix{2, 2}(P1)) ≈ ll
     @test kalman_loglik(p, ym, a1, zeros(m, m), Matrix(1.0I, m, m)) ==
           kalman_loglik(p, y, a1, zeros(m, m), Matrix(1.0I, m, m))
-    @test isequal(kalman_smoother(p, ym, a1, P1).α, kalman_smoother(p, y, a1, P1).α)
+    @test isequal(smoothed_states(kalman_smoother(p, ym, a1, P1)),
+        smoothed_states(kalman_smoother(p, y, a1, P1)))
     @test isequal(predict(p, ym, a1, P1).yhat, predict(p, y, a1, P1).yhat)
     @test forecast(p, ym, a1, P1, 3).yhat == forecast(p, y, a1, P1, 3).yhat
 
     ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
     @test kalman_filter!(ws, ym) == kalman_filter!(ws, y)
-    @test filter_and_smooth!(ws, ym) ≈ ll
+    @test kalman_filter_and_smooth!(ws, ym) ≈ ll
     @test simulation_smoother(ws, ym; rng = MersenneTwister(1)) ==
           simulation_smoother(ws, y; rng = MersenneTwister(1))
 

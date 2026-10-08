@@ -23,7 +23,7 @@ using Random
     res = kalman_filter(kf, y, a1, P1)
     ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
     kalman_filter!(ws, y)
-    kalman_smoother!(ws)
+    kalman_smoother!(ws; crosscov = true)
 
     @test res isa AbstractFilterResult
     @test ws isa AbstractFilterWorkspace
