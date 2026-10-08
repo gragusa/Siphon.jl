@@ -19,6 +19,14 @@ using DataFrames
     @test quantile_normal(0.95) ≈ 1.645 atol=0.01
     @test quantile_normal(0.90) ≈ 1.28 atol=0.01
     @test quantile_normal(0.5 + eps()) ≈ 0.0 atol=0.01
+
+    # Exact on both sides of the median
+    @test quantile_normal(0.975) ≈ 1.959963984540054
+    @test quantile_normal(0.025) ≈ -1.959963984540054
+    @test quantile_normal(0.5) == 0.0
+    @test quantile_normal(1e-10) ≈ -6.361340902404056
+    @test_throws DomainError quantile_normal(0.0)
+    @test_throws DomainError quantile_normal(1.0)
 end
 
 @testset "select_vars" begin
@@ -44,6 +52,17 @@ end
     @test_throws ArgumentError select_vars([1, 6], 5)
     @test_throws ArgumentError select_vars(3:7, 5)
     @test_throws ArgumentError select_vars("invalid", 5)
+end
+
+@testset "confidence_bands validates and accepts mixed array types" begin
+    @test_throws DomainError confidence_bands([0.0], [1.0], 95)
+    @test_throws DomainError confidence_bands(zeros(1, 2), ones(1, 1, 2), 1.0)
+    @test_throws DimensionMismatch confidence_bands(zeros(2, 3), ones(2, 2, 4))
+
+    # Float64 means with Float32 covariances, and a view as the mean
+    lower, upper = confidence_bands(view(zeros(2, 4), :, 1:3), ones(Float32, 2, 2, 3), 0.9)
+    @test upper ≈ fill(quantile_normal(0.95), 2, 3)
+    @test lower ≈ -upper
 end
 
 @testset "confidence_bands vector" begin

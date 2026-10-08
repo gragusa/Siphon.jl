@@ -88,9 +88,7 @@ abstract type AbstractEKFMeasurement end
 Pure functional measurement map. Must be defined for the AD-Jacobian path and
 for the functional `ekf_loglik`.
 """
-function measurement(model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement, (model, a, t)))
-end
+function measurement end
 
 """
     measurement!(out, model::AbstractEKFMeasurement, a, t)
@@ -98,18 +96,14 @@ end
 Mutating measurement map writing `h(a, t)` into `out`. Required for the
 in-place `ekf_filter!` path.
 """
-function measurement!(out, model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement!, (out, model, a, t)))
-end
+function measurement! end
 
 """
     measurement_jacobian(model::AbstractEKFMeasurement, a, t) -> AbstractMatrix
 
 Pure analytic Jacobian `∂h/∂a` evaluated at `a`. Optional.
 """
-function measurement_jacobian(model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement_jacobian, (model, a, t)))
-end
+function measurement_jacobian end
 
 """
     measurement_jacobian!(Z, model::AbstractEKFMeasurement, a, t)
@@ -117,9 +111,7 @@ end
 Mutating analytic Jacobian writing `∂h/∂a` into `Z`. Required for the in-place
 `ekf_filter!` path under `AnalyticJacobian()`.
 """
-function measurement_jacobian!(Z, model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement_jacobian!, (Z, model, a, t)))
-end
+function measurement_jacobian! end
 
 # ============================================================================
 # EKFParms

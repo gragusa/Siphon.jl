@@ -47,6 +47,7 @@ result = optimize_ssm(spec, y)
 module DSL
 
 using LinearAlgebra
+using SpecialFunctions: loggamma
 using Statistics: mean, var
 using TransformVariables
 using ..Siphon: KFParms, KFParms_static, kalman_loglik

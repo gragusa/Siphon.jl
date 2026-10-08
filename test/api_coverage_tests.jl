@@ -131,6 +131,13 @@ end
     update_params!(ws; Q = [1469.1;;])
     p2 = KFParms([1.0;;], [10000.0;;], [1.0;;], [1.0;;], [1469.1;;])
     @test kalman_filter!(ws, y_cov) ≈ kalman_loglik(p2, y_cov, a1_cov, P1_cov)
+
+    # The transition matrix is updated with T, as documented, or the alias Tmat
+    update_params!(ws; T = [0.9;;])
+    @test ws.Tmat == [0.9;;]
+    update_params!(ws; Tmat = [1.0;;])
+    @test ws.Tmat == [1.0;;]
+    @test_throws ArgumentError update_params!(ws; T = [0.9;;], Tmat = [0.9;;])
 end
 
 @testset "StateSpaceModel status and covariance accessors" begin

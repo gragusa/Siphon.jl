@@ -159,7 +159,7 @@ function build_dns_loadings(
     function builder(θ, data)
         λ = θ[:λ]
         τ = data.maturities
-        Z = ones(Float64, length(τ), 3)
+        Z = ones(promote_type(typeof(λ), Float64), length(τ), 3)
         for i in eachindex(τ)
             Z[i, 2] = dns_loading1(λ, τ[i])
             Z[i, 3] = dns_loading2(λ, τ[i])
@@ -193,7 +193,7 @@ function build_svensson_loadings(
     function builder(θ, data)
         λ1, λ2 = θ[:λ1], θ[:λ2]
         τ = data.maturities
-        Z = ones(Float64, length(τ), 4)
+        Z = ones(promote_type(typeof(λ1), typeof(λ2), Float64), length(τ), 4)
         for i in eachindex(τ)
             Z[i, 2] = dns_loading1(λ1, τ[i])
             Z[i, 3] = dns_loading2(λ1, τ[i])

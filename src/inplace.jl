@@ -464,16 +464,20 @@ end
     update_params!(ws; Z=nothing, H=nothing, T=nothing, R=nothing, Q=nothing)
 
 Selectively update parameters. Only non-nothing arguments are updated.
-Recomputes RQR if R or Q change.
+Recomputes RQR if R or Q change. `Tmat` is accepted as an alias for `T`.
 """
 function update_params!(
         ws::KalmanWorkspace;
         Z::Union{Nothing, AbstractMatrix} = nothing,
         H::Union{Nothing, AbstractMatrix} = nothing,
+        T::Union{Nothing, AbstractMatrix} = nothing,
         Tmat::Union{Nothing, AbstractMatrix} = nothing,
         R::Union{Nothing, AbstractMatrix} = nothing,
         Q::Union{Nothing, AbstractMatrix} = nothing
 )
+    T !== nothing && Tmat !== nothing &&
+        throw(ArgumentError("update_params!: pass T or Tmat, not both"))
+    Tmat = something(T, Tmat, Some(nothing))
     if Z !== nothing
         copyto!(ws.Z, Z)
     end
@@ -5662,18 +5666,3 @@ function factor_forecast_interval(
     return (lower = lower, upper = upper)
 end
 
-# Simple approximation for normal quantile (avoid dependency)
-function quantile_normal(p::T) where {T}
-    # Rational approximation for Φ⁻¹(p)
-    # Uses Abramowitz & Stegun 26.2.23
-    # For p > 0.5, use symmetry: Φ⁻¹(p) = -Φ⁻¹(1-p)
-    if p > 0.5
-        return -quantile_normal(one(T) - p)
-    end
-    # For p ≤ 0.5, compute negative quantile
-    t = sqrt(-2 * log(p))
-    c0, c1, c2 = T(2.515517), T(0.802853), T(0.010328)
-    d1, d2, d3 = T(1.432788), T(0.189269), T(0.001308)
-    # This gives the negative of what we want, so negate it
-    return -(t - (c0 + c1*t + c2*t^2) / (one(T) + d1*t + d2*t^2 + d3*t^3))
-end

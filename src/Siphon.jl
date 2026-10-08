@@ -5,6 +5,7 @@ using ForwardDiff
 using LinearAlgebra
 using Random: Random, AbstractRNG, randn!
 using RecipesBase
+using SpecialFunctions: erfcinv
 
 include("types.jl")
 include("filter_ad.jl")

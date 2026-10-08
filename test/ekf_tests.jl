@@ -27,6 +27,10 @@ Siphon.measurement!(out, m::EKFTestLinearMeasurement, a, t) = (mul!(out, m.Z, a)
 Siphon.measurement_jacobian(m::EKFTestLinearMeasurement, a, t) = m.Z
 Siphon.measurement_jacobian!(Z, m::EKFTestLinearMeasurement, a, t) = (copyto!(Z, m.Z); Z)
 
+# Defines only the functional measurement, not the in-place one EKFWorkspace needs
+struct EKFTestIncompleteMeasurement <: Siphon.AbstractEKFMeasurement end
+Siphon.measurement(::EKFTestIncompleteMeasurement, a, t) = a[1:1]
+
 # Stable softplus / logistic without LogExpFunctions (test-local)
 @inline _ekf_softplus(x::Real) = x >= 0 ? x + log1p(exp(-x)) : log1p(exp(x))
 @inline _ekf_logistic(x::Real) = x >= 0 ? inv(one(x) + exp(-x)) : exp(x) / (one(x) + exp(x))
@@ -96,6 +100,15 @@ end
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+@testset "EKF — EKFWorkspace checks the measurement protocol" begin
+    M = [1.0;;]
+    @test_throws "requires `measurement!(out, model, a, t)`" EKFWorkspace(
+        EKFTestIncompleteMeasurement(), ADJacobian(), M, M, M, M, [0.0], [1.0;;], 10)
+    @test_throws "requires `measurement!(out, model, a, t)`" EKFWorkspace(
+        EKFTestIncompleteMeasurement(), AnalyticJacobian(), M, M, M, M, [0.0], [1.0;;], 10)
+    @test_throws MethodError Siphon.measurement!(zeros(1), EKFTestIncompleteMeasurement(), [0.0], 1)
+end
 
 @testset "EKF — linear-measurement equivalence (functional)" begin
     s = _ekf_test_linear_setup()

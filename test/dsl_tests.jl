@@ -6,6 +6,7 @@ using Test
 using Siphon
 using LinearAlgebra
 using Statistics: cor, var
+using SpecialFunctions: gamma
 using Random
 using ForwardDiff
 using CSV
@@ -472,6 +473,13 @@ end
     ll_at_mean = prior([0.0, 0.0])
     ll_away = prior([2.0, 2.0])
     @test ll_at_mean > ll_away
+end
+
+@testset "InverseGammaPrior" begin
+    prior = InverseGammaPrior(2.0, 1.0, (:σ,))
+    # θ holds σ; the density is that of σ² ~ InverseGamma(α, β)
+    σ = 0.7
+    @test prior((σ = σ,)) ≈ 2.0 * log(1.0) - log(gamma(2.0)) - 3.0 * log(σ^2) - 1.0 / σ^2
 end
 
 @testset "CompositePrior" begin

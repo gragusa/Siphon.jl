@@ -250,7 +250,7 @@ function (p::InverseGammaPrior)(θ::NamedTuple)
     for name in p.param_names
         σ = getproperty(θ, name)
         σ² = σ^2
-        result += p.α * log(p.β) - lgamma(p.α) - (p.α + 1) * log(σ²) - p.β / σ²
+        result += p.α * log(p.β) - loggamma(p.α) - (p.α + 1) * log(σ²) - p.β / σ²
     end
     result
 end

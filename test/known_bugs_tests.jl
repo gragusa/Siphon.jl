@@ -18,11 +18,6 @@ let nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
     global y_bug = reshape(Float64.(nile[!, 1]), 1, :)
 end
 
-# Measurement type that implements only the functional `measurement`, not the
-# in-place `measurement!` that EKFWorkspace requires.
-struct IncompleteMeasurement <: AbstractEKFMeasurement end
-Siphon.measurement(::IncompleteMeasurement, a, t) = a[1:1]
-
 function _throws(f)
     try
         f()
@@ -50,22 +45,6 @@ end
     @test_broken maximum(abs.(idiosyncratic_variances(dfm) .- 1.0)) > 0.05
 end
 
-@testset "quantile_normal below the median" begin
-    @test_broken quantile_normal(0.025) ≈ -1.96 atol = 0.01
-end
-
-@testset "InverseGammaPrior is callable" begin
-    prior = InverseGammaPrior(2.0, 1.0, (:var_obs,))
-    @test_broken !_throws(() -> prior((var_obs = 1.0,)))
-end
-
-@testset "EKFWorkspace checks the measurement protocol" begin
-    # The AbstractEKFMeasurement stubs make the hasmethod checks always pass.
-    M = [1.0;;]
-    @test_broken _throws(() -> EKFWorkspace(IncompleteMeasurement(), ADJacobian(),
-        M, M, M, M, [0.0], [1.0;;], 10))
-end
-
 @testset "profile_em_ssm returns a consistent θ" begin
     df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
     y = Matrix(Matrix(df)')
@@ -77,17 +56,6 @@ end
             maxiter = 50)
     end
     @test_broken ssm_loglik(spec, res.θ, y) ≈ res.loglik rtol = 1e-4
-end
-
-@testset "DNS models are ForwardDiff-compatible" begin
-    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
-    y = Matrix(Matrix(df)')
-    spec = dns_model([3, 12, 24, 60, 120];
-        T_structure = :diagonal, H_structure = :diagonal,
-        Q_structure = :diagonal, diffuse = false)
-    names = Tuple(param_names(spec))
-    f(v) = ssm_loglik(spec, NamedTuple{names}(Tuple(v)), y)
-    @test_broken !_throws(() -> ForwardDiff.gradient(f, initial_values(spec)))
 end
 
 @testset "EM with a diagonal transition matrix" begin

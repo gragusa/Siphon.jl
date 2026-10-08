@@ -15,22 +15,12 @@ using RecipesBase
 """
     quantile_normal(p::Real)
 
-Compute the quantile (inverse CDF) of the standard normal distribution.
-
-Uses a rational approximation accurate to about 4.5e-4 for p in (0.5, 1).
-
-# Arguments
-- `p`: Probability value in (0.5, 1)
-
-# Returns
-- Quantile value z such that P(Z ≤ z) = p for Z ~ N(0,1)
+Quantile (inverse CDF) of the standard normal distribution: the `z` with
+`P(Z ≤ z) = p` for `Z ~ N(0, 1)`. Requires `0 < p < 1`.
 """
 function quantile_normal(p::Real)
-    # Abramowitz & Stegun approximation 26.2.23
-    t = sqrt(-2 * log(1 - p))
-    c0, c1, c2 = 2.515517, 0.802853, 0.010328
-    d1, d2, d3 = 1.432788, 0.189269, 0.001308
-    return t - (c0 + c1*t + c2*t^2) / (1 + d1*t + d2*t^2 + d3*t^3)
+    0 < p < 1 || throw(DomainError(p, "quantile_normal requires 0 < p < 1"))
+    return -sqrt(oftype(float(p), 2)) * erfcinv(2 * p)
 end
 
 """
@@ -47,7 +37,7 @@ Compute confidence band bounds for a vector of means and variances.
 - `(lower, upper)`: Tuple of vectors with lower and upper bounds
 """
 function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real = 0.95)
-    z = quantile_normal((1 + level) / 2)
+    z = _band_quantile(level)
     std = sqrt.(var)
     lower = mean .- z .* std
     upper = mean .+ z .* std
@@ -55,7 +45,7 @@ function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real
 end
 
 """
-    confidence_bands(mean::Matrix, cov::Array{T,3}, level::Real=0.95) where T
+    confidence_bands(mean::AbstractMatrix, cov::AbstractArray{<:Real,3}, level::Real=0.95)
 
 Compute confidence bands for matrix of means and 3D array of covariances.
 
@@ -69,11 +59,15 @@ Extracts diagonal variances from covariance matrices.
 # Returns
 - `(lower, upper)`: Tuple of matrices (m × n) with lower and upper bounds
 """
-function confidence_bands(mean::Matrix{T}, cov::Array{T, 3}, level::Real = 0.95) where {T}
+function confidence_bands(
+        mean::AbstractMatrix, cov::AbstractArray{<:Real, 3}, level::Real = 0.95)
     m, n = size(mean)
-    z = quantile_normal((1 + level) / 2)
-    lower = similar(mean)
-    upper = similar(mean)
+    size(cov) == (m, m, n) ||
+        throw(DimensionMismatch("cov must be ($m, $m, $n) for a ($m, $n) mean, got $(size(cov))"))
+    z = _band_quantile(level)
+    T = promote_type(eltype(mean), eltype(cov), typeof(z))
+    lower = similar(mean, T)
+    upper = similar(mean, T)
 
     @inbounds for t in 1:n
         for i in 1:m
@@ -84,6 +78,11 @@ function confidence_bands(mean::Matrix{T}, cov::Array{T, 3}, level::Real = 0.95)
     end
 
     return lower, upper
+end
+
+function _band_quantile(level::Real)
+    0 < level < 1 || throw(DomainError(level, "confidence level must be in (0, 1)"))
+    return quantile_normal((1 + level) / 2)
 end
 
 """
