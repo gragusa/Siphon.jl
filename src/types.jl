@@ -460,7 +460,12 @@ The diffuse period ends when `norm(Pinf) < tol`.
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n)
 - `diffuse_flag`: Vector of length d indicating step type (1=Finf invertible, 0=singular)
-- `missing_mask`: BitVector indicating missing observations
+- `missing_mask`: BitVector, true where no row of the period was observed
+- `observed_mask`: BitMatrix (p × n), true where an individual value is present
+
+Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
+reduced-system quantities in their leading rows and columns for that period; the
+observed rows are `findall(view(observed_mask, :, t))`.
 
 # Notes
 During the diffuse period (t ≤ d):
@@ -497,7 +502,8 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms}
     # Diffuse step flags: 1=Finf invertible, 0=singular
     diffuse_flag::Vector{Int}  # length d
     # Missing data
-    missing_mask::BitVector
+    missing_mask::BitVector    # n: true where no row of the period was observed
+    observed_mask::BitMatrix   # p × n: true where an individual value is present
 end
 
 # Accessor methods for DiffuseFilterResult
@@ -515,6 +521,9 @@ prediction_errors(r::DiffuseFilterResult) = r.vt
 variances_prediction_errors(r::DiffuseFilterResult) = r.Ft
 kalman_gains(r::DiffuseFilterResult) = r.Kt
 loglikelihood(r::DiffuseFilterResult) = r.loglik
+missing_mask(r::DiffuseFilterResult) = r.missing_mask
+observed_mask(r::DiffuseFilterResult) = r.observed_mask
+observed_rows(r::DiffuseFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
 
 """
     diffuse_period(r::DiffuseFilterResult) -> Int

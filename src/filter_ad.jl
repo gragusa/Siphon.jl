@@ -927,6 +927,9 @@ Only observations after the diffuse period contribute to the log-likelihood.
 # Returns
 - `loglik::Real`: Log-likelihood (non-diffuse observations only)
 
+NaN marks a missing value, one element at a time: in a partially observed period
+both phases use the reduced system formed by the observed rows.
+
 # Example
 ```julia
 # Local level model with exact diffuse initialization
@@ -948,9 +951,6 @@ function kalman_loglik_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_loglik_diffuse",
-        "Use approximate diffuse initialisation (diffuse = true), which handles them.")
-    obs_dim = size(y, 1)
 
     ET = _filter_eltype(p, a1, P1_star, P1_inf)
 
@@ -963,16 +963,15 @@ function kalman_loglik_diffuse(
     RQR = p.R * p.Q * p.R'
 
     loglik = zero(ET)
-    n_obs = 0  # Count non-diffuse, non-missing observations
+    n_obs_rows = 0  # observed scalars that contribute to the likelihood
 
     # Track if diffuse period has ended
     diffuse_ended = false
 
     for t in 1:n
-        y_t = y[:, t]
+        y_t = view(y, :, t)
 
-        # Check for missing observation
-        if _has_missing(y_t)
+        if _all_missing(y_t)
             if diffuse_ended
                 # Standard propagation
                 a = p.T * a
@@ -991,13 +990,21 @@ function kalman_loglik_diffuse(
             continue
         end
 
+        # Restrict to the observed rows. When every row is present these are the
+        # full Z, H and y_t and the arithmetic is unchanged.
+        rows = _observed_row_indices(y_t)
+        pt = length(rows)
+        Zr = _select_rows(p.Z, rows)
+        Hr = _select_rows_cols(p.H, rows)
+        yr = y_t[rows]
+
         if diffuse_ended
             # === Standard Kalman filter step ===
-            n_obs += 1
-            v = y_t - p.Z * a
-            F = p.Z * Pstar * p.Z' + p.H
+            n_obs_rows += pt
+            v = yr - Zr * a
+            F = Zr * Pstar * Zr' + Hr
 
-            if obs_dim == 1
+            if pt == 1
                 F_val = F[1, 1]
                 if F_val <= zero(ET)
                     return ET(-Inf)
@@ -1022,24 +1029,24 @@ function kalman_loglik_diffuse(
             end
 
             # Kalman gain and state update
-            K = p.T * Pstar * p.Z' * Finv
+            K = p.T * Pstar * Zr' * Finv
             a = p.T * a + K * v
-            L = p.T - K * p.Z
+            L = p.T - K * Zr
             Pstar = L * Pstar * p.T' + RQR
         else
             # === Diffuse filter step ===
-            v = y_t - p.Z * a
-            Finf = p.Z * Pinf * p.Z'
+            v = yr - Zr * a
+            Finf = Zr * Pinf * Zr'
 
             # Check if Finf is invertible
             (flag, Finf_inv) = _safe_inverse(Finf, tol)
 
             if flag == 1
                 # Finf is invertible: exact diffuse update
-                Kinf = p.T * Pinf * p.Z' * Finf_inv
-                Linf = p.T - Kinf * p.Z
-                Fstar = p.Z * Pstar * p.Z' + p.H
-                Kstar = (p.T * Pstar * p.Z' + Kinf * Fstar) * Finf_inv
+                Kinf = p.T * Pinf * Zr' * Finf_inv
+                Linf = p.T - Kinf * Zr
+                Fstar = Zr * Pstar * Zr' + Hr
+                Kstar = (p.T * Pstar * Zr' + Kinf * Fstar) * Finf_inv
 
                 # State update
                 a = p.T * a + Kinf * v
@@ -1054,9 +1061,9 @@ function kalman_loglik_diffuse(
                 # No likelihood contribution during diffuse period with Finf invertible
             else
                 # Finf is singular: use Fstar-based update
-                Fstar = p.Z * Pstar * p.Z' + p.H
+                Fstar = Zr * Pstar * Zr' + Hr
 
-                if obs_dim == 1
+                if pt == 1
                     Fstar_val = Fstar[1, 1]
                     if Fstar_val <= zero(ET)
                         return ET(-Inf)
@@ -1075,15 +1082,15 @@ function kalman_loglik_diffuse(
 
                 quad_form = dot(v, Fstar_inv * v)
                 # This observation contributes to likelihood
-                n_obs += 1
+                n_obs_rows += pt
                 loglik += -ET(0.5) * (logdetFstar + quad_form)
 
                 if !isfinite(loglik)
                     return ET(-Inf)
                 end
 
-                Kstar = p.T * Pstar * p.Z' * Fstar_inv
-                Lstar = p.T - Kstar * p.Z
+                Kstar = p.T * Pstar * Zr' * Fstar_inv
+                Lstar = p.T - Kstar * Zr
 
                 # State update
                 a = p.T * a + Kstar * v
@@ -1100,10 +1107,29 @@ function kalman_loglik_diffuse(
         end
     end
 
-    # Add constant term
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar that contributed.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
 
     return loglik + const_term
+end
+
+"""
+    _store_innovations!(vt, Ft, Kt, t, v, F, K)
+
+Store the period-`t` innovation `v`, its covariance `F` and the gain `K` of a
+reduced system with `pt = length(v)` observed rows. They occupy the leading rows
+and columns of the period's slices; the remaining entries are `NaN` for `vt` and
+`Ft` and zero for `Kt`.
+"""
+function _store_innovations!(vt, Ft, Kt, t, v, F, K)
+    pt = length(v)
+    vt[:, t] .= NaN
+    vt[1:pt, t] = v
+    Ft[:, :, t] .= NaN
+    Ft[1:pt, 1:pt, t] = F
+    Kt[:, :, t] .= 0
+    Kt[:, 1:pt, t] = K
+    return nothing
 end
 
 """
@@ -1125,6 +1151,11 @@ including the diffuse covariances (Pinf, Pstar) during the diffuse period.
 # Returns
 - `DiffuseFilterResult`: Contains all filter outputs plus diffuse-specific quantities
 
+NaN marks a missing value, one element at a time. In a partially observed period
+both phases use the reduced system formed by the observed rows, and `vt`, `Ft` and
+`Kt` hold its pₜ-sized blocks in their leading rows and columns; `observed_mask`
+records which rows those are.
+
 # See Also
 - `kalman_loglik_diffuse`: Log-likelihood only (faster if states not needed)
 - `kalman_filter`: Standard filter without diffuse initialization
@@ -1138,8 +1169,6 @@ function kalman_filter_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_filter_diffuse",
-        "Use approximate diffuse initialisation (diffuse = true), which handles them.")
     obs_dim = size(y, 1)
     state_dim = length(a1)
 
@@ -1154,6 +1183,7 @@ function kalman_filter_diffuse(
     Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
     Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
     missing_mask = BitVector(undef, n)
+    observed_mask = BitMatrix(undef, obs_dim, n)
 
     # Temporary storage for diffuse period (will resize at end)
     Pinf_list = Vector{Matrix{ET}}()
@@ -1169,19 +1199,22 @@ function kalman_filter_diffuse(
     RQR = p.R * p.Q * p.R'
 
     loglik = zero(ET)
-    n_obs = 0
+    n_obs_rows = 0
     diffuse_ended = false
     d = 0  # Diffuse period length
 
     for t in 1:n
-        y_t = y[:, t]
+        y_t = view(y, :, t)
+        for i in 1:obs_dim
+            observed_mask[i, t] = !isnan(y_t[i])
+        end
 
         # Store predicted state
         at_store[:, t] = a
         # During diffuse period, P = Pstar (finite part); after, P = Pstar
         Pt_store[:, :, t] = Pstar
 
-        if _has_missing(y_t)
+        if _all_missing(y_t)
             missing_mask[t] = true
             vt_store[:, t] .= ET(NaN)
             Ft_store[:, :, t] = p.Z * Pstar * p.Z' + p.H
@@ -1212,13 +1245,21 @@ function kalman_filter_diffuse(
 
         missing_mask[t] = false
 
+        # Restrict to the observed rows; the fully observed case selects all of
+        # them and the arithmetic below is unchanged.
+        rows = _observed_row_indices(y_t)
+        pt = length(rows)
+        Zr = _select_rows(p.Z, rows)
+        Hr = _select_rows_cols(p.H, rows)
+        yr = y_t[rows]
+
         if diffuse_ended
             # === Standard Kalman filter step ===
-            n_obs += 1
-            v = y_t - p.Z * a
-            F = p.Z * Pstar * p.Z' + p.H
+            n_obs_rows += pt
+            v = yr - Zr * a
+            F = Zr * Pstar * Zr' + Hr
 
-            if obs_dim == 1
+            if pt == 1
                 F_val = F[1, 1]
                 if F_val <= zero(ET)
                     loglik = ET(-Inf)
@@ -1241,15 +1282,12 @@ function kalman_filter_diffuse(
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            K = p.T * Pstar * p.Z' * Finv
-
-            vt_store[:, t] = v
-            Ft_store[:, :, t] = F
-            Kt_store[:, :, t] = K
+            K = p.T * Pstar * Zr' * Finv
+            _store_innovations!(vt_store, Ft_store, Kt_store, t, v, F, K)
 
             # Filtered state
-            a_filt = a + Pstar * p.Z' * Finv * v
-            P_filt = Pstar - Pstar * p.Z' * Finv * p.Z * Pstar
+            a_filt = a + Pstar * Zr' * Finv * v
+            P_filt = Pstar - Pstar * Zr' * Finv * Zr * Pstar
 
             att_store[:, t] = a_filt
             Ptt_store[:, :, t] = P_filt
@@ -1259,8 +1297,8 @@ function kalman_filter_diffuse(
             Pstar = p.T * P_filt * p.T' + RQR
         else
             # === Diffuse filter step ===
-            v = y_t - p.Z * a
-            Finf = p.Z * Pinf * p.Z'
+            v = yr - Zr * a
+            Finf = Zr * Pinf * Zr'
 
             (flag, Finf_inv) = _safe_inverse(Finf, tol)
 
@@ -1272,20 +1310,19 @@ function kalman_filter_diffuse(
 
             if flag == 1
                 # Finf invertible
-                Kinf = p.T * Pinf * p.Z' * Finf_inv
-                Linf = p.T - Kinf * p.Z
-                Fstar = p.Z * Pstar * p.Z' + p.H
-                Kstar = (p.T * Pstar * p.Z' + Kinf * Fstar) * Finf_inv
+                Kinf = p.T * Pinf * Zr' * Finf_inv
+                Linf = p.T - Kinf * Zr
+                Fstar = Zr * Pstar * Zr' + Hr
+                Kstar = (p.T * Pstar * Zr' + Kinf * Fstar) * Finf_inv
 
-                vt_store[:, t] = v
-                Ft_store[:, :, t] = Finf  # Store Finf during diffuse
-                Kt_store[:, :, t] = Kinf
+                # Finf is stored as the innovation covariance during the diffuse period
+                _store_innovations!(vt_store, Ft_store, Kt_store, t, v, Finf, Kinf)
 
                 # Filtered state (use Kinf for gain in filtered estimate)
                 # During diffuse: a_filt = a + Pinf * Z' * Finf_inv * v
-                a_filt = a + Pinf * p.Z' * Finf_inv * v
+                a_filt = a + Pinf * Zr' * Finf_inv * v
                 # P_filt approximation during diffuse
-                P_filt = Pstar - Pstar * p.Z' * Finf_inv * p.Z * Pstar
+                P_filt = Pstar - Pstar * Zr' * Finf_inv * Zr * Pstar
 
                 att_store[:, t] = a_filt
                 Ptt_store[:, :, t] = P_filt
@@ -1296,9 +1333,9 @@ function kalman_filter_diffuse(
 
             else
                 # Finf singular, use Fstar
-                Fstar = p.Z * Pstar * p.Z' + p.H
+                Fstar = Zr * Pstar * Zr' + Hr
 
-                if obs_dim == 1
+                if pt == 1
                     Fstar_val = Fstar[1, 1]
                     if Fstar_val <= zero(ET)
                         loglik = ET(-Inf)
@@ -1319,18 +1356,15 @@ function kalman_filter_diffuse(
                     quad_form = dot(v, Fstar_inv * v)
                 end
 
-                n_obs += 1
+                n_obs_rows += pt
                 loglik += -ET(0.5) * (logdetFstar + quad_form)
 
-                Kstar = p.T * Pstar * p.Z' * Fstar_inv
-                Lstar = p.T - Kstar * p.Z
+                Kstar = p.T * Pstar * Zr' * Fstar_inv
+                Lstar = p.T - Kstar * Zr
+                _store_innovations!(vt_store, Ft_store, Kt_store, t, v, Fstar, Kstar)
 
-                vt_store[:, t] = v
-                Ft_store[:, :, t] = Fstar
-                Kt_store[:, :, t] = Kstar
-
-                a_filt = a + Pstar * p.Z' * Fstar_inv * v
-                P_filt = Pstar - Pstar * p.Z' * Fstar_inv * p.Z * Pstar
+                a_filt = a + Pstar * Zr' * Fstar_inv * v
+                P_filt = Pstar - Pstar * Zr' * Fstar_inv * Zr * Pstar
 
                 att_store[:, t] = a_filt
                 Ptt_store[:, :, t] = P_filt
@@ -1359,7 +1393,8 @@ function kalman_filter_diffuse(
         Pstar_store = Array{ET}(undef, state_dim, state_dim, 0)
     end
 
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar that contributed.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
 
     return DiffuseFilterResult(
         p,
@@ -1375,7 +1410,8 @@ function kalman_filter_diffuse(
         Ft_store,
         Kt_store,
         flag_list,
-        missing_mask
+        missing_mask,
+        observed_mask
     )
 end
 

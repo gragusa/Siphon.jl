@@ -1173,6 +1173,8 @@ variances_prediction_errors(ws::DiffuseKalmanWorkspace) = ws.base.Ft
 kalman_gains(ws::DiffuseKalmanWorkspace) = ws.base.Kt
 loglikelihood(ws::DiffuseKalmanWorkspace) = ws.base.loglik
 missing_mask(ws::DiffuseKalmanWorkspace) = ws.base.missing_mask
+observed_mask(ws::DiffuseKalmanWorkspace) = ws.base.observed_mask
+observed_rows(ws::DiffuseKalmanWorkspace, t::Integer) = observed_rows(ws.base, t)
 
 """
     diffuse_period(ws::DiffuseKalmanWorkspace) -> Int
@@ -1243,14 +1245,17 @@ The filter runs in two phases:
 2. Non-diffuse period: Standard Kalman filter recursion
 
 Only observations after the diffuse period contribute to the log-likelihood.
+
+NaN marks a missing value, one element at a time. In a partially observed period
+both phases run on the reduced system formed by the observed rows, and `vt`, `Ft`,
+`Ft_L` and `Kt` hold pₜ-sized blocks in their leading rows and columns, as in
+[`kalman_filter!`](@ref) on a `KalmanWorkspace`.
 """
 function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
     base = ws.base
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
     @assert size(y) == (p, n) "Observation matrix size mismatch"
-    _require_no_partial_periods(y, "kalman_filter_diffuse!",
-        "Use a KalmanWorkspace with approximate diffuse initialisation, which handles them.")
 
     # Reset state
     base.loglik = zero(T)
@@ -1267,21 +1272,22 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
     log2pi = log(T(2π))
     tol = ws.tol
+    Tt = transpose(base.Tmat)
 
     @inbounds for t in 1:n
-        # Store predicted state
-        for i in 1:m
-            base.at[i, t] = a_curr[i]
-        end
-        # Store predicted covariance (Pstar is the finite part)
-        for j in 1:m, i in 1:m
-
-            base.Pt[i, j, t] = ws.Pstar[i, j]
-        end
+        # Store predicted state and covariance (Pstar is the finite part)
+        copyto!(view(base.at, :, t), a_curr)
+        copyto!(view(base.Pt, :, :, t), ws.Pstar)
 
         y_t = view(y, :, t)
+        obs_rows_t = view(base.obs_rows, :, t)
+        pt = _observed_rows!(obs_rows_t, y_t)
+        base.n_observed[t] = pt
+        for i in 1:p
+            base.observed_mask[i, t] = !isnan(y_t[i])
+        end
 
-        if _has_missing(y_t)
+        if pt == 0
             base.missing_mask[t] = true
 
             # Store NaN for innovation
@@ -1298,53 +1304,30 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
                 base.Ft_L[i, j, t] = zero(T)
             end
 
-            for j in 1:p, i in 1:m
+            fill!(view(base.Kt, :, :, t), zero(T))
+            copyto!(view(base.att, :, t), a_curr)
+            copyto!(view(base.Ptt, :, :, t), ws.Pstar)
 
-                base.Kt[i, j, t] = zero(T)
-            end
+            mul!(base.tmp_m2, base.Tmat, a_curr)
+            copyto!(a_curr, base.tmp_m2)
 
-            for i in 1:m
-                base.att[i, t] = a_curr[i]
-            end
+            # Pstar = T * Pstar * T' + RQR
+            mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
+            mul!(base.tmp_mm3, base.tmp_mm2, Tt)
             for j in 1:m, i in 1:m
 
-                base.Ptt[i, j, t] = ws.Pstar[i, j]
+                ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
             end
 
-            if ws.diffuse_ended
-                # Standard propagation
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                copyto!(a_curr, base.tmp_m2)
-
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, base.Tmat')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
-            else
-                # Track diffuse period
+            if !ws.diffuse_ended
                 ws.d += 1
                 ws.diffuse_flags[ws.d] = -1  # missing
 
-                # Diffuse propagation
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                copyto!(a_curr, base.tmp_m2)
-
                 # Pinf = T * Pinf * T'
                 mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff1, base.tmp_mm2, base.Tmat')
+                mul!(ws.tmp_mm_diff1, base.tmp_mm2, Tt)
                 copyto!(ws.Pinf, ws.tmp_mm_diff1)
 
-                # Pstar = T * Pstar * T' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, base.Tmat')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
-
-                # Check convergence
                 if norm(ws.Pinf) <= tol
                     ws.diffuse_ended = true
                 end
@@ -1353,318 +1336,207 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
         end
 
         base.missing_mask[t] = false
+        rows = view(obs_rows_t, 1:pt)
 
-        if ws.diffuse_ended
-            # === Standard Kalman filter step ===
+        # Both phases run on the reduced system (Z_t, H_t, y_t) formed by the
+        # observed rows, using the leading pt rows and columns of every p-shaped
+        # buffer. When pt == p this is the fully observed recursion.
+        Zr = view(base.tmp_pm, 1:pt, :)          # Z_t (pt×m)
+        for j in 1:m, (k, i) in pairs(rows)
+
+            Zr[k, j] = base.Z[i, j]
+        end
+        Hr = view(base.tmp_pp2, 1:pt, 1:pt)      # H_t (pt×pt)
+        for (l, j) in pairs(rows), (k, i) in pairs(rows)
+
+            Hr[k, l] = base.H[i, j]
+        end
+
+        # Innovation: v = y_t - Z_t * a
+        v_full = view(base.vt, :, t)
+        fill!(v_full, T(NaN))
+        v_t = view(v_full, 1:pt)
+        tmp_p1r = view(base.tmp_p1, 1:pt)
+        mul!(tmp_p1r, Zr, a_curr)
+        for (k, i) in pairs(rows)
+            v_t[k] = y_t[i] - tmp_p1r[k]
+        end
+
+        Ft_view = view(base.Ft, :, :, t)
+        fill!(Ft_view, T(NaN))
+        fill!(view(base.Ft_L, :, :, t), zero(T))
+        K_full = view(base.Kt, :, :, t)
+        fill!(K_full, zero(T))
+        K_t = view(K_full, :, 1:pt)
+
+        ZrP = view(base.tmp_pm2, 1:pt, :)        # Z_t * P (pt×m)
+        tmp_p2r = view(base.tmp_p2, 1:pt)
+        att_view = view(base.att, :, t)
+        Ptt_view = view(base.Ptt, :, :, t)
+
+        # During the diffuse period, check whether Finf = Z_t * Pinf * Z_t' is
+        # invertible.
+        flag = 0
+        if !ws.diffuse_ended
+            ws.d += 1
+            Finf = view(ws.Finf, 1:pt, 1:pt)
+            Finf_inv = view(ws.Finf_inv, 1:pt, 1:pt)
+            mul!(ZrP, Zr, ws.Pinf)
+            mul!(Finf, ZrP, transpose(Zr))
+            flag = _safe_inverse_inplace!(
+                Finf_inv, Finf, view(ws.tmp_pp_diff, 1:pt, 1:pt), tol)
+            ws.diffuse_flags[ws.d] = flag
+        end
+
+        if flag == 1
+            # === Finf invertible: exact diffuse update, no likelihood term ===
+
+            # Filtered state: a_filt = a + Pinf * Z_t' * Finf^{-1} * v
+            PZt = view(base.tmp_mp, :, 1:pt)
+            mul!(PZt, ws.Pinf, transpose(Zr))                 # Pinf * Z_t'
+            mul!(tmp_p2r, Finf_inv, v_t)
+            mul!(base.tmp_m2, PZt, tmp_p2r)
+            for i in 1:m
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
+            end
+            # Filtered covariance: the finite part only
+            copyto!(Ptt_view, ws.Pstar)
+
+            # Kinf = T * Pinf * Z_t' * Finf^{-1}
+            Kinf = view(ws.tmp_mp_diff, :, 1:pt)
+            mul!(Kinf, base.Tmat, PZt)
+            mul!(PZt, Kinf, Finf_inv)
+            copyto!(Kinf, PZt)
+
+            # Linf = T - Kinf * Z_t
+            mul!(ws.tmp_mm_diff1, Kinf, Zr)
+            for j in 1:m, i in 1:m
+
+                ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
+            end
+
+            # Fstar = Z_t * Pstar * Z_t' + H_t
+            Fstar = view(ws.tmp_pp_diff, 1:pt, 1:pt)
+            mul!(ZrP, Zr, ws.Pstar)
+            mul!(Fstar, ZrP, transpose(Zr))
+            Fstar .+= Hr
+
+            # Kstar = (T * Pstar * Z_t' + Kinf * Fstar) * Finf^{-1}, stored in Kt
+            mul!(PZt, ws.Pstar, transpose(Zr))
+            mul!(K_t, base.Tmat, PZt)
+            mul!(PZt, Kinf, Fstar)
+            K_t .+= PZt
+            mul!(PZt, K_t, Finf_inv)
+            copyto!(K_t, PZt)
+
+            # Finf is stored as the innovation covariance during the diffuse period
+            copyto!(view(Ft_view, 1:pt, 1:pt), Finf)
+
+            # State prediction: a = T * a + Kinf * v
+            mul!(base.tmp_m2, base.Tmat, a_curr)
+            mul!(a_curr, Kinf, v_t)
+            a_curr .+= base.tmp_m2
+
+            # Pinf = T * Pinf * Linf'
+            mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
+            mul!(ws.tmp_mm_diff2, base.tmp_mm2, ws.tmp_mm_diff1')
+            copyto!(ws.Pinf, ws.tmp_mm_diff2)
+
+            # Pstar = T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
+            mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
+            mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')
+            mul!(PZt, Kinf, Finf)
+            mul!(ws.tmp_mm_diff2, PZt, K_t')
+            for j in 1:m, i in 1:m
+
+                ws.Pstar[i, j] = base.tmp_mm3[i, j] + ws.tmp_mm_diff2[i, j] +
+                                 base.RQR[i, j]
+            end
+        else
+            # === Standard update on Pstar ===
+            # Used after the diffuse period and, during it, whenever Finf is
+            # singular; the period then contributes to the likelihood.
             base.n_obs_valid += 1
+            base.n_obs_rows += pt
 
-            # Innovation: v = y - Z * a
-            mul!(base.tmp_p1, base.Z, a_curr)
-            for i in 1:p
-                base.vt[i, t] = y_t[i] - base.tmp_p1[i]
+            # F = Z_t * Pstar * Z_t' + H_t
+            mul!(ZrP, Zr, ws.Pstar)
+            Fr = view(base.tmp_pp1, 1:pt, 1:pt)
+            mul!(Fr, ZrP, transpose(Zr))
+            for l in 1:pt, k in 1:pt
+                Fr[k, l] += Hr[k, l]
+                Ft_view[k, l] = Fr[k, l]
             end
 
-            # F = Z * Pstar * Z' + H
-            mul!(base.tmp_pm, base.Z, ws.Pstar)
-            mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-            for j in 1:p, i in 1:p
-
-                base.tmp_pp1[i, j] += base.H[i, j]
-                base.Ft[i, j, t] = base.tmp_pp1[i, j]
-            end
-
-            # Symmetrize and Cholesky
-            for j in 1:p, i in 1:(j - 1)
-
-                avg = (base.tmp_pp1[i, j] + base.tmp_pp1[j, i]) / 2
-                base.tmp_pp1[i, j] = avg
-                base.tmp_pp1[j, i] = avg
-            end
-            chol = cholesky!(Symmetric(base.tmp_pp1, :L))
-
-            for j in 1:p, i in 1:p
-
-                base.Ft_L[i, j, t] = i >= j ? chol.L[i, j] : zero(T)
+            # Cholesky on Symmetric(:L) reads only the lower triangle.
+            cholF = cholesky!(Symmetric(Fr, :L))
+            L_lower = LowerTriangular(cholF.factors)
+            for j in 1:pt, i in j:pt
+                base.Ft_L[i, j, t] = L_lower[i, j]
             end
 
             # Log-likelihood
             logdetF = zero(T)
-            for i in 1:p
-                logdetF += 2 * log(chol.L[i, i])
+            for i in 1:pt
+                logdetF += 2 * log(L_lower[i, i])
             end
-
-            v_t = view(base.vt, :, t)
-            copyto!(base.tmp_p2, v_t)
-            ldiv!(LowerTriangular(chol.L), base.tmp_p2)
+            copyto!(tmp_p2r, v_t)
+            ldiv!(L_lower, tmp_p2r)                  # L^{-1} v
             quad_form = zero(T)
-            for i in 1:p
-                quad_form += base.tmp_p2[i]^2
+            for i in 1:pt
+                quad_form += tmp_p2r[i]^2
             end
             base.loglik += -T(0.5) * (logdetF + quad_form)
 
-            # Kalman gain K = T * Pstar * Z' * F^{-1}
-            mul!(base.tmp_mp, ws.Pstar, base.Z')
-            K_t = view(base.Kt, :, :, t)
-            mul!(K_t, base.Tmat, base.tmp_mp)
-            L_lower = LowerTriangular(chol.factors)
-            rdiv!(K_t, L_lower')
-            rdiv!(K_t, L_lower)
+            # M = Pstar * Z_t' * F^{-1} (m×pt). Formed from Pstar * Z_t' rather
+            # than transposing F^{-1} * Z_t * Pstar: the exact diffuse step can
+            # leave Pstar asymmetric, and the two then differ.
+            Mr = view(base.tmp_mp, :, 1:pt)
+            mul!(Mr, ws.Pstar, transpose(Zr))
+            rdiv!(Mr, L_lower')
+            rdiv!(Mr, L_lower)
 
-            # Filtered state
-            ldiv!(L_lower', base.tmp_p2)  # tmp_p2 = F^{-1} * v
-            mul!(base.tmp_m2, base.tmp_mp, base.tmp_p2)
+            # K_t = T * M
+            mul!(K_t, base.Tmat, Mr)
+
+            # a_filt = a + M * v
+            mul!(base.tmp_m2, Mr, v_t)
             for i in 1:m
-                base.att[i, t] = a_curr[i] + base.tmp_m2[i]
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
             end
 
-            # Filtered covariance
-            mul!(base.tmp_pm, base.Z, ws.Pstar)
-            ldiv!(L_lower, base.tmp_pm)
-            ldiv!(L_lower', base.tmp_pm)
-            mul!(base.tmp_mp, ws.Pstar, base.Z')
-            mul!(base.tmp_mm2, base.tmp_mp, base.tmp_pm)
+            # P_filt = Pstar - M * (Z_t * Pstar)
+            mul!(base.tmp_mm2, Mr, ZrP)
             for j in 1:m, i in 1:m
 
-                base.Ptt[i, j, t] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
+                Ptt_view[i, j] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
             end
 
-            # Predict next
-            a_filt = view(base.att, :, t)
-            P_filt = view(base.Ptt, :, :, t)
-            mul!(a_curr, base.Tmat, a_filt)
-            mul!(base.tmp_mm2, base.Tmat, P_filt)
-            mul!(ws.Pstar, base.tmp_mm2, base.Tmat')
+            # Predict next: a = T * a_filt, Pstar = T * P_filt * T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
             for j in 1:m, i in 1:m
 
                 ws.Pstar[i, j] += base.RQR[i, j]
             end
 
-        else
-            # === Diffuse filter step ===
-            ws.d += 1
-
-            # Innovation: v = y - Z * a
-            mul!(base.tmp_p1, base.Z, a_curr)
-            for i in 1:p
-                base.vt[i, t] = y_t[i] - base.tmp_p1[i]
-            end
-            v_t = view(base.vt, :, t)
-
-            # Finf = Z * Pinf * Z'
-            mul!(base.tmp_pm, base.Z, ws.Pinf)
-            mul!(ws.Finf, base.tmp_pm, base.Z')
-
-            # Check if Finf is invertible
-            flag = _safe_inverse_inplace!(ws.Finf_inv, ws.Finf, ws.tmp_pp_diff, tol)
-            ws.diffuse_flags[ws.d] = flag
-
-            if flag == 1
-                # === Finf invertible: exact diffuse update ===
-
-                # Kinf = T * Pinf * Z' * Finf^{-1}
-                mul!(base.tmp_mp, ws.Pinf, base.Z')        # tmp_mp = Pinf * Z'
-                mul!(ws.tmp_mp_diff, base.Tmat, base.tmp_mp)  # Kinf = T * Pinf * Z'
-                # Kinf = Kinf * Finf_inv
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.Finf_inv)
-                # Store as Kinf in base.tmp_mp, copy to ws.tmp_mp_diff
-                copyto!(ws.tmp_mp_diff, base.tmp_mp)  # Kinf
-
-                # Linf = T - Kinf * Z
-                mul!(ws.tmp_mm_diff1, ws.tmp_mp_diff, base.Z)
-                for j in 1:m, i in 1:m
-
-                    ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
-                end
-                # tmp_mm_diff1 = Linf
-
-                # Fstar = Z * Pstar * Z' + H
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(ws.tmp_pp_diff, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    ws.tmp_pp_diff[i, j] += base.H[i, j]
-                end
-                # tmp_pp_diff = Fstar
-
-                # Kstar = (T * Pstar * Z' + Kinf * Fstar) * Finf^{-1}
-                # K1 = T * Pstar * Z' (m × p)
-                mul!(base.tmp_mp, ws.Pstar, base.Z')            # tmp_mp = Pstar * Z' (m × p)
-                K_t = view(base.Kt, :, :, t)
-                mul!(K_t, base.Tmat, base.tmp_mp)               # K_t = T * Pstar * Z' (m × p)
-
-                # K2 = Kinf * Fstar (m × p)
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.tmp_pp_diff)  # tmp_mp = Kinf * Fstar
-
-                # Kstar = (K1 + K2) * Finf_inv
-                for j in 1:p, i in 1:m
-
-                    K_t[i, j] += base.tmp_mp[i, j]  # K1 + K2
-                end
-                mul!(base.tmp_mp, K_t, ws.Finf_inv)
-                copyto!(K_t, base.tmp_mp)  # Kstar in Kt storage
-
-                # Store Finf as F
-                for j in 1:p, i in 1:p
-
-                    base.Ft[i, j, t] = ws.Finf[i, j]
-                    base.Ft_L[i, j, t] = zero(T)  # No valid Cholesky during diffuse
-                end
-
-                # Filtered state: a_filt = a + Pinf * Z' * Finf^{-1} * v
-                mul!(base.tmp_mp, ws.Pinf, base.Z')  # Pinf * Z'
-                mul!(base.tmp_m2, base.tmp_mp, ws.Finf_inv * v_t)
-                for i in 1:m
-                    base.att[i, t] = a_curr[i] + base.tmp_m2[i]
-                end
-
-                # Filtered covariance (approximation during diffuse)
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    base.tmp_pp1[i, j] += base.H[i, j]
-                end
-                # Use Fstar for filtered cov
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                # Simple approximation: P_filt ≈ Pstar
-                for j in 1:m, i in 1:m
-
-                    base.Ptt[i, j, t] = ws.Pstar[i, j]
-                end
-
-                # State prediction: a = T * a + Kinf * v
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                mul!(base.tmp_m1, ws.tmp_mp_diff, v_t)  # Kinf * v
-                for i in 1:m
-                    a_curr[i] = base.tmp_m2[i] + base.tmp_m1[i]
-                end
-
-                # Covariance updates
-                # Pinf' = T * Pinf * Linf'
+            if !ws.diffuse_ended
+                # Pinf = T * Pinf * T'
                 mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff2, base.tmp_mm2, ws.tmp_mm_diff1')
+                mul!(ws.tmp_mm_diff2, base.tmp_mm2, Tt)
                 copyto!(ws.Pinf, ws.tmp_mm_diff2)
-
-                # Pstar' = T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')  # T*Pstar*Linf'
-
-                # Kinf * Finf * Kstar'
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.Finf)  # Kinf * Finf
-                mul!(ws.tmp_mm_diff2, base.tmp_mp, K_t')    # * Kstar'
-
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + ws.tmp_mm_diff2[i, j] +
-                                     base.RQR[i, j]
-                end
-
-                # No likelihood contribution when Finf invertible
-
-            else
-                # === Finf singular: use Fstar-based update ===
-
-                # Fstar = Z * Pstar * Z' + H
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    base.tmp_pp1[i, j] += base.H[i, j]
-                    base.Ft[i, j, t] = base.tmp_pp1[i, j]
-                end
-
-                # Symmetrize and Cholesky
-                for j in 1:p, i in 1:(j - 1)
-
-                    avg = (base.tmp_pp1[i, j] + base.tmp_pp1[j, i]) / 2
-                    base.tmp_pp1[i, j] = avg
-                    base.tmp_pp1[j, i] = avg
-                end
-                chol = cholesky!(Symmetric(base.tmp_pp1, :L))
-
-                for j in 1:p, i in 1:p
-
-                    base.Ft_L[i, j, t] = i >= j ? chol.L[i, j] : zero(T)
-                end
-
-                # This observation contributes to likelihood
-                base.n_obs_valid += 1
-                logdetF = zero(T)
-                for i in 1:p
-                    logdetF += 2 * log(chol.L[i, i])
-                end
-                copyto!(base.tmp_p2, v_t)
-                ldiv!(LowerTriangular(chol.L), base.tmp_p2)
-                quad_form = zero(T)
-                for i in 1:p
-                    quad_form += base.tmp_p2[i]^2
-                end
-                base.loglik += -T(0.5) * (logdetF + quad_form)
-
-                # Kstar = T * Pstar * Z' * Fstar^{-1}
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                K_t = view(base.Kt, :, :, t)
-                mul!(K_t, base.Tmat, base.tmp_mp)
-                L_lower = LowerTriangular(chol.factors)
-                rdiv!(K_t, L_lower')
-                rdiv!(K_t, L_lower)
-
-                # Lstar = T - Kstar * Z
-                mul!(ws.tmp_mm_diff1, K_t, base.Z)
-                for j in 1:m, i in 1:m
-
-                    ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
-                end
-
-                # Filtered state
-                ldiv!(L_lower', base.tmp_p2)
-                mul!(base.tmp_m2, base.tmp_mp, base.tmp_p2)
-                for i in 1:m
-                    base.att[i, t] = a_curr[i] + base.tmp_m2[i]
-                end
-
-                # Filtered covariance
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                ldiv!(L_lower, base.tmp_pm)
-                ldiv!(L_lower', base.tmp_pm)
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                mul!(base.tmp_mm2, base.tmp_mp, base.tmp_pm)
-                for j in 1:m, i in 1:m
-
-                    base.Ptt[i, j, t] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
-                end
-
-                # State prediction: a = T * a + Kstar * v
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                mul!(base.tmp_m1, K_t, v_t)
-                for i in 1:m
-                    a_curr[i] = base.tmp_m2[i] + base.tmp_m1[i]
-                end
-
-                # Covariance updates
-                # Pinf' = T * Pinf * T'
-                mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff2, base.tmp_mm2, base.Tmat')
-                copyto!(ws.Pinf, ws.tmp_mm_diff2)
-
-                # Pstar' = T * Pstar * Lstar' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
             end
+        end
 
-            # Check if diffuse period ends
-            if norm(ws.Pinf) <= tol
-                ws.diffuse_ended = true
-            end
+        # Check if diffuse period ends
+        if !ws.diffuse_ended && norm(ws.Pinf) <= tol
+            ws.diffuse_ended = true
         end
     end
 
-    # Add constant term
-    base.loglik += -p * base.n_obs_valid * log2pi / 2
+    # The Gaussian constant counts every observed scalar that contributed.
+    base.loglik += -base.n_obs_rows * log2pi / 2
 
     return base.loglik
 end
@@ -3048,16 +2920,8 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     return nothing
 end
 
-_store_observed_mask!(mask, filt::KalmanFilterResult) = copyto!(mask, filt.observed_mask)
-
-# The diffuse filter rejects partially observed periods, so each period is
-# either fully observed or fully missing.
-function _store_observed_mask!(mask, filt::DiffuseFilterResult)
-    for t in axes(mask, 2)
-        mask[:, t] .= !filt.missing_mask[t]
-    end
-    return mask
-end
+_store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult}) =
+    copyto!(mask, filt.observed_mask)
 
 """Copy filter results from KalmanWorkspace to model."""
 function _ssm_copy_from_workspace!(model::StateSpaceModel, kf_ws::KalmanWorkspace)

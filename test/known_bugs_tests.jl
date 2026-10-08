@@ -73,4 +73,35 @@ end
     @test_broken :T_diagonal in Base.kwarg_decl(m)
 end
 
+@testset "exact diffuse update after a step with nonzero Pstar" begin
+    # The Finf-invertible update adds the cross term T*M∞*M*'*T'/F∞ where
+    # Durbin-Koopman subtract it, so Pstar becomes asymmetric from the second
+    # diffuse step on. A local linear trend has d = 2; after it, the exact filter
+    # must match the κ → ∞ limit of the approximate one.
+    rng = MersenneTwister(8901)
+    n = 40
+    y = cumsum(cumsum(randn(rng, 1, n); dims = 2); dims = 2) .+ 5 .* randn(rng, 1, n)
+    p = KFParms([1.0 0.0], [25.0;;], [1.0 1.0; 0.0 1.0], Matrix(1.0I, 2, 2),
+        [1.0 0.0; 0.0 0.1])
+    res = kalman_filter(p, y, zeros(2), zeros(2, 2), Matrix(1.0I, 2, 2))
+    d = diffuse_period(res)
+    P_big = 1e8 * Matrix(1.0I, 2, 2)
+    approx = kalman_filter(p, y, zeros(2), P_big)
+    @test_broken res.Pt[:, :, d + 1] ≈ approx.Pt[:, :, d + 1] rtol = 1e-5
+    @test_broken res.loglik ≈ kalman_loglik(p, y, zeros(2), P_big) -
+                              kalman_loglik(p, y[:, 1:d], zeros(2), P_big) rtol = 1e-6
+end
+
+@testset "exact diffuse with a singular nonzero Finf" begin
+    # With more observed rows than diffuse directions, Finf = Z*Pinf*Z' is
+    # singular but nonzero. The filters then take the Fstar step, which leaves Pinf
+    # unchanged, so the diffuse period never ends. Durbin-Koopman handle this case
+    # by processing the period one row at a time.
+    rng = MersenneTwister(2)
+    n = 40
+    y = cumsum(randn(rng, 1, n); dims = 2) .+ randn(rng, 2, n)
+    p = KFParms(reshape([1.0, 1.0], 2, 1), [1.0 0.0; 0.0 2.0], [1.0;;], [1.0;;], [0.5;;])
+    @test_broken diffuse_period(kalman_filter(p, y, [0.0], [0.0;;], [1.0;;])) == 1
+end
+
 end # Known bugs

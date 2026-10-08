@@ -267,8 +267,41 @@ Other author answers, verbatim:
   - Count observed scalars in the likelihood constant.
   - Store the innovations packed in leading rows plus an `observed_mask`, as the non-diffuse functional filter does. This needs an `observed_mask` field on `DiffuseFilterResult`; `_store_observed_mask!` in `inplace.jl` then becomes a plain copy.
   - Test against a reduced-system reference and against KFAS/approximate diffuse on a partially observed panel.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-008, CHUNK-009
+- **Cluster**: correctness
+- **Notes**:
+  - **Functional filters:** `kalman_loglik_diffuse` and `kalman_filter_diffuse` select `Z[rows,:]`, `H[rows,rows]` and `y[rows,t]` per period in both phases, and the constant counts observed scalars. `kalman_filter_diffuse` stores `vt`/`Ft`/`Kt` packed in leading rows/cols through a new `_store_innovations!` helper (`filter_ad.jl`). Fully missing periods are unchanged.
+  - **`DiffuseFilterResult`** has a new last field, `observed_mask::BitMatrix`, plus `missing_mask`, `observed_mask` and `observed_rows` accessors. `_store_observed_mask!` is now a single `copyto!` method for both result types.
+  - **In-place `kalman_filter_diffuse!`** was rewritten along the lines of `kalman_filter!(::KalmanWorkspace)`: leading-block views, and it now fills `observed_mask`, `n_observed` and `obs_rows`. The Finf-singular step and the post-diffuse step share one code path (the same algebra plus `Pinf = T Pinf T'`). `M = Pstar Z' F⁻¹` is formed from `Pstar Z'` because the diffuse step leaves `Pstar` asymmetric (see CHUNK-038). The in-place Cholesky now reads `:L` without symmetrising first, as the standard in-place filter does. Also removed: the `Finf_inv * v_t` allocation. `DiffuseKalmanWorkspace` gained `observed_mask`/`observed_rows` accessors.
+  - **Rejections removed** from all three diffuse filters, and the "rejects a partial period" test was replaced. `_require_no_partial_periods` is still used by the EKF and `fit!(EM())`.
+  - **Tests** (`partial_missing_tests.jl`): 4 new testsets. The references are the κ = 1e8 approximate-diffuse limit (states, innovations, and the likelihood of periods d+1:n as a difference of two full-sample logliks), the reduced model for a never-observed row, functional vs in-place agreement, and an exact-diffuse `SSMSpec` (built from `custom_ssm` plus `P1_inf`) through `ssm_loglik`, `StateSpaceModel` `kalman_filter!` and `fit!(MLE())`.
+  - **Pre-existing bugs found, not fixed here:** a sign error in the exact diffuse update (CHUNK-038) and a singular nonzero Finf (CHUNK-039). Both are pinned in `known_bugs_tests.jl`. The tests above use setups where d = 1 and Finf is invertible. Partial periods make the second bug more likely, because one missing row inside the diffuse period usually leaves Finf rank-deficient.
+  - Not done: KFAS comparison (no partially observed KFAS reference data in the repo; the κ-limit is independent of the diffuse code).
+
+### CHUNK-038: fix-exact-diffuse-update-sign
+- **Kind**: `implement`
+- **Description**: Found while doing CHUNK-036. In the Finf-invertible step of all three diffuse filters (`kalman_loglik_diffuse`, `kalman_filter_diffuse`, `kalman_filter_diffuse!`):
+  - The code uses `Kstar = (T P* Z' + Kinf F*) Finf⁻¹` and `P*ₜ₊₁ = T P* Linf' + Kinf Finf Kstar' + RQR`.
+  - Durbin–Koopman (2012, §5.2) have `K⁽¹⁾ = (T P* Z' − Kinf F*) Finf⁻¹` and `P*ₜ₊₁ = T P* Linf' − Kinf Finf K⁽¹⁾' + RQR`.
+  - The net error is the sign of `T M∞ M*' T'/F∞`, so `Pstar` turns asymmetric and wrong from the second diffuse step on. It is invisible when d = 1 or `P* = 0` (Nile).
+  - Example: a local linear trend with d = 2 gives `Pt[:,:,3] = [231.1 76.1; 128.1 51.2]` vs the κ-limit `[127.1 76.1; 76.1 51.2]`.
+  - **Affects:** `local_linear_trend(diffuse=:exact)`, `arma(...; diffuse=:exact)` with m ≥ 2, and any multi-step exact diffuse.
+  - **Also review:** the functional diffuse `P_filt = P* − P* Z' Finf⁻¹ Z P*` (it uses Finf⁻¹ where DK's filtered covariance differs), and why `Kt` stores Kinf in the functional filter but Kstar in the in-place one.
+  - **Fix:** flip both signs, flip the pin "exact diffuse update after a step with nonzero Pstar" in `known_bugs_tests.jl` and move it to `diffuse_tests.jl`. Then drop the asymmetry comment on `M` in `kalman_filter_diffuse!`, or keep the safer form.
+- **Status**: `not-started`
+- **Depends on**: CHUNK-036
+- **Cluster**: correctness
+- **Notes**:
+
+### CHUNK-039: exact-diffuse-singular-finf
+- **Kind**: `implement`
+- **Description**: Found while doing CHUNK-036. When `Finf = Z Pinf Z'` is singular but nonzero (more observed rows than diffuse directions, e.g. p = 2 series of one diffuse level, or a partial period inside the diffuse period), the filters take the Fstar step. That step leaves `Pinf = T Pinf T'` unchanged, so the diffuse period never ends: on a fully observed p = 2, m = 1 panel, d = n. The likelihood is then a Fstar-based value that ignores the diffuse part.
+  - Implement the univariate (sequential) treatment of Koopman & Durbin (2000) for these periods: process the observed rows one at a time, each with scalar Finf,ᵢ (the exact step when Finf,ᵢ > tol, otherwise the Fstar step), which requires diagonal H or a per-period LDL transform of H. This is what KFAS does.
+  - At minimum, detect `flag == 0 && norm(Finf) > tol` and throw an `ArgumentError` instead of returning a wrong likelihood.
+  - Flip the pin "exact diffuse with a singular nonzero Finf" in `known_bugs_tests.jl`. Re-test the partial-period case with a partial period inside the diffuse period on an m = 2 model.
+- **Status**: `not-started`
+- **Depends on**: CHUNK-038
 - **Cluster**: correctness
 - **Notes**:
 
@@ -571,9 +604,10 @@ Other author answers, verbatim:
   - remove the allocations in the diffuse filter (`det` at `inplace.jl:1203`; `ws.Finf_inv * v_t` at `:1510`);
   - document the `-1` value of `diffuse_flags`.
 - **Status**: `not-started`
-- **Depends on**: CHUNK-015
+- **Depends on**: CHUNK-015, CHUNK-039
 - **Cluster**: missing-operations
 - **Notes**:
+  - CHUNK-036 already did the first two "while there" items: `kalman_filter_diffuse!` fills `n_observed`/`obs_rows`/`observed_mask`, and the diffuse paths support per-element missing data. It also removed the `Finf_inv * v_t` allocation; `det` in `_safe_inverse_inplace!` remains. The smoother must read the packed `vt`/`Ft`/`Kt` blocks.
 
 ### CHUNK-028: add-disturbance-smoother
 - **Kind**: `implement`
@@ -663,7 +697,7 @@ Other author answers, verbatim:
 - **Description**: Bump `Project.toml` from 0.1.0 to 0.2.0, the breaking minor release for 0.x. Run the full test suite, Aqua and `detect_ambiguities`, and compare the results with the CHUNK-001 baseline.
 - **Status**: `not-started`
 - **Breaking**: yes
-- **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-033, CHUNK-037
+- **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-033, CHUNK-037, CHUNK-038, CHUNK-039
 - **Cluster**: release
 - **Notes**:
 
@@ -677,6 +711,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-009 (fix-partial-missing-seams) → next: CHUNK-010
 - 2026-10-08 CHUNK-010 (fix-isolated-bugs) → next: CHUNK-011
 - 2026-10-08 CHUNK-011 (fix-dfm-em-variance-update) → next: CHUNK-036
+- 2026-10-08 CHUNK-036 (partial-periods-in-exact-diffuse-filters) → next: CHUNK-038
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

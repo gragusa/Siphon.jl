@@ -264,28 +264,164 @@ end
     @test all(t -> collect(Siphon.observed_rows(ws, t)) == 1:s.p, 1:s.n)
 end
 
-@testset "partial missing — per-period paths reject a partial period" begin
-    s = _partial_missing_setup(; p = 2, m = 2, n = 12)
-    y = copy(s.y)
+# Two random walks observed through a full-rank mixing matrix, both states diffuse,
+# so the first period ends the diffuse period. The partial periods come after it.
+function _diffuse_partial_setup(; n = 30, seed = 20261008)
+    rng = Xoshiro(seed)
+    Z = [1.0 0.5; 0.3 1.0]
+    H = [1.0 0.2; 0.2 1.5]
+    T = Matrix{Float64}(I, 2, 2)
+    R = Matrix{Float64}(I, 2, 2)
+    Q = [0.5 0.1; 0.1 0.3]
+    α = cumsum(randn(rng, 2, n); dims = 2)
+    y = Z * α .+ randn(rng, 2, n)
+    y[1, 8:10] .= NaN    # partial periods
+    y[:, 15] .= NaN      # a fully missing period
+    return (; p = KFParms(Z, H, T, R, Q), y, a1 = zeros(2),
+        P1_star = zeros(2, 2), P1_inf = Matrix{Float64}(I, 2, 2))
+end
+
+function _diffuse_workspace(s)
+    n = size(s.y, 2)
+    ws = DiffuseKalmanWorkspace{Float64}(2, 2, 2, n)
+    set_params!(ws, s.p.Z, s.p.H, s.p.T, s.p.R, s.p.Q)
+    set_initial_diffuse!(ws, s.a1, s.P1_star, s.P1_inf)
+    return ws
+end
+
+@testset "partial missing — exact diffuse filters use the observed rows" begin
+    s = _diffuse_partial_setup()
+    res = kalman_filter(s.p, s.y, s.a1, s.P1_star, s.P1_inf)
+    d = diffuse_period(res)
+    @test d == 1
+    @test diffuse_flags(res) == [1]
+
+    # After the diffuse period the exact filter is the limit of the approximate
+    # one. The approximate likelihood of periods d+1:n is the difference of two
+    # full-sample likelihoods, so this reference shares no code with the diffuse
+    # filter.
+    κ = 1e8
+    P1_big = κ * s.P1_inf
+    approx = kalman_filter(s.p, s.y, s.a1, P1_big)
+    ll_tail = kalman_loglik(s.p, s.y, s.a1, P1_big) -
+              kalman_loglik(s.p, s.y[:, 1:d], s.a1, P1_big)
+    @test res.loglik ≈ ll_tail rtol = 1e-6
+    @test predicted_states(res)[:, (d + 1):end] ≈ predicted_states(approx)[:, (d + 1):end] rtol = 1e-5
+    @test filtered_states(res)[:, (d + 1):end] ≈ filtered_states(approx)[:, (d + 1):end] rtol = 1e-5
+
+    # The likelihood-only path and the in-place filter agree.
+    @test kalman_loglik(s.p, s.y, s.a1, s.P1_star, s.P1_inf) ≈ res.loglik
+    ws = _diffuse_workspace(s)
+    @test kalman_filter!(ws, s.y) ≈ res.loglik
+    @test diffuse_period(ws) == d
+    @test predicted_states(ws) ≈ predicted_states(res)
+    @test filtered_states(ws) ≈ filtered_states(res)
+    @test isapprox(prediction_errors(ws), prediction_errors(res); nans = true)
+
+    # Innovations of a partial period sit in the leading rows, as in the
+    # non-diffuse filters, and the mask records which rows they are.
+    @test Siphon.observed_mask(res) == .!isnan.(s.y)
+    @test Siphon.observed_mask(ws) == .!isnan.(s.y)
+    @test Siphon.observed_rows(res, 8) == [2]
+    @test collect(Siphon.observed_rows(ws, 8)) == [2]
+    vt = prediction_errors(res)
+    @test isfinite(vt[1, 8]) && isnan(vt[2, 8])
+    @test vt[1, 8] ≈ prediction_errors(approx)[1, 8] rtol = 1e-5
+    @test Siphon.missing_mask(res) == [t == 15 for t in axes(s.y, 2)]
+end
+
+@testset "partial missing — a partial period inside the exact diffuse period" begin
+    # One diffuse level seen by two series. Only series 1 is observed at t = 1, so
+    # the diffuse step runs on one row, where Finf is a nonzero scalar.
+    rng = Xoshiro(7)
+    n = 30
+    level = cumsum(randn(rng, n))
+    y = vcat(level', level') .+ randn(rng, 2, n)
+    y[2, 1] = NaN
     y[1, 5] = NaN
+    p = KFParms(reshape([1.0, 1.0], 2, 1), [1.0 0.3; 0.3 2.0], [1.0;;], [1.0;;], [0.5;;])
+    a1, P1_star, P1_inf = [0.0], [0.0;;], [1.0;;]
 
-    ws = DiffuseKalmanWorkspace{Float64}(s.p, s.m, size(s.Q, 1), s.n)
-    set_params!(ws.base, s.Z, s.H, s.T, s.R, s.Q)
-    set_initial_diffuse!(ws, s.a1, zeros(s.m, s.m), Matrix{Float64}(I, s.m, s.m))
+    res = kalman_filter(p, y, a1, P1_star, P1_inf)
+    @test diffuse_period(res) == 1
+    @test diffuse_flags(res) == [1]
+    @test prediction_errors(res)[1, 1] ≈ y[1, 1]
+    @test isnan(prediction_errors(res)[2, 1])
 
-    @test_throws "in period 5 only rows [2] of 2 are observed" Siphon.kalman_filter_diffuse!(ws, y)
-    @test_throws "approximate diffuse initialisation" Siphon.kalman_filter_diffuse!(ws, y)
-    P1_inf = Matrix{Float64}(I, s.m, s.m)
-    parms = KFParms(s.Z, s.H, s.T, s.R, s.Q)
-    @test_throws "kalman_loglik_diffuse does not support partially observed periods" kalman_loglik(
-        parms, y, s.a1, zeros(s.m, s.m), P1_inf)
-    @test_throws "kalman_filter_diffuse does not support partially observed periods" kalman_filter(
-        parms, y, s.a1, zeros(s.m, s.m), P1_inf)
+    P_big = [1e8;;]
+    approx = kalman_filter(p, y, a1, P_big)
+    @test res.loglik ≈ kalman_loglik(p, y, a1, P_big) -
+                       kalman_loglik(p, y[:, 1:1], a1, P_big) rtol = 1e-6
+    @test predicted_states(res)[:, 2:end] ≈ predicted_states(approx)[:, 2:end] rtol = 1e-5
+    @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
 
-    # A period that is entirely missing is still accepted.
-    y_whole = copy(s.y)
-    y_whole[:, 5] .= NaN
-    @test Siphon.kalman_filter_diffuse!(ws, y_whole) isa Real
+    ws = DiffuseKalmanWorkspace{Float64}(2, 1, 1, n)
+    set_params!(ws, p.Z, p.H, p.T, p.R, p.Q)
+    set_initial_diffuse!(ws, a1, P1_star, P1_inf)
+    @test kalman_filter!(ws, y) ≈ res.loglik
+    @test predicted_states(ws) ≈ predicted_states(res)
+    @test isapprox(prediction_errors(ws), prediction_errors(res); nans = true)
+end
+
+@testset "partial missing — exact diffuse with a never-observed row is the reduced model" begin
+    s = _diffuse_partial_setup()
+    y = copy(s.y)
+    y[2, :] .= NaN
+    p_red = KFParms(s.p.Z[1:1, :], s.p.H[1:1, 1:1], s.p.T, s.p.R, s.p.Q)
+    y_red = y[1:1, :]
+
+    full = kalman_filter(s.p, y, s.a1, s.P1_star, s.P1_inf)
+    red = kalman_filter(p_red, y_red, s.a1, s.P1_star, s.P1_inf)
+    @test full.loglik ≈ red.loglik
+    @test diffuse_period(full) == diffuse_period(red)
+    @test predicted_states(full) ≈ predicted_states(red)
+    @test filtered_states(full) ≈ filtered_states(red)
+    @test kalman_loglik(s.p, y, s.a1, s.P1_star, s.P1_inf) ≈ red.loglik
+
+    ws = _diffuse_workspace((; s..., y))
+    @test kalman_filter!(ws, y) ≈ red.loglik
+    @test predicted_states(ws) ≈ predicted_states(red)
+end
+
+@testset "partial missing — exact diffuse specs and models accept partial periods" begin
+    base = custom_ssm(
+        Z = reshape([1.0, 1.0], 2, 1),
+        H = diag_free([:h1, :h2]; init = 1.0),
+        T = [1.0],
+        R = [1.0],
+        Q = [FreeParam(:q, init = 1.0, lower = 0.0)],
+        a1 = [0.0],
+        P1 = [0.0]
+    )
+    P1_inf = Siphon.DSL.SSMMatrixSpec((1, 1))
+    P1_inf.elements[(1, 1)] = Siphon.DSL.FixedValue(1.0)
+    spec = Siphon.DSL.SSMSpec(base.name, base.n_states, base.n_obs, base.n_shocks,
+        base.params, base.Z, base.H, base.T, base.R, base.Q, base.a1, base.P1,
+        P1_inf, base.matrix_exprs)
+
+    # Row 2 is missing at t = 1, so the diffuse step runs on one row. With both
+    # rows observed, Finf would be singular (see known_bugs_tests.jl).
+    rng = Random.Xoshiro(3)
+    n = 50
+    level = cumsum(randn(rng, n))
+    y = vcat(level', level') .+ randn(rng, 2, n)
+    y[2, 1] = NaN
+    y[2, 10:12] .= NaN
+
+    θ = (h1 = 1.0, h2 = 2.0, q = 0.5)
+    ss = build_linear_state_space(spec, θ, y)
+    @test ss.P1_inf !== nothing
+    ll = kalman_loglik(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+    @test isfinite(ll)
+    @test ssm_loglik(spec, θ, y) ≈ ll
+
+    model = StateSpaceModel(spec, θ, n)
+    @test kalman_filter!(model, y) ≈ ll
+    @test model.observed_mask == .!isnan.(y)
+
+    model = StateSpaceModel(spec, n)
+    fit!(MLE(), model, y)
+    @test isfinite(loglikelihood(model))
 end
 
 @testset "partial missing — the static path falls back to the per-element filter" begin
