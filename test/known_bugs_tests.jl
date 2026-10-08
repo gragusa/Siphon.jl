@@ -50,42 +50,6 @@ end
     @test_broken maximum(abs.(idiosyncratic_variances(dfm) .- 1.0)) > 0.05
 end
 
-@testset "partially observed periods" begin
-    spec = custom_ssm(
-        Z = reshape([1.0, 1.0], 2, 1),
-        H = diag_free([:h1, :h2]; init = 1.0),
-        T = [1.0],
-        R = [1.0],
-        Q = [FreeParam(:q, init = 1.0, lower = 0.0)],
-        a1 = [0.0],
-        P1 = [10.0]
-    )
-    Random.seed!(2)
-    n = 60
-    level = cumsum(randn(n))
-    y = vcat(level', level') .+ randn(2, n)
-    y[1, 10:15] .= NaN   # row 1 missing, row 2 observed
-    y[:, 30] .= NaN      # fully missing period
-
-    θ = (h1 = 1.0, h2 = 1.0, q = 1.0)
-    ss = build_linear_state_space(spec, θ, y; use_static = false)
-    ref = kalman_smoother(ss.p, y, ss.a1, ss.P1)
-
-    # The default static path rejects partially observed periods.
-    @test_broken !_throws(() -> predict(spec, θ, y))
-
-    # The StateSpaceModel smoother drops the observed-row mask.
-    model = StateSpaceModel(spec, n)
-    fit!(MLE(), model, y; static = :off)
-    ss_fit = build_linear_state_space(spec, parameters(model), y; use_static = false)
-    ref_fit = kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1)
-    @test_broken smoothed_states(model) ≈ ref_fit.α
-
-    # SmootherResult's convenience constructor drops the observed-row mask.
-    @test_broken !_throws(() -> SmootherResult(ss.p, y, ss.a1, ss.P1))
-    @test size(ref.α) == (1, n)
-end
-
 @testset "quantile_normal below the median" begin
     @test_broken quantile_normal(0.025) ≈ -1.96 atol = 0.01
 end

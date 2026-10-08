@@ -116,30 +116,39 @@ function _period_obs_dim(observed_mask, vt::AbstractMatrix, t::Integer)
     return count(view(observed_mask, :, t))
 end
 
+# The first period of `y` in which some but not all rows are observed, or `nothing`.
+function _first_partial_period(y::AbstractMatrix)
+    for t in axes(y, 2)
+        n_obs = count(!isnan, view(y, :, t))
+        n_obs != 0 && n_obs != size(y, 1) && return t
+    end
+    return nothing
+end
+
 """
-    _require_no_partial_periods(y, caller::AbstractString)
+    _require_no_partial_periods(y, caller::AbstractString, hint::AbstractString = "")
 
 Throw an `ArgumentError` if any period of `y` is partially observed, naming the
-first such period and the rows involved.
+first such period and the rows involved, followed by `hint`.
 
 Paths that handle missingness one period at a time rather than one element at a
 time call this on entry, so a partially observed panel fails immediately instead
 of silently discarding the observed rows of that period.
 """
-function _require_no_partial_periods(y::AbstractMatrix, caller::AbstractString)
-    for t in axes(y, 2)
-        y_t = view(y, :, t)
-        n_obs = count(!isnan, y_t)
-        if n_obs != 0 && n_obs != length(y_t)
-            observed = [i for i in axes(y_t, 1) if !isnan(y_t[i])]
-            throw(ArgumentError(
-                "$caller handles missing data per period, but period $t is partially " *
-                "observed: rows $observed of $(length(y_t)) are present. Use " *
-                "kalman_filter! / kalman_filter, which handle per-element missingness."))
-        end
-    end
-    return nothing
+function _require_no_partial_periods(y::AbstractMatrix, caller::AbstractString,
+        hint::AbstractString = "")
+    t = _first_partial_period(y)
+    t === nothing && return nothing
+    observed = findall(!isnan, view(y, :, t))
+    throw(ArgumentError(
+        "$caller does not support partially observed periods, but in period $t only " *
+        "rows $observed of $(size(y, 1)) are observed." * (isempty(hint) ? "" : " " * hint)))
 end
+
+# Static-array system matrices converted to ordinary arrays, for the per-element
+# missing-data filters.
+_dynamic_kfparms(p::KFParms) = KFParms(Matrix(p.Z), Matrix(p.H), Matrix(p.T),
+    Matrix(p.R), Matrix(p.Q))
 
 """
     _observed_rows!(rows, y_t) -> Int
@@ -267,7 +276,7 @@ function kalman_loglik(
             # P_filt = P - PZt * Finv_val * (PZt)'
             P = p.T * (P - PZt * (Finv_val * transpose(PZt))) * Tt + RQR
         else
-            F_sym = Symmetric(F, :L)
+            F_sym = Symmetric((F + F') / 2)
             chol_result = cholesky(F_sym; check = false)
             if !issuccess(chol_result)
                 return ET(-Inf)
@@ -331,8 +340,11 @@ function kalman_loglik(
         a1::SVector{M},
         P1::SMatrix{M, M}
 ) where {P, M, R}
+    # The static kernel drops whole periods; partially observed ones need the
+    # per-element filter.
+    _first_partial_period(y) === nothing ||
+        return kalman_loglik(_dynamic_kfparms(p), y, Vector(a1), Matrix(P1))
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_loglik (StaticArrays)")
     ET = _filter_eltype(p, a1, P1)
 
     # Initialize state as static types
@@ -662,8 +674,11 @@ function kalman_filter(
         a1::SVector{M},
         P1::SMatrix{M, M}
 ) where {P, M, R}
+    # The static kernel drops whole periods; partially observed ones need the
+    # per-element filter.
+    _first_partial_period(y) === nothing ||
+        return kalman_filter(_dynamic_kfparms(p), y, Vector(a1), Matrix(P1))
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_filter (StaticArrays)")
     ET = _filter_eltype(p, a1, P1)
 
     # Output storage (heap-allocated, filled with static values)
@@ -933,7 +948,8 @@ function kalman_loglik_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_loglik_diffuse")
+    _require_no_partial_periods(y, "kalman_loglik_diffuse",
+        "Use approximate diffuse initialisation (diffuse = true), which handles them.")
     obs_dim = size(y, 1)
 
     ET = _filter_eltype(p, a1, P1_star, P1_inf)
@@ -1122,7 +1138,8 @@ function kalman_filter_diffuse(
         tol::Real = 1e-8
 )
     n = size(y, 2)
-    _require_no_partial_periods(y, "kalman_filter_diffuse")
+    _require_no_partial_periods(y, "kalman_filter_diffuse",
+        "Use approximate diffuse initialisation (diffuse = true), which handles them.")
     obs_dim = size(y, 1)
     state_dim = length(a1)
 

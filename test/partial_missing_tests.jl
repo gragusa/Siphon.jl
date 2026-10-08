@@ -273,8 +273,14 @@ end
     set_params!(ws.base, s.Z, s.H, s.T, s.R, s.Q)
     set_initial_diffuse!(ws, s.a1, zeros(s.m, s.m), Matrix{Float64}(I, s.m, s.m))
 
-    @test_throws "period 5 is partially observed" Siphon.kalman_filter_diffuse!(ws, y)
-    @test_throws "handles missing data per period" Siphon.kalman_filter_diffuse!(ws, y)
+    @test_throws "in period 5 only rows [2] of 2 are observed" Siphon.kalman_filter_diffuse!(ws, y)
+    @test_throws "approximate diffuse initialisation" Siphon.kalman_filter_diffuse!(ws, y)
+    P1_inf = Matrix{Float64}(I, s.m, s.m)
+    parms = KFParms(s.Z, s.H, s.T, s.R, s.Q)
+    @test_throws "kalman_loglik_diffuse does not support partially observed periods" kalman_loglik(
+        parms, y, s.a1, zeros(s.m, s.m), P1_inf)
+    @test_throws "kalman_filter_diffuse does not support partially observed periods" kalman_filter(
+        parms, y, s.a1, zeros(s.m, s.m), P1_inf)
 
     # A period that is entirely missing is still accepted.
     y_whole = copy(s.y)
@@ -282,7 +288,7 @@ end
     @test Siphon.kalman_filter_diffuse!(ws, y_whole) isa Real
 end
 
-@testset "partial missing — the static path rejects a partial period" begin
+@testset "partial missing — the static path falls back to the per-element filter" begin
     using StaticArrays
 
     s = _partial_missing_setup(; p = 2, m = 2, n = 10)
@@ -296,15 +302,18 @@ end
     y[1, 4] = NaN
 
     # The StaticArrays specialization fixes the observation dimension in its type
-    # parameters, so it cannot express a shrinking row set and says so.
-    @test_throws "period 4 is partially observed" kalman_loglik(parms_static, y, a1s, P1s)
-    @test_throws "StaticArrays" kalman_filter(parms_static, y, a1s, P1s)
+    # parameters, so a partially observed panel goes to the dense per-element filter.
+    parms = KFParms(s.Z, s.H, s.T, s.R, s.Q)
+    @test kalman_loglik(parms_static, y, a1s, P1s) ≈ kalman_loglik(parms, y, s.a1, s.P1)
+    filt_static = kalman_filter(parms_static, y, a1s, P1s)
+    filt = kalman_filter(parms, y, s.a1, s.P1)
+    @test filt_static.att ≈ filt.att
+    @test filt_static.observed_mask == filt.observed_mask
 
-    # Fully observed and fully missing periods still work on that path, and agree
+    # Fully observed and fully missing periods use the static kernel and agree
     # with the dense path.
     y_whole = copy(s.y)
     y_whole[:, 4] .= NaN
-    parms = KFParms(s.Z, s.H, s.T, s.R, s.Q)
     @test kalman_loglik(parms_static, y_whole, a1s, P1s) ≈
           kalman_loglik(parms, y_whole, s.a1, s.P1)
     @test kalman_loglik(parms_static, s.y, a1s, P1s) ≈
@@ -357,11 +366,12 @@ end
 
     # The EKF updates one period at a time, so a partially observed period would
     # otherwise discard the rows that are present.
-    @test_throws "period 4 is partially observed" ekf_loglik(parms, y, s.a1, s.P1)
-    @test_throws "handles missing data per period" ekf_filter(parms, y, s.a1, s.P1)
+    @test_throws "in period 4 only rows [1, 3] of 3 are observed" ekf_loglik(parms, y, s.a1, s.P1)
+    @test_throws "ekf_filter does not support partially observed periods" ekf_filter(
+        parms, y, s.a1, s.P1)
 
     ws = EKFWorkspace(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q, s.a1, s.P1, s.n)
-    @test_throws "period 4 is partially observed" ekf_filter!(ws, y)
+    @test_throws "in period 4 only rows [1, 3] of 3 are observed" ekf_filter!(ws, y)
     @test_throws "ekf_filter!" ekf_filter_and_smooth!(ws, y)
 
     # Fully observed and entirely missing periods remain valid on these paths.
@@ -391,4 +401,62 @@ end
     @test loglikelihood(result) == -Inf
     @test Siphon.missing_mask(result) isa BitVector
     @test size(Siphon.observed_mask(result)) == (2, 2)
+end
+
+@testset "partial missing — StateSpaceModel and spec paths use the observed rows" begin
+    spec = custom_ssm(
+        Z = reshape([1.0, 1.0], 2, 1),
+        H = diag_free([:h1, :h2]; init = 1.0),
+        T = [1.0],
+        R = [1.0],
+        Q = [FreeParam(:q, init = 1.0, lower = 0.0)],
+        a1 = [0.0],
+        P1 = [10.0]
+    )
+    rng = Random.Xoshiro(2)
+    n = 60
+    level = cumsum(randn(rng, n))
+    y = vcat(level', level') .+ randn(rng, 2, n)
+    y[1, 10:15] .= NaN   # row 1 missing, row 2 observed
+    y[:, 30] .= NaN      # fully missing period
+
+    θ = (h1 = 1.0, h2 = 1.0, q = 1.0)
+    ss = build_linear_state_space(spec, θ, y; use_static = false)
+    filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
+    ref = kalman_smoother(ss.p, y, ss.a1, ss.P1)
+
+    # The default use_static = true no longer rejects the partial periods
+    @test predict(spec, θ, y).loglik ≈ filt.loglik
+    @test forecast(spec, θ, y, 2).yhat ≈ forecast(ss.p, y, ss.a1, ss.P1, 2).yhat
+    @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ filt.loglik
+
+    # The model smoother uses the observed-row mask
+    model = StateSpaceModel(spec, θ, n)
+    @test kalman_filter!(model, y) ≈ filt.loglik
+    @test smoothed_states(model) ≈ ref.α
+    @test smoothed_states_cov(model) ≈ ref.V
+
+    model = StateSpaceModel(spec, n)
+    fit!(MLE(), model, y)
+    ss_fit = build_linear_state_space(spec, parameters(model), y; use_static = false)
+    @test smoothed_states(model) ≈ kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1).α
+
+    # SmootherResult's convenience constructor uses the mask too
+    @test SmootherResult(ss.p, y, ss.a1, ss.P1).alpha ≈ ref.α
+
+    @test_throws "Use fit!(MLE(), ...)" fit!(EM(), StateSpaceModel(spec, n), y)
+end
+
+@testset "kalman_loglik and kalman_filter agree for a nearly asymmetric F" begin
+    # Z P Z' + H can be slightly asymmetric in floating point; both paths
+    # symmetrise it the same way.
+    rng = Random.Xoshiro(7)
+    p, m, n = 3, 3, 40
+    A = randn(rng, m, m)
+    P1 = A * A' + I
+    Z = randn(rng, p, m)
+    H = [1.0 0.3 0.0; 0.3000001 1.0 0.2; 0.0 0.2 1.0]   # asymmetric by 1e-7
+    parms = KFParms(Z, H, 0.9 * Matrix(1.0I, m, m), Matrix(1.0I, m, m), Matrix(0.5I, m, m))
+    y = randn(rng, p, n)
+    @test kalman_loglik(parms, y, zeros(m), P1) ≈ kalman_filter(parms, y, zeros(m), P1).loglik rtol = 1e-12
 end

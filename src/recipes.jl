@@ -195,6 +195,7 @@ function SmootherResult(
         filt.vt,
         filt.Ft;
         missing_mask = filt.missing_mask,
+        observed_mask = filt.observed_mask,
         Ptt = filt.Ptt
     )
     SmootherResult(nt; p = p, time = time)

@@ -1245,7 +1245,8 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
     @assert size(y) == (p, n) "Observation matrix size mismatch"
-    _require_no_partial_periods(y, "kalman_filter_diffuse!")
+    _require_no_partial_periods(y, "kalman_filter_diffuse!",
+        "Use a KalmanWorkspace with approximate diffuse initialisation, which handles them.")
 
     # Reset state
     base.loglik = zero(T)
@@ -2783,6 +2784,7 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     Ft::Array{T, 3}          # Innovation covariances (p × p × n)
     Kt::Array{T, 3}          # Kalman gains (m × p × n)
     missing_mask::BitVector
+    observed_mask::BitMatrix  # p × n: true where y[i,t] is observed
     filter_valid::Bool
 
     # Smoother cache (lazily computed)
@@ -2832,6 +2834,7 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     Ft = Array{T, 3}(undef, p, p, n)
     Kt = Array{T, 3}(undef, m, p, n)
     missing_mask = BitVector(undef, n)
+    observed_mask = BitMatrix(undef, p, n)
 
     # Smoother storage (allocated but not valid until computed)
     smoothed_alpha = Matrix{T}(undef, m, n)
@@ -2886,6 +2889,7 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         Ft,
         Kt,
         missing_mask,
+        observed_mask,
         false,
         false,
         smoothed_alpha,
@@ -2987,8 +2991,20 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     copyto!(model.Ft, filt.Ft)
     copyto!(model.Kt, filt.Kt)
     copyto!(model.missing_mask, filt.missing_mask)
+    _store_observed_mask!(model.observed_mask, filt)
     model.filter_valid = true
     return nothing
+end
+
+_store_observed_mask!(mask, filt::KalmanFilterResult) = copyto!(mask, filt.observed_mask)
+
+# The diffuse filter rejects partially observed periods, so each period is
+# either fully observed or fully missing.
+function _store_observed_mask!(mask, filt::DiffuseFilterResult)
+    for t in axes(mask, 2)
+        mask[:, t] .= !filt.missing_mask[t]
+    end
+    return mask
 end
 
 """Copy filter results from KalmanWorkspace to model."""
@@ -3004,6 +3020,7 @@ function _ssm_copy_from_workspace!(model::StateSpaceModel, kf_ws::KalmanWorkspac
     for t in 1:model.n_times
         model.missing_mask[t] = kf_ws.missing_mask[t]
     end
+    copyto!(model.observed_mask, kf_ws.observed_mask)
     model.filter_valid = true
     return nothing
 end
@@ -3148,7 +3165,9 @@ function _ssm_compute_smoother!(model::StateSpaceModel)
 
     # Run smoother using stored filter results
     alpha,
-    V = Siphon.kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft)
+    V = Siphon.kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
+        missing_mask = model.missing_mask, observed_mask = model.observed_mask,
+        Ptt = model.Ptt)
 
     # Cache results
     copyto!(model.smoothed_alpha, alpha)
@@ -3560,7 +3579,8 @@ function fit!(
     p_obs, n = size(y)
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
     @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
-    _require_no_partial_periods(y, "fit!(EM(), ...)")
+    _require_no_partial_periods(y, "fit!(EM(), ...)",
+        "Use fit!(MLE(), ...), which handles them.")
     Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
         "fit!(EM(), ...) does not support exact diffuse initialisation (diffuse = :exact). " *
         "Use fit!(MLE(), ...), or approximate diffuse initialisation (diffuse = true)."))
