@@ -2,10 +2,17 @@
 Tests for RecipesBase plotting recipes.
 """
 
-using TestItems
+using Siphon
+using Siphon: quantile_normal, select_vars, confidence_bands, SmootherResult,
+    ForecastResult, ObservablePlot
+using RecipesBase
+using LinearAlgebra
+using CSV
+using DataFrames
 
-@testitem "quantile_normal" tags=[:recipes, :smoke] begin
-    using Siphon: quantile_normal
+@testset "Plotting recipes" begin
+
+@testset "quantile_normal" begin
 
     # Standard values
     @test quantile_normal(0.975) ≈ 1.96 atol=0.01
@@ -14,8 +21,7 @@ using TestItems
     @test quantile_normal(0.5 + eps()) ≈ 0.0 atol=0.01
 end
 
-@testitem "select_vars" tags=[:recipes, :smoke] begin
-    using Siphon: select_vars
+@testset "select_vars" begin
 
     # :all and nothing
     @test select_vars(:all, 5) == 1:5
@@ -40,8 +46,7 @@ end
     @test_throws ArgumentError select_vars("invalid", 5)
 end
 
-@testitem "confidence_bands vector" tags=[:recipes, :smoke] begin
-    using Siphon: confidence_bands
+@testset "confidence_bands vector" begin
 
     mean = [1.0, 2.0, 3.0]
     var = [1.0, 4.0, 9.0]  # std = [1, 2, 3]
@@ -65,8 +70,7 @@ end
     @test all(upper90 .< upper)
 end
 
-@testitem "confidence_bands matrix" tags=[:recipes] begin
-    using Siphon: confidence_bands
+@testset "confidence_bands matrix" begin
 
     m, n = 2, 10
     mean = rand(m, n)
@@ -83,9 +87,7 @@ end
     @test all(lower .< mean .< upper)
 end
 
-@testitem "SmootherResult wrapper" tags=[:recipes] begin
-    using Siphon
-    using Siphon: SmootherResult
+@testset "SmootherResult wrapper" begin
 
     # Test wrapping NamedTuple
     m, n = 2, 10
@@ -106,9 +108,7 @@ end
     @test variances_smoothed_states(sr) == sr.V
 end
 
-@testitem "ForecastResult wrapper" tags=[:recipes] begin
-    using Siphon
-    using Siphon: ForecastResult
+@testset "ForecastResult wrapper" begin
 
     p_obs, m_state, h = 3, 2, 12
     nt = (
@@ -135,11 +135,7 @@ end
     @test forecast_states(fr) == fr.a
 end
 
-@testitem "SmootherResult convenience constructor" tags=[:recipes] begin
-    using Siphon
-    using Siphon: SmootherResult
-    using CSV
-    using DataFrames
+@testset "SmootherResult convenience constructor" begin
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
@@ -159,11 +155,7 @@ end
     @test sr.p === p
 end
 
-@testitem "KalmanFilterResult recipe produces series" tags=[:recipes] begin
-    using Siphon
-    using RecipesBase
-    using CSV
-    using DataFrames
+@testset "KalmanFilterResult recipe produces series" begin
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
@@ -190,12 +182,7 @@ end
     @test !isempty(rec3)
 end
 
-@testitem "SmootherResult recipe produces series" tags=[:recipes] begin
-    using Siphon
-    using Siphon: SmootherResult
-    using RecipesBase
-    using CSV
-    using DataFrames
+@testset "SmootherResult recipe produces series" begin
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
     nile = CSV.read(nile_path, DataFrame; header = false)
@@ -211,10 +198,7 @@ end
     @test !isempty(rec)
 end
 
-@testitem "ForecastResult recipe produces series" tags=[:recipes] begin
-    using Siphon
-    using Siphon: ForecastResult
-    using RecipesBase
+@testset "ForecastResult recipe produces series" begin
 
     # Create mock forecast result
     h = 12
@@ -230,12 +214,7 @@ end
     @test !isempty(rec2)
 end
 
-@testitem "Comparison recipe (filter vs smoother)" tags=[:recipes] begin
-    using Siphon
-    using Siphon: SmootherResult
-    using RecipesBase
-    using CSV
-    using DataFrames
+@testset "Comparison recipe (filter vs smoother)" begin
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
     nile = CSV.read(nile_path, DataFrame; header = false)
@@ -252,12 +231,7 @@ end
     @test !isempty(rec)
 end
 
-@testitem "ObservablePlot recipe" tags=[:recipes] begin
-    using Siphon
-    using Siphon: ObservablePlot
-    using RecipesBase
-    using CSV
-    using DataFrames
+@testset "ObservablePlot recipe" begin
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
     nile = CSV.read(nile_path, DataFrame; header = false)
@@ -277,9 +251,7 @@ end
     @test !isempty(rec2)
 end
 
-@testitem "Multivariate filter recipe" tags=[:recipes] begin
-    using Siphon
-    using RecipesBase
+@testset "Multivariate filter recipe" begin
 
     # 2 observables, 3 states
     m, p_obs, n = 3, 2, 50
@@ -313,9 +285,7 @@ end
 # KalmanWorkspace (In-place API) Tests
 # ============================================================================
 
-@testitem "KalmanWorkspace construction" tags=[:recipes, :inplace] begin
-    using Siphon
-    using LinearAlgebra
+@testset "KalmanWorkspace construction" begin
 
     # Create workspace from matrices
     p_obs, m, r, n = 2, 3, 3, 50
@@ -334,11 +304,7 @@ end
     @test ws.n_times == n
 end
 
-@testitem "KalmanWorkspace filter and smoother" tags=[:recipes, :inplace] begin
-    using Siphon
-    using LinearAlgebra
-    using CSV
-    using DataFrames
+@testset "KalmanWorkspace filter and smoother" begin
 
     # Load Nile data
     nile_path = joinpath(@__DIR__, "Nile.csv")
@@ -373,12 +339,7 @@ end
     @test all(isfinite.(smoothed_states(ws)))
 end
 
-@testitem "KalmanWorkspace recipe" tags=[:recipes, :inplace] begin
-    using Siphon
-    using RecipesBase
-    using LinearAlgebra
-    using CSV
-    using DataFrames
+@testset "KalmanWorkspace recipe" begin
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
     nile = CSV.read(nile_path, DataFrame; header = false)
@@ -411,13 +372,7 @@ end
     @test !isempty(rec3)
 end
 
-@testitem "SmootherResult from KalmanWorkspace" tags=[:recipes, :inplace] begin
-    using Siphon
-    using Siphon: SmootherResult
-    using RecipesBase
-    using LinearAlgebra
-    using CSV
-    using DataFrames
+@testset "SmootherResult from KalmanWorkspace" begin
 
     nile_path = joinpath(@__DIR__, "Nile.csv")
     nile = CSV.read(nile_path, DataFrame; header = false)
@@ -446,3 +401,5 @@ end
     rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), sr)
     @test !isempty(rec)
 end
+
+end # Plotting recipes

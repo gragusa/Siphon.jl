@@ -305,7 +305,7 @@ end
 # DSL tests
 include("dsl_tests.jl")
 
-# EM algorithm tests (uses TestItems)
+# EM algorithm tests
 include("em_tests.jl")
 
 # Generalized EM tests (MARSS validation - diagonal covariances)
@@ -334,6 +334,15 @@ include("partial_missing_tests.jl")
 
 # Simulation smoother (Durbin & Koopman 2002)
 include("simsmooth_tests.jl")
+
+# DNS model validation against MARSS
+include("dns_marss_validation_tests.jl")
+
+# Exported functions without coverage elsewhere
+include("api_coverage_tests.jl")
+
+# Known bugs, pinned with @test_broken
+include("known_bugs_tests.jl")
 
 # Aqua.jl quality assurance tests
 include("Aqua.jl")
