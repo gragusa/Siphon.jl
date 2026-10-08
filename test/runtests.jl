@@ -308,6 +308,9 @@ include("dsl_tests.jl")
 # EM algorithm tests
 include("em_tests.jl")
 
+# Dynamic factor model tests
+include("dfm_tests.jl")
+
 # Generalized EM tests (MARSS validation - diagonal covariances)
 include("em_generalized_tests.jl")
 
