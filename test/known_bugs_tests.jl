@@ -34,15 +34,6 @@ end
 
 @testset "Known bugs" begin
 
-@testset "exact diffuse initialisation through a spec" begin
-    # SSMSpec.P1_inf is never read, so diffuse = :exact runs with P1 = 0.
-    θ = (var_obs = 15099.0, var_level = 1469.1)
-    spec = local_level(diffuse = :exact)
-    p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.1;;])
-    exact = kalman_loglik(p, y_bug, [0.0], zeros(1, 1), ones(1, 1))
-    @test_broken ssm_loglik(spec, θ, y_bug) ≈ exact
-end
-
 @testset "DynamicFactorModel EM updates idiosyncratic variances" begin
     # sync_params_from_ssm! overwrites the updated variances with stale values.
     Random.seed!(1)

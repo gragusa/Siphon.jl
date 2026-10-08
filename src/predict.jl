@@ -10,7 +10,7 @@ Provides:
 """
 
 using LinearAlgebra
-using .DSL: SSMSpec, build_linear_state_space
+using .DSL: SSMSpec, build_linear_state_space, _ss_filter
 
 # ============================================
 # Missing Data Utilities
@@ -114,7 +114,7 @@ plot!(vec(pred.yhat), label="predicted")
 """
 function predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; use_static::Bool = true)
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
-    predict(ss.p, y, ss.a1, ss.P1)
+    return _predict(ss.p, y, _ss_filter(ss, y))
 end
 
 """
@@ -125,8 +125,10 @@ Low-level prediction using KFParms directly.
 Returns predicted states (at = a_{t|t-1}) and related quantities.
 """
 function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::AbstractMatrix)
-    filt = kalman_filter(p, y, a1, P1)
+    return _predict(p, y, kalman_filter(p, y, a1, P1))
+end
 
+function _predict(p::KFParms, y::AbstractMatrix, filt)
     n = size(y, 2)
     obs_dim = size(y, 1)
     ET = eltype(filt.at)
@@ -189,7 +191,7 @@ function forecast(
         use_static::Bool = true
 )
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
-    forecast(ss.p, y, ss.a1, ss.P1, h)
+    return _forecast(ss.p, y, _ss_filter(ss, y), h)
 end
 
 """
@@ -206,11 +208,13 @@ function forecast(
         P1::AbstractMatrix,
         h::Int
 )
-    filt = kalman_filter(p, y, a1, P1)
+    return _forecast(p, y, kalman_filter(p, y, a1, P1), h)
+end
 
+function _forecast(p::KFParms, y::AbstractMatrix, filt, h::Int)
     n = size(y, 2)
     obs_dim = size(y, 1)
-    state_dim = length(a1)
+    state_dim = size(filt.at, 1)
     ET = eltype(filt.at)
 
     # Compute one-step-ahead from last filtered state: a_{n+1|n} = T * a_{n|n}
@@ -267,7 +271,7 @@ function forecast_paths(
         use_static::Bool = true
 )
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
-    forecast_paths(ss.p, y, ss.a1, ss.P1, h, n_paths)
+    return _forecast_paths(ss.p, y, _ss_filter(ss, y), h, n_paths)
 end
 
 function forecast_paths(
@@ -278,11 +282,13 @@ function forecast_paths(
         h::Int,
         n_paths::Int
 )
-    filt = kalman_filter(p, y, a1, P1)
+    return _forecast_paths(p, y, kalman_filter(p, y, a1, P1), h, n_paths)
+end
 
+function _forecast_paths(p::KFParms, y::AbstractMatrix, filt, h::Int, n_paths::Int)
     n = size(y, 2)
     obs_dim = size(y, 1)
-    state_dim = length(a1)
+    state_dim = size(filt.at, 1)
 
     # Compute one-step-ahead from last filtered state: a_{n+1|n} = T * a_{n|n}
     a_start = p.T * filt.att[:, n]

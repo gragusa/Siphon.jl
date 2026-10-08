@@ -1022,6 +1022,51 @@ end
     @test optimize_ssm(spec, yt).loglik ≈ ref.loglik atol = 1e-3
 end
 
+@testset "exact diffuse initialisation through a spec" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level(diffuse = :exact)
+    θ = (var_obs = 15099.0, var_level = 1469.1)
+    p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.1;;])
+    exact = kalman_loglik(p, y, [0.0], zeros(1, 1), ones(1, 1))
+
+    ss = build_linear_state_space(spec, θ, y)
+    @test ss.P1_inf == ones(1, 1)
+    @test build_linear_state_space(local_level(), θ, y).P1_inf === nothing
+
+    # Every spec-based path uses the diffuse filter. KFAS gives −632.55.
+    @test ssm_loglik(spec, θ, y) ≈ exact
+    @test ssm_loglik(spec, θ, y) ≈ -632.55 atol = 0.01
+    @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ exact
+    @test objective_function(spec, y)([15099.0, 1469.1]) ≈ -exact
+    @test predict(spec, θ, y).loglik ≈ exact
+    filt = kalman_filter(p, y, [0.0], zeros(1, 1), ones(1, 1))
+    @test forecast(spec, θ, y, 2).yhat ≈ fill(filt.att[1, end], 1, 2)
+    @test size(forecast_paths(spec, θ, y, 3, 4)) == (1, 3, 4)
+    @test optimize_ssm(spec, y).loglik ≈ -632.5456 atol = 1e-3
+    @test logdensity(SSMLogDensity(spec, y), transform_to_unconstrained(spec, collect(θ))) ≈
+          exact + transform_to_constrained(spec, transform_to_unconstrained(spec, collect(θ)))[2]
+
+    # StateSpaceModel: filtering and MLE run; EM and smoothing reject it
+    model = StateSpaceModel(spec, θ, size(y, 2))
+    @test kalman_loglik(model, y) ≈ exact
+    @test kalman_filter!(model, y) ≈ exact
+    @test_throws ArgumentError smoothed_states(model)
+    @test fit!(MLE(), StateSpaceModel(spec, size(y, 2)), y).loglik ≈ -632.5456 atol = 1e-3
+    @test_throws ArgumentError fit!(EM(), StateSpaceModel(spec, size(y, 2)), y)
+
+    # arma accepts the same diffuse options as the other templates
+    @test uses_exact_diffuse(arma(1, 1; diffuse = :exact))
+    @test !uses_exact_diffuse(arma(1, 1))
+    θa = (φ1 = 0.5, θ1 = 0.2, var = 1.0)
+    @test Siphon.DSL.build_initial_state(arma(1, 1; diffuse = false), θa)[2] == 1e4 * I(2)
+
+    # A cov_free initial covariance is built from its parameters
+    cs = custom_ssm(Z = [1.0], H = [1.0], T = [1.0], R = [1.0], Q = [1.0],
+        a1 = [0.0], P1 = cov_free(1, :P1; init_σ = 30.0))
+    @test Siphon.DSL.build_initial_state(cs, (P1_σ_1 = 30.0,))[2] ≈ [900.0;;]
+end
+
 @testset "optimize_ssm_with_stderr uses the delta method" begin
     nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
     y = reshape(Float64.(nile[!, 1]), 1, :)

@@ -3138,6 +3138,9 @@ end
 """Compute smoother and cache results."""
 function _ssm_compute_smoother!(model::StateSpaceModel)
     model.filter_valid || throw(ArgumentError("Filter not run."))
+    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
+        "Smoothing is not available for exact diffuse initialisation (diffuse = :exact). " *
+        "Use approximate diffuse initialisation (diffuse = true) to smooth."))
 
     # Get system matrices at fitted parameters
     theta_nt = _ssm_get_theta_namedtuple(model)
@@ -3320,7 +3323,7 @@ function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
 
-    return Siphon.kalman_loglik(ss.p, y, ss.a1, ss.P1)
+    return DSL._ss_loglik(ss, y)
 end
 
 """
@@ -3361,7 +3364,7 @@ function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
 
-    filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
+    filt = DSL._ss_filter(ss, y)
 
     # Store results
     _ssm_store_filter_results!(model, filt)
@@ -3483,7 +3486,7 @@ function fit!(
     # Run full filter to get filter results
     theta_nt = _ssm_get_theta_namedtuple(model)
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
-    filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
+    filt = DSL._ss_filter(ss, y)
 
     # Copy filter results to model storage
     _ssm_store_filter_results!(model, filt)
@@ -3558,6 +3561,9 @@ function fit!(
     @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
     @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
     _require_no_partial_periods(y, "fit!(EM(), ...)")
+    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
+        "fit!(EM(), ...) does not support exact diffuse initialisation (diffuse = :exact). " *
+        "Use fit!(MLE(), ...), or approximate diffuse initialisation (diffuse = true)."))
 
     # All models route through the in-place EM path. Benchmarks show the
     # in-place workspace beats the pure/static EM by 1.6–2.6× even on the

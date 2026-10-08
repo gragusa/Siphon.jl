@@ -377,8 +377,14 @@ Parameters: ar coefficients φ₁...φₚ, ma coefficients θ₁...θᵧ, var (i
 
 When `var_init` is `nothing`, the innovation variance starts at 1.0 and maximum
 likelihood rescales it to the data (see [`optimize_ssm`](@ref)).
+
+`diffuse` sets the initial state covariance:
+- `true` (default): Approximate diffuse (P1 = 1e7*I)
+- `false`: Non-diffuse (P1 = 1e4*I)
+- `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
-function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = nothing)
+function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = nothing,
+        diffuse::DiffuseSpec = true)
     # State dimension is max(p, q+1)
     r = max(p, q + 1)
 
@@ -447,14 +453,23 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = n
     Q = SSMMatrixSpec((1, 1))
     Q.elements[(1, 1)] = ParameterRef(:var)
 
-    # Initial state (diffuse)
+    # Initial state
     a1 = [FixedValue(0.0) for _ in 1:r]
+    name = Symbol("ARMA($p,$q)")
     P1 = SSMMatrixSpec((r, r))
-    for i in 1:r
-        P1.elements[(i, i)] = FixedValue(1e7)
+    if diffuse === :exact
+        P1_inf = SSMMatrixSpec((r, r))
+        for i in 1:r
+            P1.elements[(i, i)] = FixedValue(0.0)
+            P1_inf.elements[(i, i)] = FixedValue(1.0)
+        end
+        return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1, P1_inf)
     end
-
-    SSMSpec(Symbol("ARMA($p,$q)"), r, 1, 1, params, Z, H, T, R, Q, a1, P1)
+    P1_val = diffuse ? 1e7 : 1e4
+    for i in 1:r
+        P1.elements[(i, i)] = FixedValue(P1_val)
+    end
+    return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1)
 end
 
 """
