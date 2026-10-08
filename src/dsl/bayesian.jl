@@ -139,11 +139,7 @@ function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
     # Transform to NamedTuple (constrained space)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
 
-    # Build state-space components (with optional StaticArrays)
-    ss = build_linear_state_space(ld.spec, θ_nt, ld.y; use_static = ld.use_static)
-
-    # Compute log-likelihood
-    ll = kalman_loglik(ss.p, ld.y, ss.a1, ss.P1)
+    ll = _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static)
 
     # Add prior (on constrained parameters)
     if ld.prior !== nothing

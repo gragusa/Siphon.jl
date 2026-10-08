@@ -35,8 +35,11 @@ end
 # SSMLogDensity. We add an EKF method here.
 function logdensity(ld::EKFLogDensity, θ_u::AbstractVector)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
-    ll = ekf_loglik(ld.spec, θ_nt, ld.y; use_static = ld.use_static)
-    return ll + logjac
+    return _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static) + logjac
+end
+
+function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
+    return ekf_loglik(spec, θ, y; use_static = use_static)
 end
 
 # Optional LogDensityProblems integration
@@ -78,28 +81,5 @@ function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
         use_static::Bool = true,
         prob_kwargs::NamedTuple = NamedTuple(),
         kwargs...)
-    ld = EKFLogDensity(spec, y; use_static = use_static)
-
-    θ0_c = if θ0 === nothing
-        initial_values(spec)
-    elseif θ0 isa NamedTuple
-        collect(Float64, θ0)
-    else
-        θ0
-    end
-    θ0_u = transform_to_unconstrained(spec, θ0_c)
-
-    neglogdensity(θ_u, _) = -logdensity(ld, θ_u)
-    optf = OptimizationFunction(neglogdensity, ad_backend)
-    prob = OptimizationProblem(optf, θ0_u; prob_kwargs...)
-    result = Optimization.solve(prob, method; kwargs...)
-
-    θ_opt, _ = transform_to_constrained(spec, result.u)
-    ll_opt = -result.objective
-    return (
-        θ = θ_opt,
-        loglik = ll_opt,
-        result = result,
-        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
-    )
+    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs...)
 end

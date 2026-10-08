@@ -48,27 +48,22 @@ end
 
 Convert a parameter's bounds to a TransformVariables scalar transformation.
 
-Note: For semi-infinite intervals `[a, ∞)` where `a >= 0`, we use `asℝ₊` (exp transform).
-Small positive lower bounds like 1e-6 are treated as zero since they are typically
-numerical safeguards rather than meaningful constraints.
+- `(-∞, ∞)`: identity
+- `[0, ∞)`: `exp`
+- `[a, ∞)` or `(-∞, b]`: shifted `exp`, so the bound holds for every finite `a`, `b`
+- `[a, b]`: scaled logistic
 """
 function _param_to_transform(p::SSMParameter)
     if p.lower == -Inf && p.upper == Inf
-        # Unbounded
         asℝ
-    elseif p.lower >= 0.0 && p.upper == Inf
-        # Positive (common for standard deviations, variances)
-        # Use exp transform - works for any non-negative lower bound
+    elseif p.lower == 0.0 && p.upper == Inf
         asℝ₊
-    elseif p.lower == -Inf && p.upper < Inf
-        # Upper bounded
-        as(Real, -Inf, p.upper)
-    elseif p.lower > -Inf && p.upper < Inf
-        # Bounded interval [a, b] with a < b
-        as(Real, p.lower, p.upper)
     else
-        # Fallback to unbounded
-        asℝ
+        # TransformVariables needs its own `∞` for an open end: a Float64 `Inf`
+        # builds a logistic of infinite width.
+        lo = p.lower == -Inf ? -TransformVariables.∞ : p.lower
+        hi = p.upper == Inf ? TransformVariables.∞ : p.upper
+        as(Real, lo, hi)
     end
 end
 
@@ -514,6 +509,17 @@ function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
     kalman_loglik(kfparms, y, a1, P1)
+end
+
+"""
+    _spec_loglik(spec, θ::NamedTuple, y, use_static::Bool)
+
+Log-likelihood of `y` under `spec` at constrained parameters `θ`. The single
+evaluation path shared by maximum likelihood and the log-density.
+"""
+function _spec_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
+    ss = build_linear_state_space(spec, θ, y; use_static = use_static)
+    return kalman_loglik(ss.p, y, ss.a1, ss.P1)
 end
 
 # Alias for consistency

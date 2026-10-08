@@ -6,6 +6,9 @@ using Test
 using Siphon
 using LinearAlgebra
 using Statistics: cor
+using ForwardDiff
+using CSV
+using DataFrames
 
 # ============================================
 # SSMParameter and SSMSpec Tests
@@ -953,4 +956,65 @@ end
     n = 100
 
     @test_throws ArgumentError StateSpaceModel(spec, θ_wrong, n)
+end
+
+# ============================================
+# Maximum likelihood and parameter bounds
+# ============================================
+
+@testset "optimize_ssm maximises the log-likelihood" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level()
+
+    res = optimize_ssm(spec, y; θ0 = (var_obs = 1e4, var_level = 1e4))
+    # Durbin & Koopman (2012), Nile data
+    @test res.θ.var_obs ≈ 15099.0 rtol = 1e-3
+    @test res.θ.var_level ≈ 1469.1 rtol = 1e-3
+    @test res.loglik ≈ ssm_loglik(spec, res.θ, y)
+    @test res.loglik ≈ -641.5856 atol = 1e-3
+
+    # θ0 as a NamedTuple is matched by name, in any order, and may be partial
+    res2 = optimize_ssm(spec, y; θ0 = (var_level = 1e4, var_obs = 1e4))
+    @test res2.θ.var_obs ≈ res.θ.var_obs rtol = 1e-4
+    res3 = optimize_ssm(spec, y; θ0 = (var_obs = 1e4,))
+    @test res3.loglik ≈ res.loglik atol = 1e-4
+    @test_throws ArgumentError optimize_ssm(spec, y; θ0 = (σ_obs = 1.0,))
+end
+
+@testset "optimize_ssm_with_stderr uses the delta method" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level()
+    res = optimize_ssm_with_stderr(spec, y; θ0 = (var_obs = 1e4, var_level = 1e4))
+
+    # At an interior optimum the delta-method covariance equals the inverse
+    # Hessian taken directly in the constrained parameters.
+    names = Tuple(param_names(spec))
+    Hc = ForwardDiff.hessian(
+        v -> -ssm_loglik(spec, NamedTuple{names}(Tuple(v)), y), collect(res.θ))
+    @test res.vcov ≈ inv(Hc) rtol = 1e-3
+    @test res.stderr ≈ sqrt.(diag(inv(Hc))) rtol = 1e-3
+end
+
+@testset "parameter bounds survive the transform" begin
+    spec = custom_ssm(
+        Z = [1.0],
+        H = [FreeParam(:x, init = 2.0, lower = 1.0)],
+        T = [FreeParam(:z, init = 0.5, lower = -1.0)],
+        R = [1.0],
+        Q = [FreeParam(:w, init = 0.5, upper = 3.0)],
+        a1 = [0.0],
+        P1 = [1e7]
+    )
+    for u in ([-20.0, -50.0, 50.0], [20.0, 5.0, -5.0])
+        θc, _ = transform_to_constrained(spec, u)
+        @test θc.x >= 1.0
+        @test θc.z >= -1.0
+        @test θc.w <= 3.0
+    end
+    # Round trip
+    θ0 = initial_values(spec)
+    θc, _ = transform_to_constrained(spec, transform_to_unconstrained(spec, θ0))
+    @test collect(θc) ≈ θ0
 end

@@ -2,8 +2,8 @@
 Known bugs, pinned with `@test_broken`.
 
 Each test states the correct behaviour and currently fails. When a fix lands,
-the test reports an unexpected pass; turn the `@test_broken` into `@test` in
-the same change.
+the test reports an unexpected pass; in the same change, move it to the test
+file for that feature as a plain `@test`.
 """
 
 using Test
@@ -34,15 +34,11 @@ end
 
 @testset "Known bugs" begin
 
-@testset "MLE maximises the log-likelihood" begin
-    # optimize_ssm minimises -logdensity, which includes the log-Jacobian of
-    # the parameter transform, so it returns a penalised mode instead of the MLE.
-    spec = local_level()
-    res = optimize_ssm(spec, y_bug)
-    @test_broken res.loglik ≈ ssm_loglik(spec, res.θ, y_bug) rtol = 1e-6
-    # Durbin & Koopman (2012) MLE for the Nile data
-    @test_broken isapprox(res.θ.var_obs, 15099.0; rtol = 0.02)
-    @test_broken isapprox(res.θ.var_level, 1469.1; rtol = 0.05)
+@testset "default starting values match the data's scale" begin
+    # Template variances start at 1.0; on the Nile data (variances ~1e4) L-BFGS
+    # then reaches a degenerate optimum with var_obs ≈ 0.
+    res = optimize_ssm(local_level(), y_bug)
+    @test_broken res.loglik ≈ -641.5856 atol = 1e-3
 end
 
 @testset "exact diffuse initialisation through a spec" begin
@@ -113,21 +109,6 @@ end
 @testset "InverseGammaPrior is callable" begin
     prior = InverseGammaPrior(2.0, 1.0, (:var_obs,))
     @test_broken !_throws(() -> prior((var_obs = 1.0,)))
-end
-
-@testset "parameter bounds survive the transform" begin
-    spec = custom_ssm(
-        Z = [1.0],
-        H = [FreeParam(:x, init = 2.0, lower = 1.0)],
-        T = [FreeParam(:z, init = 0.5, lower = -1.0)],
-        R = [1.0],
-        Q = [1.0],
-        a1 = [0.0],
-        P1 = [1e7]
-    )
-    θc, _ = transform_to_constrained(spec, [-20.0, -50.0])
-    @test_broken θc.x >= 1.0
-    @test_broken θc.z >= -1.0
 end
 
 @testset "EKFWorkspace checks the measurement protocol" begin
