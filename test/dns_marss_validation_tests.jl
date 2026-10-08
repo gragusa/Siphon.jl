@@ -475,7 +475,7 @@ end
     y = Matrix(Matrix(df)')
     for spec in (
         dns_model([3, 12, 24, 60, 120]; T_structure = :diagonal,
-            H_structure = :diagonal, Q_structure = :diagonal, diffuse = false),
+        H_structure = :diagonal, Q_structure = :diagonal, diffuse = false),
         dns_model([3, 12, 24, 60, 120]))
         names = Tuple(param_names(spec))
         f(v) = ssm_loglik(spec, NamedTuple{names}(Tuple(v)), y)

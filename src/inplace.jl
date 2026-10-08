@@ -3217,7 +3217,8 @@ function _ssm_compute_smoother!(model::StateSpaceModel)
 
     # Run smoother using stored filter results
     alpha,
-    V = Siphon.kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
+    V = Siphon.kalman_smoother(
+        kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
         missing_mask = model.missing_mask, observed_mask = model.observed_mask,
         Ptt = model.Ptt)
 
@@ -5688,4 +5689,3 @@ function factor_forecast_interval(
 
     return (lower = lower, upper = upper)
 end
-

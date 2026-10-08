@@ -22,8 +22,10 @@ function _simulate_dfm(; λ, σ², φ = (0.7,), δ = 0.0, n = 500, seed = 1)
     return λ * f' .+ e, f
 end
 
-_abscor(a, b) = abs(dot(a .- sum(a) / length(a), b .- sum(b) / length(b))) /
-                (norm(a .- sum(a) / length(a)) * norm(b .- sum(b) / length(b)))
+function _abscor(a, b)
+    abs(dot(a .- sum(a) / length(a), b .- sum(b) / length(b))) /
+    (norm(a .- sum(a) / length(a)) * norm(b .- sum(b) / length(b)))
+end
 
 _monotone(h) = all(diff(h) .>= -1e-6 * abs(h[end]))
 

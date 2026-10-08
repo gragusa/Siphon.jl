@@ -1053,7 +1053,8 @@ end
     @test size(forecast_paths(spec, θ, y, 3, 4)) == (1, 3, 4)
     @test optimize_ssm(spec, y).loglik ≈ -632.5456 atol = 1e-3
     @test logdensity(SSMLogDensity(spec, y), transform_to_unconstrained(spec, collect(θ))) ≈
-          exact + transform_to_constrained(spec, transform_to_unconstrained(spec, collect(θ)))[2]
+          exact +
+          transform_to_constrained(spec, transform_to_unconstrained(spec, collect(θ)))[2]
 
     # StateSpaceModel: filtering and MLE run; EM and smoothing reject it
     model = StateSpaceModel(spec, θ, size(y, 2))
