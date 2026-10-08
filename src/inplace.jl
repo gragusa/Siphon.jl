@@ -1004,7 +1004,7 @@ Extends `KalmanWorkspace` with additional storage for the diffuse period:
 - `Pinf`: Current diffuse covariance (working storage)
 - `Pstar`: Current finite covariance (working storage)
 - `Finf`: Diffuse innovation covariance Z*Pinf*Z'
-- `diffuse_flags`: Track which step type was used (1=Finf invertible, 0=singular, -1=missing)
+- `diffuse_flags`: Track which step type was used (1=Finf invertible, 2=Finf singular but nonzero, 0=Finf zero, -1=missing)
 - `d`: Length of diffuse period (updated during filtering)
 - `diffuse_ended`: Flag indicating if diffuse period has ended
 
@@ -1250,6 +1250,11 @@ NaN marks a missing value, one element at a time. In a partially observed period
 both phases run on the reduced system formed by the observed rows, and `vt`, `Ft`,
 `Ft_L` and `Kt` hold pₜ-sized blocks in their leading rows and columns, as in
 [`kalman_filter!`](@ref) on a `KalmanWorkspace`.
+
+A diffuse-period step where `Finf = Z_t Pinf Z_t'` is singular but nonzero (more
+observed rows than diffuse directions they load on) is processed one row at a time
+(Koopman & Durbin 2000). A non-diagonal `H` is decorrelated first with its unit LDL
+factor.
 """
 function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
     base = ws.base
@@ -1383,12 +1388,51 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
             Finf_inv = view(ws.Finf_inv, 1:pt, 1:pt)
             mul!(ZrP, Zr, ws.Pinf)
             mul!(Finf, ZrP, transpose(Zr))
-            flag = _safe_inverse_inplace!(
-                Finf_inv, Finf, view(ws.tmp_pp_diff, 1:pt, 1:pt), tol)
+            flag = _diffuse_step_flag(Finf, tol)
+            flag == 1 &&
+                _safe_inverse_inplace!(Finf_inv, Finf, view(ws.tmp_pp_diff, 1:pt, 1:pt), tol)
             ws.diffuse_flags[ws.d] = flag
         end
 
-        if flag == 1
+        if flag == 2
+            # === Finf singular but nonzero: process the rows one at a time ===
+            # The filtered finite covariance is built in Ptt and the diffuse one in
+            # Pinf; G is the gain with a_filt = a + G v.
+            Zs = ZrP
+            copyto!(Zs, Zr)
+            copyto!(tmp_p2r, v_t)
+            copyto!(Ptt_view, ws.Pstar)
+            G = view(ws.tmp_mp_diff, :, 1:pt)
+            (ll, nrows, ok) = _univariate_diffuse_update!(
+                base.tmp_m2, G, Ptt_view, ws.Pinf, Zs, tmp_p2r, view(base.tmp_p1, 1:pt),
+                Hr, view(ws.tmp_pp_diff, 1:pt, 1:pt),
+                view(base.tmp_mp, :, 1), view(base.tmp_mp, :, 2), tol)
+            if !ok
+                base.loglik = T(-Inf)
+                return base.loglik
+            end
+            base.loglik += ll
+            base.n_obs_rows += nrows
+            nrows > 0 && (base.n_obs_valid += 1)
+
+            for i in 1:m
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
+            end
+            mul!(K_t, base.Tmat, G)
+            copyto!(view(Ft_view, 1:pt, 1:pt), view(ws.Finf, 1:pt, 1:pt))
+
+            # Predict next: a = T a_filt, Pinf = T Pinf_filt T',
+            # Pstar = T Pstar_filt T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
+            mul!(ws.Pinf, base.tmp_mm2, Tt)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
+            for j in 1:m, i in 1:m
+
+                ws.Pstar[i, j] += base.RQR[i, j]
+            end
+        elseif flag == 1
             # === Finf invertible: exact diffuse update, no likelihood term ===
             # Durbin & Koopman (2012, §5.2). With A = Pinf * Z_t' * Finf^{-1},
             # the filtered state and the finite part of its covariance are the
@@ -1447,7 +1491,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
         else
             # === Standard update on Pstar ===
             # Used after the diffuse period and, during it, whenever Finf is
-            # singular; the period then contributes to the likelihood.
+            # zero; the period then contributes to the likelihood.
             base.n_obs_valid += 1
             base.n_obs_rows += pt
 

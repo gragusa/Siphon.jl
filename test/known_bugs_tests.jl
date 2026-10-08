@@ -73,16 +73,4 @@ end
     @test_broken :T_diagonal in Base.kwarg_decl(m)
 end
 
-@testset "exact diffuse with a singular nonzero Finf" begin
-    # With more observed rows than diffuse directions, Finf = Z*Pinf*Z' is
-    # singular but nonzero. The filters then take the Fstar step, which leaves Pinf
-    # unchanged, so the diffuse period never ends. Durbin-Koopman handle this case
-    # by processing the period one row at a time.
-    rng = MersenneTwister(2)
-    n = 40
-    y = cumsum(randn(rng, 1, n); dims = 2) .+ randn(rng, 2, n)
-    p = KFParms(reshape([1.0, 1.0], 2, 1), [1.0 0.0; 0.0 2.0], [1.0;;], [1.0;;], [0.5;;])
-    @test_broken diffuse_period(kalman_filter(p, y, [0.0], [0.0;;], [1.0;;])) == 1
-end
-
 end # Known bugs

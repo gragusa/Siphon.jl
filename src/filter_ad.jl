@@ -879,29 +879,154 @@ end
 # ============================================
 
 """
-    _safe_inverse(F::AbstractMatrix, tol=1e-10) -> (flag, result)
+    _diffuse_step_flag(Finf, tol) -> flag
 
-Attempt to invert matrix F. Returns (1, F⁻¹) if successful, (0, F) if singular.
-
-The flag indicates:
-- 1: F was invertible (det(F) > tol)
-- 0: F was singular or near-singular
+Classify a diffuse-period step from `Finf = Z_t Pinf Z_t'`: `1` when Finf is
+invertible, `0` when it is zero (no observed row loads on a diffuse direction) and
+`2` when it is singular but nonzero, which needs the univariate treatment of
+[`_univariate_diffuse_update!`](@ref).
 """
-@inline function _safe_inverse(F::AbstractMatrix{T}, tol::Real = 1e-10) where {T}
-    d = det(F)
-    if abs(d) > tol
-        return (1, inv(F))
-    else
-        return (0, F)  # Return F itself as placeholder (won't be used)
-    end
+function _diffuse_step_flag(Finf::AbstractMatrix, tol::Real)
+    abs(det(Finf)) > tol && return 1
+    return maximum(abs, Finf) > tol ? 2 : 0
 end
 
-@inline function _safe_inverse(F::Real, tol::Real = 1e-10)
-    if abs(F) > tol
-        return (1, one(F) / F)
+"""
+    _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, Mstar, tol)
+        -> (loglik, nrows, ok)
+
+Process one period of the diffuse filter row by row (Koopman & Durbin 2000;
+Durbin & Koopman 2012, §6.4). Used when `Finf = Z_t Pinf Z_t'` is singular but
+nonzero, where the multivariate step cannot separate the diffuse directions from
+the finite ones.
+
+On entry `Zs` holds the observed rows `Z_t` (pₜ × m), `w` the innovation
+`v = y_t - Z_t a` and `Hr` the observation covariance `H_t`. When `H_t` is not
+diagonal, the rows are first transformed by the unit lower-triangular factor of
+`H_t = C D C'`, so the transformed rows have independent errors with variances
+`h = diag(D)`; the transform has unit determinant and leaves the likelihood
+unchanged.
+
+Row `i` then has `Finf,ᵢ = zᵢ Pinf zᵢ'` and `Fstar,ᵢ = zᵢ Pstar zᵢ' + hᵢ`. When
+`Finf,ᵢ > tol` the row takes the exact diffuse update and adds nothing to the
+likelihood; otherwise it takes the standard update on `Pstar` and adds its
+Gaussian term (without the 2π constant, which the caller adds for `nrows`
+scalars).
+
+On exit `Pstar` and `Pinf` hold the finite and diffuse parts of the filtered
+covariance, `δ = a_{t|t} - a` and `G` (m × pₜ) is the gain with `δ = G v`. `ok`
+is `false` when some `Fstar,ᵢ` is negative.
+"""
+function _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, Mstar, tol)
+    pt, m = size(Zs)
+    ET = eltype(Pstar)
+
+    # Decorrelate the rows: H_t = C D C' with C unit lower triangular.
+    if isdiag(Hr)
+        for i in 1:pt
+            h[i] = Hr[i, i]
+        end
     else
-        return (0, F)
+        fill!(C, zero(ET))
+        for j in 1:pt
+            s = Hr[j, j]
+            for k in 1:(j - 1)
+                s -= C[j, k]^2 * h[k]
+            end
+            h[j] = s
+            C[j, j] = one(ET)
+            for i in (j + 1):pt
+                s = Hr[i, j]
+                for k in 1:(j - 1)
+                    s -= C[i, k] * C[j, k] * h[k]
+                end
+                # A zero pivot of a positive semidefinite H_t has a zero column.
+                C[i, j] = h[j] > 0 ? s / h[j] : zero(ET)
+            end
+        end
+        Cl = UnitLowerTriangular(C)
+        ldiv!(Cl, Zs)
+        ldiv!(Cl, w)
     end
+
+    # G maps the transformed innovation w to δ until the end, where it is
+    # converted to a gain on v.
+    fill!(δ, zero(ET))
+    fill!(G, zero(ET))
+    loglik = zero(ET)
+    nrows = 0
+
+    for i in 1:pt
+        z = view(Zs, i, :)
+        mul!(Minf, Pinf, z)
+        mul!(Mstar, Pstar, z)
+        Finf_i = dot(z, Minf)
+        Fstar_i = dot(z, Mstar) + h[i]
+        v_i = w[i] - dot(z, δ)
+
+        if Finf_i > tol
+            # Exact diffuse step for one row.
+            c = Fstar_i / Finf_i^2
+            for k in 1:m, l in 1:m
+                Pstar[l, k] += c * Minf[l] * Minf[k] -
+                               (Mstar[l] * Minf[k] + Minf[l] * Mstar[k]) / Finf_i
+                Pinf[l, k] -= Minf[l] * Minf[k] / Finf_i
+            end
+            gain = Minf
+            F_i = Finf_i
+        elseif Fstar_i > tol
+            # Standard step on Pstar; the row contributes to the likelihood.
+            loglik -= (log(Fstar_i) + v_i^2 / Fstar_i) / 2
+            nrows += 1
+            for k in 1:m, l in 1:m
+                Pstar[l, k] -= Mstar[l] * Mstar[k] / Fstar_i
+            end
+            gain = Mstar
+            F_i = Fstar_i
+        elseif Fstar_i < -tol
+            return (loglik, nrows, false)
+        else
+            # The row is predicted exactly and carries no information.
+            continue
+        end
+
+        # δ += kᵢ vᵢ and G += kᵢ (eᵢ' - zᵢ G), with kᵢ = gain / Fᵢ.
+        for l in 1:m
+            δ[l] += gain[l] * v_i / F_i
+        end
+        for j in 1:pt
+            g_j = (j == i ? one(ET) : zero(ET)) - dot(z, view(G, :, j))
+            for l in 1:m
+                G[l, j] += gain[l] * g_j / F_i
+            end
+        end
+    end
+
+    isdiag(Hr) || rdiv!(G, UnitLowerTriangular(C))
+    return (loglik, nrows, true)
+end
+
+"""
+    _univariate_diffuse_step(a, Pstar, Pinf, Zr, Hr, v, tol)
+        -> (a_filt, Pstar_filt, Pinf_filt, G, loglik, nrows, ok)
+
+Allocating form of [`_univariate_diffuse_update!`](@ref) for the functional
+filters: returns the filtered state, the finite and diffuse parts of the filtered
+covariance, the gain `G` with `a_filt = a + G v`, and the period's likelihood
+terms.
+"""
+function _univariate_diffuse_step(a, Pstar, Pinf, Zr, Hr, v, tol)
+    pt, m = size(Zr)
+    ET = promote_type(eltype(a), eltype(Pstar), eltype(Pinf), eltype(Zr), eltype(Hr),
+        eltype(v))
+    Pstar_f = Matrix{ET}(Pstar)
+    Pinf_f = Matrix{ET}(Pinf)
+    δ = Vector{ET}(undef, m)
+    G = Matrix{ET}(undef, m, pt)
+    (ll, nrows, ok) = _univariate_diffuse_update!(δ, G, Pstar_f, Pinf_f,
+        Matrix{ET}(Zr), Vector{ET}(v), Vector{ET}(undef, pt), Hr,
+        Matrix{ET}(undef, pt, pt), Vector{ET}(undef, m), Vector{ET}(undef, m), tol)
+    return (a + δ, Pstar_f, Pinf_f, G, ll, nrows, ok)
 end
 
 """
@@ -929,6 +1054,11 @@ Only observations after the diffuse period contribute to the log-likelihood.
 
 NaN marks a missing value, one element at a time: in a partially observed period
 both phases use the reduced system formed by the observed rows.
+
+A diffuse-period step where `Finf = Z_t Pinf Z_t'` is singular but nonzero (more
+observed rows than diffuse directions they load on) is processed one row at a time
+(Koopman & Durbin 2000). A non-diagonal `H` is decorrelated first with its unit LDL
+factor.
 
 # Example
 ```julia
@@ -1038,12 +1168,22 @@ function kalman_loglik_diffuse(
             v = yr - Zr * a
             Finf = Zr * Pinf * Zr'
 
-            # Check if Finf is invertible
-            (flag, Finf_inv) = _safe_inverse(Finf, tol)
+            flag = _diffuse_step_flag(Finf, tol)
 
-            if flag == 1
+            if flag == 2
+                # Finf is singular but nonzero: process the rows one at a time.
+                (a_filt, Pstar_filt, Pinf_filt, _, ll, nrows, ok) = _univariate_diffuse_step(
+                    a, Pstar, Pinf, Zr, Hr, v, tol)
+                ok || return ET(-Inf)
+                loglik += ll
+                n_obs_rows += nrows
+                a = p.T * a_filt
+                Pinf = p.T * Pinf_filt * p.T'
+                Pstar = p.T * Pstar_filt * p.T' + RQR
+            elseif flag == 1
                 # Finf is invertible: exact diffuse update (Durbin & Koopman 2012,
                 # §5.2), with Kinf = K⁽⁰⁾ and Kstar = K⁽¹⁾
+                Finf_inv = inv(Finf)
                 Kinf = p.T * Pinf * Zr' * Finf_inv
                 Linf = p.T - Kinf * Zr
                 Fstar = Zr * Pstar * Zr' + Hr
@@ -1061,7 +1201,8 @@ function kalman_loglik_diffuse(
 
                 # No likelihood contribution during diffuse period with Finf invertible
             else
-                # Finf is singular: use Fstar-based update
+                # Finf is zero: no observed row loads on a diffuse direction, so
+                # the period takes the standard update on Pstar.
                 Fstar = Zr * Pstar * Zr' + Hr
 
                 if pt == 1
@@ -1156,6 +1297,11 @@ NaN marks a missing value, one element at a time. In a partially observed period
 both phases use the reduced system formed by the observed rows, and `vt`, `Ft` and
 `Kt` hold its pₜ-sized blocks in their leading rows and columns; `observed_mask`
 records which rows those are.
+
+A diffuse-period step where `Finf = Z_t Pinf Z_t'` is singular but nonzero (more
+observed rows than diffuse directions they load on) is processed one row at a time
+(Koopman & Durbin 2000). A non-diagonal `H` is decorrelated first with its unit LDL
+factor.
 
 # See Also
 - `kalman_loglik_diffuse`: Log-likelihood only (faster if states not needed)
@@ -1301,7 +1447,7 @@ function kalman_filter_diffuse(
             v = yr - Zr * a
             Finf = Zr * Pinf * Zr'
 
-            (flag, Finf_inv) = _safe_inverse(Finf, tol)
+            flag = _diffuse_step_flag(Finf, tol)
 
             # Store diffuse quantities
             push!(Pinf_list, copy(Pinf))
@@ -1309,9 +1455,29 @@ function kalman_filter_diffuse(
             push!(flag_list, flag)
             d += 1
 
-            if flag == 1
+            if flag == 2
+                # Finf singular but nonzero: process the rows one at a time. The
+                # stored gain is the one that updates the state, a_filt = a + G v.
+                (a_filt, Pstar_filt, Pinf_filt, G, ll, nrows, ok) = _univariate_diffuse_step(
+                    a, Pstar, Pinf, Zr, Hr, v, tol)
+                if !ok
+                    loglik = ET(-Inf)
+                    break
+                end
+                loglik += ll
+                n_obs_rows += nrows
+                _store_innovations!(vt_store, Ft_store, Kt_store, t, v, Finf, p.T * G)
+
+                att_store[:, t] = a_filt
+                Ptt_store[:, :, t] = Pstar_filt
+
+                a = p.T * a_filt
+                Pinf = p.T * Pinf_filt * p.T'
+                Pstar = p.T * Pstar_filt * p.T' + RQR
+            elseif flag == 1
                 # Finf invertible: exact diffuse update (Durbin & Koopman 2012,
                 # §5.2), with Kinf = K⁽⁰⁾ and Kstar = K⁽¹⁾
+                Finf_inv = inv(Finf)
                 Kinf = p.T * Pinf * Zr' * Finf_inv
                 Linf = p.T - Kinf * Zr
                 Fstar = Zr * Pstar * Zr' + Hr
@@ -1336,7 +1502,7 @@ function kalman_filter_diffuse(
                 Pstar = p.T * Pstar * Linf' - Kinf * Finf * Kstar' + RQR
 
             else
-                # Finf singular, use Fstar
+                # Finf zero: standard update on Pstar
                 Fstar = Zr * Pstar * Zr' + Hr
 
                 if pt == 1

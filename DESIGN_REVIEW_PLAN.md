@@ -310,10 +310,17 @@ Other author answers, verbatim:
   - Implement the univariate (sequential) treatment of Koopman & Durbin (2000) for these periods: process the observed rows one at a time, each with scalar Finf,ᵢ (the exact step when Finf,ᵢ > tol, otherwise the Fstar step), which requires diagonal H or a per-period LDL transform of H. This is what KFAS does.
   - At minimum, detect `flag == 0 && norm(Finf) > tol` and throw an `ArgumentError` instead of returning a wrong likelihood.
   - Flip the pin "exact diffuse with a singular nonzero Finf" in `known_bugs_tests.jl`. Re-test the partial-period case with a partial period inside the diffuse period on an m = 2 model.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-038
 - **Cluster**: correctness
 - **Notes**:
+  - **Univariate treatment implemented** (not just the throw). A shared, non-allocating kernel `_univariate_diffuse_update!` (`filter_ad.jl`) processes the observed rows one at a time: the exact step when `Finf,ᵢ > tol` (no likelihood term), otherwise the Fstar step (adds its Gaussian term), and skips a row with `|Fstar,ᵢ| ≤ tol`. A non-diagonal `H_t` is decorrelated first by its unit-LDL factor, which has unit determinant. The kernel also tracks the gain `G` with `a_filt = a + G v`. `_univariate_diffuse_step` is the allocating wrapper used by the functional filters; the in-place filter calls the kernel on existing scratch buffers.
+  - **New flag `2`** = Finf singular but nonzero, classified by `_diffuse_step_flag` (det > tol → 1, else max|Finf| > tol → 2, else 0). Flag `0` now means Finf is zero. `_safe_inverse` was deleted (no callers). Docstrings of `DiffuseFilterResult`, `diffuse_flags`, the workspace and the three filters are updated.
+  - **Storage in a flag-2 step:** `Ft` = Finf, `Kt` = `T G`, `Ptt` = filtered Pstar. So `at[t+1] = T at[t] + Kt vt` and `Pt[t+1] = T Ptt[t] T' + RQR` hold in every period.
+  - **Likelihood convention:** like the flag-1 step, the diffuse rows drop their `log Finf,ᵢ` and 2π terms. Verified: exact = approx(κ) + ½·r·log(2πκ) when Finf,ᵢ = 1.
+  - **Tests** (`diffuse_tests.jl`, 2 new testsets): the pin moved over (p = 2, m = 1, d = 1, Ptt = h₁h₂/(h₁+h₂), a ForwardDiff gradient vs FD); and correlated H (3×3) on an m = 2 trend, fully observed (flags `[2,2]`) and with a partial period inside the diffuse period (flags `[1,2]`). Both use a BigFloat κ = 1e20 reference matched to 1e-12, plus in-place vs functional agreement. A Float64 κ = 1e8 reference is not precise enough here (cancellation).
+  - The in-place filter on a p = 3, m = 1 model went from 8960 to 224 bytes per run, because the diffuse period now ends. The residual comes from `det` on a view, as before.
+  - The failure path (`Fstar,ᵢ < −tol`) returns `-Inf` in all three filters; the in-place one returns early. CHUNK-013 should check this against the failure policy.
 
 ### CHUNK-010: fix-isolated-bugs
 - **Kind**: `implement`
@@ -723,6 +730,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-011 (fix-dfm-em-variance-update) → next: CHUNK-036
 - 2026-10-08 CHUNK-036 (partial-periods-in-exact-diffuse-filters) → next: CHUNK-038
 - 2026-10-08 CHUNK-038 (fix-exact-diffuse-update-sign) → next: CHUNK-039
+- 2026-10-08 CHUNK-039 (exact-diffuse-singular-finf) → next: CHUNK-037
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

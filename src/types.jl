@@ -459,7 +459,7 @@ The diffuse period ends when `norm(Pinf) < tol`.
 - `vt`: Innovations/prediction errors (p × n), NaN for missing
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n)
-- `diffuse_flag`: Vector of length d indicating step type (1=Finf invertible, 0=singular)
+- `diffuse_flag`: Vector of length d indicating step type (see Notes)
 - `missing_mask`: BitVector, true where no row of the period was observed
 - `observed_mask`: BitMatrix (p × n), true where an individual value is present
 
@@ -470,13 +470,21 @@ observed rows are `findall(view(observed_mask, :, t))`.
 # Notes
 During the diffuse period (t ≤ d):
 - If `diffuse_flag[t] == 1`: Finf was invertible, used exact diffuse update
-- If `diffuse_flag[t] == 0`: Finf was singular, used Fstar-based update
+- If `diffuse_flag[t] == 2`: Finf was singular but nonzero; the observed rows were
+  processed one at a time (Koopman & Durbin 2000), each taking the exact diffuse
+  update or the Fstar-based one
+- If `diffuse_flag[t] == 0`: Finf was zero, used Fstar-based update
 - If `diffuse_flag[t] == -1`: no row was observed
+
+Rows that take the exact diffuse update add nothing to the log-likelihood; the
+others add their Gaussian term.
 
 `Pt` and `Ptt` hold the finite parts of the predicted and filtered covariances
 (the diffuse parts of the predicted covariance are in `Pinf_store`). In an exact
 diffuse step `Ft` holds `Finf = Z Pinf Z'` and `Kt` holds the gain
 `K⁽⁰⁾ = T Pinf Z' Finf⁻¹` that updates the state, following Durbin & Koopman (2012, §5.2).
+In a row-by-row step `Ft` also holds `Finf`, and `Kt` holds `T G`, where `G` is the
+gain with `a_{t|t} = a_t + G v_t`.
 
 After the diffuse period (t > d), standard Kalman filter recursion is used.
 
@@ -505,7 +513,7 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms}
     vt::Matrix{T}           # p × n
     Ft::Array{T, 3}          # p × p × n
     Kt::Array{T, 3}          # m × p × n
-    # Diffuse step flags: 1=Finf invertible, 0=singular
+    # Diffuse step flags: 1=Finf invertible, 2=singular nonzero, 0=zero, -1=missing
     diffuse_flag::Vector{Int}  # length d
     # Missing data
     missing_mask::BitVector    # n: true where no row of the period was observed
@@ -551,6 +559,8 @@ diffuse_covariances(r::DiffuseFilterResult) = (r.Pinf_store, r.Pstar_store)
 
 Return flags indicating which type of diffuse step was used at each time point.
 - 1: Finf was invertible (exact diffuse update)
-- 0: Finf was singular (Fstar-based update)
+- 2: Finf was singular but nonzero (rows processed one at a time)
+- 0: Finf was zero (Fstar-based update)
+- -1: no row was observed
 """
 diffuse_flags(r::DiffuseFilterResult) = r.diffuse_flag
