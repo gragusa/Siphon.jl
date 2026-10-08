@@ -113,6 +113,12 @@ Union type for diffuse initialization specification:
 """
 const DiffuseSpec = Union{Bool, Symbol}
 
+function _check_diffuse(diffuse::DiffuseSpec)
+    diffuse isa Bool || diffuse === :exact || throw(ArgumentError(
+        "diffuse must be true, false or :exact, got $(repr(diffuse))"))
+    return nothing
+end
+
 """
     local_level(; var_obs=:free, var_level=:free, diffuse=true)
 
@@ -192,6 +198,7 @@ function local_level(;
     a1 = [FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         # Exact diffuse: P1_star = 0, P1_inf = I
         P1 = SSMMatrixSpec((1, 1))
@@ -275,6 +282,7 @@ function local_linear_trend(;
     a1 = [FixedValue(0.0), FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         # Exact diffuse: P1_star = 0, P1_inf = I
         P1 = SSMMatrixSpec((2, 2))
@@ -352,6 +360,7 @@ function ar1(;
     a1 = [FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         P1 = SSMMatrixSpec((1, 1))
         P1.elements[(1, 1)] = FixedValue(0.0)
@@ -457,6 +466,7 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = n
     a1 = [FixedValue(0.0) for _ in 1:r]
     name = Symbol("ARMA($p,$q)")
     P1 = SSMMatrixSpec((r, r))
+    _check_diffuse(diffuse)
     if diffuse === :exact
         P1_inf = SSMMatrixSpec((r, r))
         for i in 1:r

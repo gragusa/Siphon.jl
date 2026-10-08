@@ -861,13 +861,13 @@ end
 
     model = StateSpaceModel(spec, θ, n)
 
-    # Filter should not be valid before calling kalman_filter!
-    @test model.filter_valid == false
+    # The filter accessors throw before kalman_filter! has run
+    @test_throws "kalman_filter!(model, y)" filtered_states(model)
 
     ll = kalman_filter!(model, y)
 
     @test isfinite(ll)
-    @test model.filter_valid == true
+    @test size(filtered_states(model)) == (1, n)
     @test loglikelihood(model) ≈ ll
 
     # Access filtered states
@@ -952,11 +952,11 @@ end
 
     # Wrong observation dimension
     y_wrong = randn(2, n)
-    @test_throws AssertionError kalman_filter!(model, y_wrong)
+    @test_throws DimensionMismatch kalman_filter!(model, y_wrong)
 
     # Wrong time dimension
     y_wrong_t = randn(1, 50)
-    @test_throws AssertionError kalman_filter!(model, y_wrong_t)
+    @test_throws DimensionMismatch kalman_filter!(model, y_wrong_t)
 end
 
 @testset "StateSpaceModel parameter vector length validation" begin

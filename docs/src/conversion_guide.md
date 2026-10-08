@@ -71,3 +71,58 @@ with the EM M-step functions:
 | `Siphon.update_Q!(ws, Q)` | `Siphon.set_Q!(ws, Q)` |
 
 `set_params!` and `update_params!` are unchanged.
+
+## Failures and errors
+
+A filter now stops at the first period whose innovation covariance is not positive
+definite, and every path reports this the same way:
+
+| Situation | Siphon 0.1 | Now |
+|:----------|:-----------|:----|
+| `kalman_filter!(ws, y)`, `ekf_filter!(ws, y)` or `kalman_filter_diffuse!` on such a period | threw `PosDefException` | returns `-Inf`; the workspace accessors then throw |
+| `kalman_filter(p, y, a1, P1)` and the other functional filters | returned `-Inf` plus arrays holding uninitialised memory | return a result with `loglikelihood(r) == -Inf`; its state and innovation accessors throw, and the arrays past the failure hold `NaN` |
+| `kalman_filter_scalar` and the static one-observable filter | threw `DomainError` | return a failed result, as above |
+| `filter_and_smooth!`, `ekf_filter_and_smooth!` | threw | return `-Inf` and skip the smoother |
+| `kalman_smoother`, `predict`, `forecast`, `forecast_paths` on a failed filter | ran on garbage | throw `ArgumentError` |
+| EM (`fit!(EM(), …)`, `em_estimate!`) whose filter fails | threw `PosDefException` | stops, returns `converged = false` and warns |
+
+Check `loglikelihood(x) == -Inf` (or `isfinite`) rather than catching an exception.
+
+Accessors refuse to return storage that holds no output:
+
+| Call | Siphon 0.1 | Now |
+|:-----|:-----------|:----|
+| a filter accessor on a workspace before its first run | returned uninitialised memory | throws `ArgumentError` naming `kalman_filter!(ws, y)` (`ekf_filter!(ws, y)` for the EKF) |
+| `smoothed_states`, `smoothed_states_cov` on a workspace before `kalman_smoother!` | returned stale or uninitialised memory | throws `ArgumentError`; a new filter run also invalidates the smoother output |
+| `crosslag_covs(ws)` after `kalman_smoother!(ws; crosscov = false)` | returned stale memory | throws `ArgumentError` |
+| `kalman_smoother!(ws)` before the filter has run | ran on uninitialised memory | throws `ArgumentError` |
+| `loglikelihood(model)` on `StateSpaceModel(spec, θ, n)` before `kalman_filter!(model, y)` | returned `-Inf` | throws `ArgumentError` |
+
+`KalmanWorkspace(p, m, r, n)` and the other dimension-only constructors now fill their
+arrays with zeros.
+
+Shape errors are `DimensionMismatch`:
+
+| Call | Siphon 0.1 | Now |
+|:-----|:-----------|:----|
+| `kalman_filter!`, `ekf_filter!`, `kalman_filter_diffuse!` with `y` of the wrong size | `AssertionError` | `DimensionMismatch` |
+| `kalman_filter!(model, y)`, `kalman_loglik(model, y)`, `fit!(…, model, y)` with `y` of the wrong size | `AssertionError` | `DimensionMismatch` |
+| `EKFWorkspace(...)` with inconsistent matrices | `AssertionError` | `DimensionMismatch` |
+| `KFParms(Z, H, T, R, Q)` with inconsistent matrices | accepted | `DimensionMismatch` |
+| `set_params!`, `set_initial!`, `update_params!`, `set_Z!`…`set_Q!`, `set_initial_diffuse!` with wrongly sized matrices | copied element by element (or threw `BoundsError`) | `DimensionMismatch` |
+| `diag_free(names; init = v)` with `length(v) != length(names)` | `AssertionError` | `DimensionMismatch` |
+
+A template given `diffuse = :foo` (anything other than `true`, `false` or `:exact`) throws
+an `ArgumentError` instead of a `TypeError`.
+
+## Convergence warnings
+
+Estimation that ends without converging now warns. Pass `warn = false` to silence it:
+
+| Function | Warns when |
+|:---------|:-----------|
+| `fit!(EM(), model, y)`, `em_estimate!`, `fit!(EM(), ::DynamicFactorModel, y)` | `maxiter` is reached, or the filter fails at the current parameters |
+| `optimize_ssm`, `optimize_ekf`, `fit!(MLE(), model, y)` | the optimiser's return code is not `Success` |
+| `optimize_ssm_with_stderr` | as `optimize_ssm`; it already warned, and now accepts `warn` |
+
+`isconverged(model)` and the `converged` fields are unchanged.

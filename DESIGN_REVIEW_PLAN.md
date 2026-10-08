@@ -425,11 +425,44 @@ Other author answers, verbatim:
   - Add a convergence `@warn`.
   - Replace the bare `catch` in `_try_degenerate!` (`inplace.jl:2516,2548`).
   - Make `StateSpaceModel(spec, θ, n)` with `backend=:external` either run the filter or not report `fitted=true`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-003, CHUNK-012
 - **Cluster**: type-hierarchy
 - **Notes**:
+  - **Run status:** one encoding everywhere: `_NOT_RUN` (−1), 0 = ok, t > 0 = failed in period t (`accessors.jl`).
+    - Results have a new last field, `failed_at::Int`; outer constructors keep the old arities.
+    - Workspaces have `status`, `smoothed` and `crosscov`; the diffuse workspace uses `base`.
+    - `StateSpaceModel.filter_valid::Bool` became `filter_status::Int`.
+    - The shared accessors check through `_require_output`/`_output`/`_require_smoothed`. Messages name the call to make (`_filter_call`/`_smoother_call`, EKF overrides) or the failed period (`_failure_message`).
+  - **(i)/(ii):**
+    - In-place `kalman_filter!`, `kalman_filter_diffuse!` and `ekf_filter!` use `cholesky!(…; check = false)` and return −Inf with `status = t`.
+    - `filter_and_smooth!`/`ekf_filter_and_smooth!` skip the smoother after a failure.
+    - Functional filters allocate NaN-filled storage (B11) and record `failed_at`.
+    - The static P = 1 branch and `kalman_filter_scalar` return a failed result instead of a `DomainError`.
+    - `loglikelihood` returns −Inf on a failed output and throws only before any run.
+    - Downstream functions check before reading: `kalman_smoother(result…)`, `predict`/`forecast`/`forecast_paths`, `kalman_smoother!`, `ekf_smoother!`, the simulation smoother, `SmootherResult(ws)`, the workspace plot recipe, `compute_sufficient_stats!` (requires cross-covariances) and the DFM factor accessors (now read through the workspace accessors).
+    - Dimension-only constructors (`KalmanWorkspace{T}(p,m,r,n)`, diffuse, EKF, `StateSpaceModel`) zero-fill.
+  - **(iii):**
+    - Every `@assert` is gone. New `_check_size` (`types.jl`), `_check_params`/`_check_initial`/`_check_obs` (`inplace.jl`, shared with EKF) and `_check_model_obs`.
+    - `KFParms` has an inner constructor validating Z/H/T/R/Q when all are matrices; scalars and `UniformScaling` are skipped.
+    - Validation covers `set_params!`, `set_initial!`, `update_params!`, `set_Z!`…`set_Q!`, `set_initial_diffuse!` and `EKFWorkspace`. `diag_free`'s `_to_vec` throws `DimensionMismatch`.
+  - **(iv):** the external model `StateSpaceModel(spec, θ, n)` keeps `fitted = true` (documented as "built with known parameters"), but `loglikelihood(model)` throws until `kalman_filter!(model, y)` has run. It used to return the −Inf placeholder.
+  - **(v):** the keyword is `warn::Bool = true`, not `verbose`.
+    - EM: `em_estimate!`, `fit!(EM())` and DFM `fit!` warn through `_warn_em`, covering both maxiter and a failed filter. EM whose filter fails stops at that iteration (`converged = false`, loglik −Inf) instead of throwing.
+    - MLE: `_mle` warns when the retcode is not `Success`, so `optimize_ssm`, `optimize_ekf` and `fit!(MLE())` (through kwargs) are covered. `optimize_ssm_with_stderr` folds its old warning into one.
+  - **`_try_degenerate!`:** the bare `catch` is gone; it relies on the −Inf return and re-runs filter+smoother at the end whenever any trial ran.
+  - **Templates:** `_check_diffuse` throws `ArgumentError` for `diffuse = :foo` (the Open Question) in `local_level`, `local_linear_trend`, `ar1` and `arma`.
+  - **Left as is:**
+    - `_safe_inverse_inplace!` still uses a checked `cholesky!`, since Finf is PSD whenever det > tol.
+    - The smoother's cross-covariance `cholesky!` is regularised.
+    - EMWorkspace keeps `undef` internal scratch, which has no accessors.
+  - **Tests:**
+    - New `test/failure_tests.jl` (122 checks).
+    - `diffuse_tests.jl` ("In-place diffuse filter - accessors") now runs a filter before checking sizes.
+    - `partial_missing_tests.jl` asserts the masks of a failed result throw.
+    - `dsl_tests.jl`: `filter_valid` → accessor throw, and `AssertionError` → `DimensionMismatch`.
+  - **Verification:** `Pkg.test()` passes (2 broken pins unchanged, Aqua 10/10); ambiguities 0. The conversion guide gained "Failures and errors" and "Convergence warnings" sections. The docs build was not run.
 
 ### CHUNK-014: apply-missing-data-model
 - **Kind**: `implement`
@@ -753,13 +786,15 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-039 (exact-diffuse-singular-finf) → next: CHUNK-037
 - 2026-10-08 CHUNK-037 (fix-dfm-ar-error-loadings) → next: CHUNK-012
 - 2026-10-08 CHUNK-012 (introduce-abstract-supertypes-and-accessor-vocabulary) → next: CHUNK-013
+- 2026-10-08 CHUNK-013 (apply-failure-model) → next: CHUNK-014
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - `docs/src/index.md:55` calls `local_level(var_obs_init=225.0, var_level_init=100.0)`; those keywords don't exist (the template takes `var_obs=(init=…,)`). Fix in CHUNK-032.
 - CHUNK-022 (DSL conventions) must keep `SSMParameter.default_init` or an equivalent "init was defaulted" signal, and should decide whether `FreeParam` without an `init` gets it too. Today `FreeParam` defaults `init = 0.0`, which sits on the bound for a variance.
-- Templates do `diffuse ? 1e7 : 1e4` after testing `=== :exact`, so `diffuse = :foo` throws a `TypeError` rather than a clear `ArgumentError`. Fold this into CHUNK-013 (failure model).
+- The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, plus 67 pre-existing "Log-likelihood decreased" warnings from the DSL EMs (CHUNK-019 deletes them). Pass `warn = false` in the capped tests if a quiet suite is wanted.
+- `predict`/`forecast` on a model or spec whose filter fails now throw `ArgumentError`. `predict` is not an objective, but CHUNK-017 should confirm this when it reworks the forecast types.
 - The `_ssm_fit_em_static!` in `src/inplace.jl` has no callers. Delete it in CHUNK-019 or CHUNK-030.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `compute_sufficient_stats!` sums `S_αα` over all periods but `S_yα`/`S_yy` only over observed ones. So `update_Z!` and `update_H!` are biased whenever whole periods are missing, in the general EM and the white-noise DFM. The AR-error DFM path uses its own valid-period moments. Fix in CHUNK-019 (consolidate EM).

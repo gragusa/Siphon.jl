@@ -265,7 +265,11 @@ end
 
 # Helper to broadcast scalar to vector
 _to_vec(x::Real, n::Int) = fill(x, n)
-_to_vec(x::AbstractVector, n::Int) = (@assert length(x) == n; x)
+function _to_vec(x::AbstractVector, n::Int)
+    length(x) == n ||
+        throw(DimensionMismatch("expected a vector of length $n, got length $(length(x))"))
+    return x
+end
 
 """
     block_diag(blocks...) -> Matrix{Any}

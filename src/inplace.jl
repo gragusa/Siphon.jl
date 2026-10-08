@@ -173,6 +173,12 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     loglik::T
     n_obs_valid::Int
     n_obs_rows::Int
+
+    # Run status: _NOT_RUN before the first filter run, 0 after a successful one, and
+    # t > 0 when the last run stopped in period t on a non-positive-definite F.
+    status::Int
+    smoothed::Bool        # the smoother has run on the current filter output
+    crosscov::Bool        # ... and filled Pcross
 end
 
 """
@@ -194,62 +200,65 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         r,
         n,
 
-        # Parameters (uninitialized, must call set_params!)
-        Matrix{T}(undef, p, m),      # Z
-        Matrix{T}(undef, p, p),      # H
-        Matrix{T}(undef, m, m),      # Tmat
-        Matrix{T}(undef, m, r),      # R
-        Matrix{T}(undef, r, r),      # Q
-        Vector{T}(undef, m),         # a1
-        Matrix{T}(undef, m, m),      # P1
+        # Parameters (zero until set_params! is called)
+        zeros(T, p, m),      # Z
+        zeros(T, p, p),      # H
+        zeros(T, m, m),      # Tmat
+        zeros(T, m, r),      # R
+        zeros(T, r, r),      # Q
+        zeros(T, m),         # a1
+        zeros(T, m, m),      # P1
 
         # Precomputed
-        Matrix{T}(undef, m, m),      # RQR
+        zeros(T, m, m),      # RQR
 
         # Filter storage
-        Matrix{T}(undef, m, n),      # at
-        Array{T, 3}(undef, m, m, n),  # Pt
-        Matrix{T}(undef, m, n),      # att
-        Array{T, 3}(undef, m, m, n),  # Ptt
-        Matrix{T}(undef, p, n),      # vt
-        Array{T, 3}(undef, p, p, n),  # Ft
-        Array{T, 3}(undef, p, p, n),  # Ft_L
-        Array{T, 3}(undef, m, p, n),  # Kt
-        BitVector(undef, n),         # missing_mask
-        BitMatrix(undef, p, n),      # observed_mask
-        Vector{Int}(undef, n),       # n_observed
-        Matrix{Int}(undef, p, n),    # obs_rows
+        zeros(T, m, n),      # at
+        zeros(T, m, m, n),  # Pt
+        zeros(T, m, n),      # att
+        zeros(T, m, m, n),  # Ptt
+        zeros(T, p, n),      # vt
+        zeros(T, p, p, n),  # Ft
+        zeros(T, p, p, n),  # Ft_L
+        zeros(T, m, p, n),  # Kt
+        falses(n),         # missing_mask
+        falses(p, n),      # observed_mask
+        zeros(Int, n),       # n_observed
+        zeros(Int, p, n),    # obs_rows
 
         # Smoother storage
-        Matrix{T}(undef, m, n),      # αs
-        Array{T, 3}(undef, m, m, n),  # Vs
-        Array{T, 3}(undef, m, m, max(n-1, 1)),  # Pcross
+        zeros(T, m, n),      # αs
+        zeros(T, m, m, n),  # Vs
+        zeros(T, m, m, max(n-1, 1)),  # Pcross
 
         # Scratch space
-        Matrix{T}(undef, m, m),      # tmp_mm1
-        Matrix{T}(undef, m, m),      # tmp_mm2
-        Matrix{T}(undef, m, m),      # tmp_mm3
-        Matrix{T}(undef, p, p),      # tmp_pp1
-        Matrix{T}(undef, p, p),      # tmp_pp2
-        Matrix{T}(undef, m, p),      # tmp_mp
-        Matrix{T}(undef, p, m),      # tmp_pm
-        Matrix{T}(undef, p, m),      # tmp_pm2
-        Matrix{T}(undef, m, r),      # tmp_mr
-        Vector{T}(undef, m),         # tmp_m1
-        Vector{T}(undef, m),         # tmp_m2
-        Vector{T}(undef, p),         # tmp_p1
-        Vector{T}(undef, p),         # tmp_p2
+        zeros(T, m, m),      # tmp_mm1
+        zeros(T, m, m),      # tmp_mm2
+        zeros(T, m, m),      # tmp_mm3
+        zeros(T, p, p),      # tmp_pp1
+        zeros(T, p, p),      # tmp_pp2
+        zeros(T, m, p),      # tmp_mp
+        zeros(T, p, m),      # tmp_pm
+        zeros(T, p, m),      # tmp_pm2
+        zeros(T, m, r),      # tmp_mr
+        zeros(T, m),         # tmp_m1
+        zeros(T, m),         # tmp_m2
+        zeros(T, p),         # tmp_p1
+        zeros(T, p),         # tmp_p2
 
         # Smoother scratch
-        Vector{T}(undef, m),         # r_smooth
-        Matrix{T}(undef, m, m),      # N_smooth
-        Matrix{T}(undef, m, m),      # L_smooth
-        Matrix{T}(undef, m, m),      # J_smooth
+        zeros(T, m),         # r_smooth
+        zeros(T, m, m),      # N_smooth
+        zeros(T, m, m),      # L_smooth
+        zeros(T, m, m),      # J_smooth
 
         # Scalars
         zero(T),                     # loglik
         0,                           # n_obs_valid
-        0                            # n_obs_rows
+        0,                           # n_obs_rows
+        _NOT_RUN,                    # status
+        false,                       # smoothed
+        false                        # crosscov
     )
 end
 
@@ -303,7 +312,7 @@ system_matrices(ws::KalmanWorkspace) = KFParms(ws.Z, ws.H, ws.Tmat, ws.R, ws.Q)
 Return the `p × n` mask that is true where an individual observation was present.
 `missing_mask(ws)[t]` is true exactly when column `t` of this mask is all false.
 """
-observed_mask(ws::KalmanWorkspace) = ws.observed_mask
+observed_mask(ws::KalmanWorkspace) = _require_output(ws, :observed_mask).observed_mask
 
 """
     observed_rows(ws::KalmanWorkspace, t::Integer) -> SubArray{Int}
@@ -315,6 +324,7 @@ the leading rows and columns of their slices, so position `k` of those blocks
 corresponds to row `observed_rows(ws, t)[k]` of the full observation vector.
 """
 function observed_rows(ws::KalmanWorkspace, t::Integer)
+    _require_output(ws, :observed_rows)
     1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
     return view(ws.obs_rows, 1:ws.n_observed[t], t)
 end
@@ -325,6 +335,7 @@ end
 Return the number of rows observed in period `t`.
 """
 function n_observed(ws::KalmanWorkspace, t::Integer)
+    _require_output(ws, :n_observed)
     1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
     return ws.n_observed[t]
 end
@@ -362,6 +373,7 @@ function set_params!(
         R::AbstractMatrix,
         Q::AbstractMatrix
 )
+    _check_params(ws, "set_params!"; Z, H, Tmat, R, Q)
     copyto!(ws.Z, Z)
     copyto!(ws.H, H)
     copyto!(ws.Tmat, Tmat)
@@ -371,12 +383,37 @@ function set_params!(
     return ws
 end
 
+# Check each system matrix that is not `nothing` against the workspace dimensions.
+function _check_params(ws, caller; Z = nothing, H = nothing, Tmat = nothing, R = nothing,
+        Q = nothing)
+    p, m, r = ws.obs_dim, ws.state_dim, ws.shock_dim
+    Z === nothing || _check_size(caller, "Z", Z, (p, m))
+    H === nothing || _check_size(caller, "H", H, (p, p))
+    Tmat === nothing || _check_size(caller, "T", Tmat, (m, m))
+    R === nothing || _check_size(caller, "R", R, (m, r))
+    Q === nothing || _check_size(caller, "Q", Q, (r, r))
+    return nothing
+end
+
+function _check_initial(ws, caller, a1, P1)
+    m = ws.state_dim
+    _check_size(caller, "a1", a1, (m,))
+    _check_size(caller, "P1", P1, (m, m))
+    return nothing
+end
+
+# Throw unless `y` is p × n for a workspace with p observables and n periods.
+function _check_obs(ws, caller, y::AbstractMatrix)
+    _check_size(caller, "y", y, (ws.obs_dim, ws.n_times))
+end
+
 """
     set_initial!(ws, a1, P1)
 
 Set initial state mean and covariance.
 """
 function set_initial!(ws::KalmanWorkspace, a1::AbstractVector, P1::AbstractMatrix)
+    _check_initial(ws, "set_initial!", a1, P1)
     copyto!(ws.a1, a1)
     copyto!(ws.P1, P1)
     return ws
@@ -400,6 +437,7 @@ function update_params!(
     T !== nothing && Tmat !== nothing &&
         throw(ArgumentError("update_params!: pass T or Tmat, not both"))
     Tmat = something(T, Tmat, Some(nothing))
+    _check_params(ws, "update_params!"; Z, H, Tmat, R, Q)
     if Z !== nothing
         copyto!(ws.Z, Z)
     end
@@ -428,17 +466,33 @@ function update_params!(
 end
 
 # Single-matrix setters. The EM M-step functions are `update_Z!(kf_ws, em_ws, n)` etc.
-set_Z!(ws::KalmanWorkspace, Z::AbstractMatrix) = (copyto!(ws.Z, Z); ws)
-set_H!(ws::KalmanWorkspace, H::AbstractMatrix) = (copyto!(ws.H, H); ws)
-set_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix) = (copyto!(ws.Tmat, Tmat); ws)
+function set_Z!(ws::KalmanWorkspace, Z::AbstractMatrix)
+    _check_params(ws, "set_Z!"; Z)
+    copyto!(ws.Z, Z)
+    return ws
+end
+
+function set_H!(ws::KalmanWorkspace, H::AbstractMatrix)
+    _check_params(ws, "set_H!"; H)
+    copyto!(ws.H, H)
+    return ws
+end
+
+function set_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix)
+    _check_params(ws, "set_T!"; Tmat)
+    copyto!(ws.Tmat, Tmat)
+    return ws
+end
 
 function set_R!(ws::KalmanWorkspace, R::AbstractMatrix)
+    _check_params(ws, "set_R!"; R)
     copyto!(ws.R, R)
     _update_RQR!(ws)
     return ws
 end
 
 function set_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
+    _check_params(ws, "set_Q!"; Q)
     copyto!(ws.Q, Q)
     _update_RQR!(ws)
     return ws
@@ -462,7 +516,9 @@ Run Kalman filter in-place, storing results in workspace.
 - `y`: Observations (p × n matrix), missing values as NaN
 
 # Returns
-- `loglik`: Log-likelihood of non-missing observations
+- `loglik`: Log-likelihood of non-missing observations. It is `-Inf` when an innovation
+  covariance is not positive definite; the filter stops at that period and the
+  workspace accessors then throw.
 
 # Stored Results
 Access via: `predicted_states(ws)`, `filtered_states(ws)`, etc.
@@ -474,12 +530,14 @@ Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
 
-    @assert size(y) == (p, n) "Observation matrix size mismatch"
+    _check_obs(ws, "kalman_filter!", y)
 
     # Reset scalars
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
     ws.n_obs_rows = 0
+    ws.smoothed = false
+    ws.crosscov = false
 
     # Working state/covariance held in scratch space (tmp_m1 / tmp_mm1).
     a_curr = ws.tmp_m1
@@ -570,7 +628,12 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
             # Cholesky on Symmetric(:L) reads only the lower triangle, so we do
             # not need to symmetrize Fr first.
-            cholF = cholesky!(Symmetric(Fr, :L))
+            cholF = cholesky!(Symmetric(Fr, :L); check = false)
+            if !issuccess(cholF)
+                ws.status = t
+                ws.loglik = T(-Inf)
+                return ws.loglik
+            end
             L_lower = LowerTriangular(cholF.factors)
 
             # Store lower triangle of L; zero the rest for clean reuse.
@@ -639,6 +702,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     # The Gaussian constant counts every observed scalar, which is Σₜ pₜ rather
     # than p times the number of periods carrying any observation.
     ws.loglik += -ws.n_obs_rows * log2pi / 2
+    ws.status = 0
     return ws.loglik
 end
 
@@ -652,7 +716,8 @@ end
 Run RTS smoother in-place using filter results stored in workspace.
 
 # Arguments
-- `ws`: Workspace with filter results (must call `kalman_filter!` first)
+- `ws`: Workspace with filter results (must call `kalman_filter!` first; throws an
+  `ArgumentError` if the filter has not run or failed)
 - `crosscov`: If true, compute cross-lag covariances for EM (default: true)
 
 # Stored Results
@@ -665,6 +730,7 @@ Implements Durbin & Koopman (2012) backward recursion.
 Cross-lag covariances computed during the same backward pass for efficiency.
 """
 function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {T}
+    _require_output(ws, :kalman_smoother!)
     m, n = ws.state_dim, ws.n_times
     p = ws.obs_dim
 
@@ -857,6 +923,8 @@ function kalman_smoother!(ws::KalmanWorkspace{T}; crosscov::Bool = true) where {
         end
     end
 
+    ws.smoothed = true
+    ws.crosscov = crosscov
     return nothing
 end
 
@@ -875,11 +943,12 @@ Run filter and smoother in one call.
 - `crosscov`: Compute cross-lag covariances (default: true)
 
 # Returns
-- `loglik`: Log-likelihood
+- `loglik`: Log-likelihood. When the filter fails it is `-Inf` and the smoother is
+  skipped.
 """
 function filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true)
     loglik = kalman_filter!(ws, y)
-    kalman_smoother!(ws; crosscov = crosscov)
+    ws.status == 0 && kalman_smoother!(ws; crosscov = crosscov)
     return loglik
 end
 
@@ -888,10 +957,10 @@ end
 # ============================================
 
 """Return stored Cholesky factors of Ft as view."""
-cholesky_factors(ws::KalmanWorkspace) = ws.Ft_L
+cholesky_factors(ws::KalmanWorkspace) = _require_output(ws, :cholesky_factors).Ft_L
 
 """Return count of non-missing observations."""
-n_valid_obs(ws::KalmanWorkspace) = ws.n_obs_valid
+n_valid_obs(ws::KalmanWorkspace) = _require_output(ws, :n_valid_obs).n_obs_valid
 
 # ============================================
 # Dimension accessors
@@ -978,23 +1047,23 @@ function DiffuseKalmanWorkspace{T}(
     DiffuseKalmanWorkspace{T}(
         base,
         # Diffuse initialization
-        Matrix{T}(undef, m, m),  # P1_star
-        Matrix{T}(undef, m, m),  # P1_inf
+        zeros(T, m, m),  # P1_star
+        zeros(T, m, m),  # P1_inf
         # Diffuse working storage
-        Matrix{T}(undef, m, m),  # Pinf
-        Matrix{T}(undef, m, m),  # Pstar
-        Matrix{T}(undef, p, p),  # Finf
-        Matrix{T}(undef, p, p),  # Finf_inv
+        zeros(T, m, m),  # Pinf
+        zeros(T, m, m),  # Pstar
+        zeros(T, p, p),  # Finf
+        zeros(T, p, p),  # Finf_inv
         # Diffuse tracking
-        Vector{Int}(undef, n),   # diffuse_flags (preallocate max)
+        zeros(Int, n),   # diffuse_flags (preallocate max)
         0,                       # d
         false,                   # diffuse_ended
         T(tol),                  # tol
         # Additional scratch
-        Matrix{T}(undef, m, m),  # tmp_mm_diff1
-        Matrix{T}(undef, m, m),  # tmp_mm_diff2
-        Matrix{T}(undef, m, p),  # tmp_mp_diff
-        Matrix{T}(undef, p, p)   # tmp_pp_diff
+        zeros(T, m, m),  # tmp_mm_diff1
+        zeros(T, m, m),  # tmp_mm_diff2
+        zeros(T, m, p),  # tmp_mp_diff
+        zeros(T, p, p)   # tmp_pp_diff
     )
 end
 
@@ -1061,6 +1130,8 @@ function set_initial_diffuse!(
         P1_star::AbstractMatrix,
         P1_inf::AbstractMatrix
 )
+    _check_initial(ws.base, "set_initial_diffuse!", a1, P1_star)
+    _check_size("set_initial_diffuse!", "P1_inf", P1_inf, size(ws.P1_inf))
     copyto!(ws.base.a1, a1)
     copyto!(ws.P1_star, P1_star)
     copyto!(ws.P1_inf, P1_inf)
@@ -1078,7 +1149,7 @@ state_dim(ws::DiffuseKalmanWorkspace) = ws.base.state_dim
 shock_dim(ws::DiffuseKalmanWorkspace) = ws.base.shock_dim
 n_times(ws::DiffuseKalmanWorkspace) = ws.base.n_times
 
-observed_mask(ws::DiffuseKalmanWorkspace) = ws.base.observed_mask
+observed_mask(ws::DiffuseKalmanWorkspace) = observed_mask(ws.base)
 observed_rows(ws::DiffuseKalmanWorkspace, t::Integer) = observed_rows(ws.base, t)
 
 """
@@ -1086,14 +1157,17 @@ observed_rows(ws::DiffuseKalmanWorkspace, t::Integer) = observed_rows(ws.base, t
 
 Return the number of observations in the diffuse period.
 """
-diffuse_period(ws::DiffuseKalmanWorkspace) = ws.d
+diffuse_period(ws::DiffuseKalmanWorkspace) = (_require_output(ws, :diffuse_period); ws.d)
 
 """
     diffuse_flags(ws::DiffuseKalmanWorkspace) -> Vector{Int}
 
 Return flags for diffuse period steps (view of first d elements).
 """
-diffuse_flags(ws::DiffuseKalmanWorkspace) = view(ws.diffuse_flags, 1:ws.d)
+function diffuse_flags(ws::DiffuseKalmanWorkspace)
+    _require_output(ws, :diffuse_flags)
+    return view(ws.diffuse_flags, 1:ws.d)
+end
 
 # ============================================
 # In-place diffuse Kalman filter
@@ -1165,12 +1239,14 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
     base = ws.base
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
-    @assert size(y) == (p, n) "Observation matrix size mismatch"
+    _check_obs(base, "kalman_filter_diffuse!", y)
 
     # Reset state
     base.loglik = zero(T)
     base.n_obs_valid = 0
     base.n_obs_rows = 0
+    base.smoothed = false
+    base.crosscov = false
     ws.d = 0
     ws.diffuse_ended = false
 
@@ -1313,6 +1389,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
                 Hr, view(ws.tmp_pp_diff, 1:pt, 1:pt),
                 view(base.tmp_mp, :, 1), view(base.tmp_mp, :, 2), tol)
             if !ok
+                base.status = t
                 base.loglik = T(-Inf)
                 return base.loglik
             end
@@ -1410,7 +1487,12 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
             end
 
             # Cholesky on Symmetric(:L) reads only the lower triangle.
-            cholF = cholesky!(Symmetric(Fr, :L))
+            cholF = cholesky!(Symmetric(Fr, :L); check = false)
+            if !issuccess(cholF)
+                base.status = t
+                base.loglik = T(-Inf)
+                return base.loglik
+            end
             L_lower = LowerTriangular(cholF.factors)
             for j in 1:pt, i in j:pt
                 base.Ft_L[i, j, t] = L_lower[i, j]
@@ -1476,6 +1558,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
     # The Gaussian constant counts every observed scalar that contributed.
     base.loglik += -base.n_obs_rows * log2pi / 2
+    base.status = 0
 
     return base.loglik
 end
@@ -1629,13 +1712,16 @@ end
     compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix)
 
 Compute sufficient statistics from smoothed states for M-step.
-Assumes kalman_smoother!(kf_ws; crosscov=true) has been called.
+Requires `kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
+output, and throws an `ArgumentError` otherwise.
 """
 function compute_sufficient_stats!(
         em_ws::EMWorkspace{T},
         kf_ws::KalmanWorkspace{T},
         y::AbstractMatrix
 ) where {T}
+    # Checks that the smoother has run with the cross-lag covariances.
+    crosslag_covs(kf_ws)
     p, m, n = em_ws.obs_dim, em_ws.state_dim, em_ws.n_times
 
     # Reset sufficient statistics
@@ -2204,7 +2290,7 @@ end
 
 """
     em_estimate!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace, y::AbstractMatrix;
-                 maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false,
+                 maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false, warn::Bool=true,
                  estimate_Z::Bool=true, estimate_H::Bool=true,
                  estimate_T::Bool=true, estimate_Q::Bool=true,
                  estimate_initial::Bool=true) -> EMResult
@@ -2220,6 +2306,7 @@ Run EM algorithm to estimate state-space model parameters.
 - `maxiter`: Maximum number of EM iterations (default: 500)
 - `tol`: Convergence tolerance for log-likelihood change (default: 1e-6)
 - `verbose`: Print progress (default: false)
+- `warn`: Emit a warning when EM stops without converging (default: true)
 - `estimate_Z`: Update observation matrix Z (default: true)
 - `estimate_H`: Update observation covariance H (default: true)
 - `estimate_T`: Update transition matrix T (default: true)
@@ -2248,7 +2335,8 @@ function em_estimate!(
         estimate_initial::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
-        min_degen_iter::Int = 50
+        min_degen_iter::Int = 50,
+        warn::Bool = true
 ) where {T}
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
@@ -2262,6 +2350,9 @@ function em_estimate!(
         filter_and_smooth!(kf_ws, y)
         ll = kf_ws.loglik
         loglik_history[i] = ll
+
+        # A failed filter leaves nothing to compute the sufficient statistics from.
+        kf_ws.status == 0 || break
 
         # Check convergence
         if i > 1
@@ -2322,9 +2413,12 @@ function em_estimate!(
     # holds filter+smoother results consistent with the current parameters.
     # Only re-run when we exhausted maxiter without converging (params were
     # just updated and the workspace is stale).
-    if !converged
+    failed_at = kf_ws.status
+    if !converged && failed_at == 0
         filter_and_smooth!(kf_ws, y)
+        failed_at = kf_ws.status
     end
+    warn && _warn_em(converged, iter, failed_at, tol)
 
     return EMResult{T}(
         converged,
@@ -2338,14 +2432,30 @@ function em_estimate!(
     )
 end
 
+# Warn that an EM run stopped without converging. `failed_at` is the period in
+# which the last filter run failed, or 0.
+function _warn_em(converged::Bool, iter::Integer, failed_at::Integer, tol::Real)
+    converged && return nothing
+    if failed_at > 0
+        @warn "EM stopped at iteration $iter: $(_failure_message(failed_at)). " *
+              "Try other starting values. Pass `warn = false` to silence this warning."
+    else
+        @warn "EM did not converge in $iter iterations (relative change in the " *
+              "log-likelihood still above tol = $tol). Increase `maxiter` or pass " *
+              "`warn = false` to silence this warning."
+    end
+    return nothing
+end
+
 # `_try_degenerate!(kf_ws, em_ws, y; degen_lim, what)` — internal helper for
 # the `allow_degen` opt-in path of `em_estimate!`. Mirrors MARSS's
 # `degen.test`: for each diagonal cell of `H` (when `what === :H`) or `Q`
 # (when `what === :Q`) whose current value is below `degen_lim`, tentatively
 # zero the cell, run `filter_and_smooth!`, and commit the freeze iff loglik
 # is finite and does not decrease beyond `√eps`. On a failed freeze the prior
-# value is restored and the smoother is re-run so the workspace stays
-# consistent. Returns the number of cells frozen by this call.
+# value is restored. When any trial ran, the filter and smoother are re-run at
+# the end so the workspace matches the committed parameters. Returns the number
+# of cells frozen by this call.
 function _try_degenerate!(
         kf_ws::KalmanWorkspace{T},
         em_ws::EMWorkspace{T},
@@ -2355,6 +2465,7 @@ function _try_degenerate!(
 ) where {T}
     em_ws.H_diag_only || return 0   # only meaningful for diagonal H/Q
     n_frozen = 0
+    n_trials = 0
     ll_old = kf_ws.loglik
     isfinite(ll_old) || return 0
     threshold = T(degen_lim)
@@ -2367,17 +2478,13 @@ function _try_degenerate!(
             h_save = kf_ws.H[i, i]
             h_save < threshold || continue
             kf_ws.H[i, i] = zero(T)
-            try
-                filter_and_smooth!(kf_ws, y)
-                ll_new = kf_ws.loglik
-                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
-                    em_ws.H_zero[i] = true
-                    ll_old = ll_new
-                    n_frozen += 1
-                else
-                    kf_ws.H[i, i] = h_save
-                end
-            catch
+            n_trials += 1
+            ll_new = filter_and_smooth!(kf_ws, y)
+            if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                em_ws.H_zero[i] = true
+                ll_old = ll_new
+                n_frozen += 1
+            else
                 kf_ws.H[i, i] = h_save
             end
         end
@@ -2397,19 +2504,13 @@ function _try_degenerate!(
                 end
             end
             _update_RQR!(kf_ws)
-            try
-                filter_and_smooth!(kf_ws, y)
-                ll_new = kf_ws.loglik
-                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
-                    em_ws.Q_zero[i] = true
-                    ll_old = ll_new
-                    n_frozen += 1
-                else
-                    kf_ws.Q[i, :] .= row_save
-                    kf_ws.Q[:, i] .= col_save
-                    _update_RQR!(kf_ws)
-                end
-            catch
+            n_trials += 1
+            ll_new = filter_and_smooth!(kf_ws, y)
+            if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                em_ws.Q_zero[i] = true
+                ll_old = ll_new
+                n_frozen += 1
+            else
                 kf_ws.Q[i, :] .= row_save
                 kf_ws.Q[:, i] .= col_save
                 _update_RQR!(kf_ws)
@@ -2419,9 +2520,9 @@ function _try_degenerate!(
         throw(ArgumentError("`what` must be :H or :Q, got $what"))
     end
 
-    # Re-sync the workspace if anything was frozen so subsequent M-step calls
-    # see the up-to-date sufficient statistics.
-    if n_frozen > 0
+    # Re-sync the workspace with the committed parameters so subsequent M-step
+    # calls see the up-to-date sufficient statistics.
+    if n_trials > 0
         filter_and_smooth!(kf_ws, y)
     end
 
@@ -2680,7 +2781,8 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     Kt::Array{T, 3}          # Kalman gains (m × p × n)
     missing_mask::BitVector
     observed_mask::BitMatrix  # p × n: true where y[i,t] is observed
-    filter_valid::Bool
+    # _NOT_RUN, 0 after a successful filter run, or the period where it failed
+    filter_status::Int
 
     # Smoother cache (lazily computed)
     smoother_computed::Bool
@@ -2721,19 +2823,19 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     n = n_times
 
     # Pre-allocate filter storage
-    at = Matrix{T}(undef, m, n)
-    Pt = Array{T, 3}(undef, m, m, n)
-    att = Matrix{T}(undef, m, n)
-    Ptt = Array{T, 3}(undef, m, m, n)
-    vt = Matrix{T}(undef, p, n)
-    Ft = Array{T, 3}(undef, p, p, n)
-    Kt = Array{T, 3}(undef, m, p, n)
-    missing_mask = BitVector(undef, n)
-    observed_mask = BitMatrix(undef, p, n)
+    at = zeros(T, m, n)
+    Pt = zeros(T, m, m, n)
+    att = zeros(T, m, n)
+    Ptt = zeros(T, m, m, n)
+    vt = zeros(T, p, n)
+    Ft = zeros(T, p, p, n)
+    Kt = zeros(T, m, p, n)
+    missing_mask = falses(n)
+    observed_mask = falses(p, n)
 
     # Smoother storage (allocated but not valid until computed)
-    smoothed_alpha = Matrix{T}(undef, m, n)
-    smoothed_V = Array{T, 3}(undef, m, m, n)
+    smoothed_alpha = zeros(T, m, n)
+    smoothed_V = zeros(T, m, m, n)
 
     # Parameter storage
     n_params = length(spec.params)
@@ -2785,7 +2887,7 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         Kt,
         missing_mask,
         observed_mask,
-        false,
+        _NOT_RUN,  # filter_status
         false,
         smoothed_alpha,
         smoothed_V,
@@ -2887,7 +2989,7 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     copyto!(model.Kt, filt.Kt)
     copyto!(model.missing_mask, filt.missing_mask)
     _store_observed_mask!(model.observed_mask, filt)
-    model.filter_valid = true
+    model.filter_status = filt.failed_at
     return nothing
 end
 
@@ -2908,7 +3010,7 @@ function _ssm_copy_from_workspace!(model::StateSpaceModel, kf_ws::KalmanWorkspac
         model.missing_mask[t] = kf_ws.missing_mask[t]
     end
     copyto!(model.observed_mask, kf_ws.observed_mask)
-    model.filter_valid = true
+    model.filter_status = kf_ws.status
     return nothing
 end
 
@@ -2980,10 +3082,24 @@ end
 # ============================================
 
 function _require_filter(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError(
+    status = model.filter_status
+    status == 0 && return nothing
+    status == _NOT_RUN && throw(ArgumentError(
         "Filter not run. Call fit!(MLE(), model, y), fit!(EM(), model, y) or " *
         "kalman_filter!(model, y) first."))
-    return nothing
+    throw(ArgumentError("At the model's parameters $(_failure_message(status))."))
+end
+
+# Throw unless `y` is n_obs × n_times for `model`.
+function _check_model_obs(model::StateSpaceModel, caller, y::AbstractMatrix)
+    _check_size(caller, "y", y, (model.spec.n_obs, model.n_times))
+end
+
+# A model built with known parameters has no log-likelihood until its filter has run.
+function loglikelihood(model::StateSpaceModel)
+    _require_fitted(model)
+    model.filter_status == _NOT_RUN && _require_filter(model)
+    return model.loglik
 end
 
 filtered_states(model::StateSpaceModel) = (_require_filter(model); model.att)
@@ -3126,9 +3242,7 @@ function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "kalman_loglik", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
@@ -3150,7 +3264,8 @@ Run Kalman filter and store results in model.
 Log-likelihood value (Float64)
 
 # Side Effects
-- Sets `model.filter_valid = true`
+- Records the filter status; if an innovation covariance is not positive definite
+  the log-likelihood is `-Inf` and the filter accessors throw
 - Stores filtered/predicted states and covariances
 - Updates `model.loglik`
 
@@ -3167,9 +3282,7 @@ function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "kalman_filter!", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
@@ -3210,7 +3323,7 @@ kalman_smoother!(model)
 ```
 """
 function kalman_smoother!(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call kalman_filter! first."))
+    _require_filter(model)
 
     # Use existing internal function
     _ssm_compute_smoother!(model)
@@ -3280,9 +3393,7 @@ function fit!(
         verbose::Bool = false,
         kwargs...
 ) where {T}
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "fit!(MLE(), ...)", y)
 
     use_static = _resolve_static_choice(
         static, static_threshold,
@@ -3342,6 +3453,8 @@ Automatically selects backend based on dimensions:
 - `maxiter::Int=500`: Maximum EM iterations
 - `tol::Real=1e-6`: Convergence tolerance (relative change in log-likelihood)
 - `verbose::Bool=false`: Print progress
+- `warn::Bool=true`: Warn when EM stops without converging, either at `maxiter` or
+  because the filter failed at the current parameters
 
 # Returns
 The fitted `model` (same object, mutated)
@@ -3364,13 +3477,12 @@ function fit!(
         maxiter::Int = 500,
         tol::Real = 1e-6,
         verbose::Bool = false,
+        warn::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
         min_degen_iter::Int = 50
 ) where {T}
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "fit!(EM(), ...)", y)
     _require_no_partial_periods(y, "fit!(EM(), ...)",
         "Use fit!(MLE(), ...), which handles them.")
     Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
@@ -3385,14 +3497,13 @@ function fit!(
     # there is no n × iters multiplier to wash out the savings.
     _ssm_fit_em_inplace!(
         model, y;
-        maxiter = maxiter, tol = tol, verbose = verbose,
+        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
         allow_degen = allow_degen, degen_lim = degen_lim,
         min_degen_iter = min_degen_iter
     )
     model.backend = :em_inplace
 
     model.fitted = true
-    model.filter_valid = true
     model.smoother_computed = false
 
     return model
@@ -3405,6 +3516,7 @@ function _ssm_fit_em_inplace!(
         maxiter::Int,
         tol::Real,
         verbose::Bool,
+        warn::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
         min_degen_iter::Int = 50
@@ -3433,7 +3545,7 @@ function _ssm_fit_em_inplace!(
     # Run EM using existing em_estimate!
     em_result = em_estimate!(
         kf_ws, em_ws, y;
-        maxiter = maxiter, tol = tol, verbose = verbose,
+        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
         allow_degen = allow_degen, degen_lim = degen_lim,
         min_degen_iter = min_degen_iter
     )
@@ -4172,8 +4284,8 @@ fc.yhat  # 1 × 10 forecasts
 ```
 """
 function forecast(model::StateSpaceModel{T}, h::Int) where {T}
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+    _require_fitted(model)
+    _require_filter(model)
 
     # Get system matrices at fitted parameters
     theta_nt = _ssm_get_theta_namedtuple(model)
@@ -4724,7 +4836,8 @@ function _em_dfm!(
         y::AbstractMatrix;
         maxiter::Int = 500,
         tol::Real = 1e-6,
-        verbose::Bool = false
+        verbose::Bool = false,
+        warn::Bool = true
 ) where {T}
     N, r = dfm_ws.n_obs, dfm_ws.error_lags
 
@@ -4747,6 +4860,7 @@ function _em_dfm!(
         filter_and_smooth!(kf_ws, y_f)
         ll = kf_ws.loglik
         loglik_history[i] = ll
+        kf_ws.status == 0 || break
 
         # Check convergence
         if i > 1
@@ -4792,9 +4906,13 @@ function _em_dfm!(
         sync_params_from_ssm!(dfm_ws, kf_ws)
     end
 
-    # Final sync and filter
-    sync_params_to_ssm!(kf_ws, dfm_ws)
-    filter_and_smooth!(kf_ws, filter_data!())
+    # Final sync and filter. A failed E-step stopped the loop before the M-step,
+    # so the workspace already holds the run at the current parameters.
+    if kf_ws.status == 0
+        sync_params_to_ssm!(kf_ws, dfm_ws)
+        filter_and_smooth!(kf_ws, filter_data!())
+    end
+    warn && _warn_em(converged, iter, kf_ws.status, tol)
     if r > 0
         n = dfm_ws.n_times
         dfm_ws.y_tail .= view(y, :, (n - r + 1):n)
@@ -4945,10 +5063,9 @@ _fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 Extract smoothed factors (k × n) from fitted model.
 """
 function factors(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.αs[1:k, :]
+    return smoothed_states(model.kf_ws)[1:k, :]
 end
 
 """
@@ -4957,10 +5074,9 @@ end
 Extract smoothed factor covariances (k × k × n) from fitted model.
 """
 function factors_cov(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.Vs[1:k, 1:k, :]
+    return smoothed_states_cov(model.kf_ws)[1:k, 1:k, :]
 end
 
 """
@@ -4969,10 +5085,9 @@ end
 Extract filtered factors (k × n) from fitted model.
 """
 function filtered_factors(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.att[1:k, :]
+    return filtered_states(model.kf_ws)[1:k, :]
 end
 
 """
@@ -4981,10 +5096,9 @@ end
 Extract filtered factor covariances (k × k × n) from fitted model.
 """
 function filtered_factors_cov(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.Ptt[1:k, 1:k, :]
+    return filtered_states_cov(model.kf_ws)[1:k, 1:k, :]
 end
 
 # ============================================
@@ -5052,7 +5166,7 @@ end
 
 """
     fit!(::EM, model::DynamicFactorModel, y::AbstractMatrix;
-         maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false)
+         maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false, warn::Bool=true)
 
 Fit a dynamic factor model using the EM algorithm.
 
@@ -5065,6 +5179,7 @@ Fit a dynamic factor model using the EM algorithm.
 - `maxiter`: Maximum EM iterations (default: 500)
 - `tol`: Convergence tolerance for log-likelihood (default: 1e-6)
 - `verbose`: Print progress (default: false)
+- `warn`: Warn when EM stops without converging (default: true)
 
 # Returns
 - The fitted `model` (same object, mutated)
@@ -5088,7 +5203,8 @@ function fit!(
         y::AbstractMatrix;
         maxiter::Int = 500,
         tol::Real = 1e-6,
-        verbose::Bool = false
+        verbose::Bool = false,
+        warn::Bool = true
 ) where {T}
     N, n = size(y)
     spec = model.spec
@@ -5121,7 +5237,8 @@ function fit!(
         y;
         maxiter = maxiter,
         tol = tol,
-        verbose = verbose
+        verbose = verbose,
+        warn = warn
     )
 
     # Update model state

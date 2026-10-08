@@ -176,6 +176,12 @@ struct EKFFilterResult{T <: Real, P <: EKFParms} <: AbstractFilterResult
     Ft::Array{T, 3}         # p × p × n
     Kt::Array{T, 3}         # m × p × n
     missing_mask::BitVector
+    failed_at::Int          # 0, or the period in which the filter stopped
+end
+
+function EKFFilterResult(p::EKFParms, loglik::Real, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt,
+        missing_mask::BitVector)
+    return EKFFilterResult(p, loglik, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt, missing_mask, 0)
 end
 
 # The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
@@ -189,14 +195,14 @@ obs_matrix(::EKFFilterResult) = throw(ArgumentError(
 
 Return predicted measurements `h(a_t, t)` for t = 1:n (p × n).
 """
-predicted_observations(r::EKFFilterResult) = r.yt
+predicted_observations(r::EKFFilterResult) = _require_output(r, :predicted_observations).yt
 
 """
     measurement_jacobians(r::EKFFilterResult) -> Array{T,3}
 
 Return measurement Jacobians `∂h/∂α |_{α=a_t}` for t = 1:n (p × m × n).
 """
-measurement_jacobians(r::EKFFilterResult) = r.Zt
+measurement_jacobians(r::EKFFilterResult) = _require_output(r, :measurement_jacobians).Zt
 
 # ============================================================================
 # Element-type helper for AD compatibility

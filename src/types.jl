@@ -22,7 +22,34 @@ struct KFParms{Zt, Ht, Tt, Rt, Qt}
     T::Tt
     R::Rt
     Q::Qt
+    function KFParms{Zt, Ht, Tt, Rt, Qt}(Z, H, T, R, Q) where {Zt, Ht, Tt, Rt, Qt}
+        _check_system_dims("KFParms", Z, H, T, R, Q)
+        return new{Zt, Ht, Tt, Rt, Qt}(Z, H, T, R, Q)
+    end
 end
+
+KFParms(Z, H, T, R, Q) = KFParms{typeof(Z), typeof(H), typeof(T), typeof(R), typeof(Q)}(
+    Z, H, T, R, Q)
+
+# Throw a DimensionMismatch naming `caller` unless `size(A) == dims`.
+function _check_size(caller, name, A, dims::Tuple)
+    size(A) == dims && return nothing
+    throw(DimensionMismatch("$caller: $name must be $(join(dims, " × ")), " *
+                            "got $(join(size(A), " × "))"))
+end
+
+# Z is p × m, H p × p, T m × m, R m × r and Q r × r. Scalar systems have nothing to check.
+function _check_system_dims(caller, Z::AbstractMatrix, H::AbstractMatrix,
+        T::AbstractMatrix, R::AbstractMatrix, Q::AbstractMatrix)
+    p, m = size(Z)
+    r = size(Q, 1)
+    _check_size(caller, "H", H, (p, p))
+    _check_size(caller, "T", T, (m, m))
+    _check_size(caller, "R", R, (m, r))
+    _check_size(caller, "Q", Q, (r, r))
+    return nothing
+end
+_check_system_dims(caller, Z, H, T, R, Q) = nothing
 
 # Size utilities
 numstates(T::AbstractMatrix) = size(T, 1)
@@ -210,6 +237,18 @@ struct KalmanFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Missing data
     missing_mask::BitVector    # n: true where no row of the period was observed
     observed_mask::BitMatrix   # p × n: true where an individual value is present
+    # 0, or the period in which the filter stopped on a non-positive-definite F
+    failed_at::Int
+end
+
+function KalmanFilterResult(
+        p::KFParms, loglik::Real, at::AbstractMatrix, Pt::AbstractArray{<:Any, 3},
+        att::AbstractMatrix, Ptt::AbstractArray{<:Any, 3}, vt::AbstractMatrix,
+        Ft::AbstractArray{<:Any, 3}, Kt::AbstractArray{<:Any, 3},
+        missing_mask::BitVector, observed_mask::BitMatrix
+)
+    return KalmanFilterResult(
+        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask, 0)
 end
 
 # A result built without a per-element mask is fully observed wherever its period
@@ -218,14 +257,14 @@ function KalmanFilterResult(
         p::KFParms, loglik::Real, at::AbstractMatrix, Pt::AbstractArray{<:Any, 3},
         att::AbstractMatrix, Ptt::AbstractArray{<:Any, 3}, vt::AbstractMatrix,
         Ft::AbstractArray{<:Any, 3}, Kt::AbstractArray{<:Any, 3},
-        missing_mask::BitVector
+        missing_mask::BitVector; failed_at::Int = 0
 )
     observed_mask = BitMatrix(undef, size(vt, 1), size(vt, 2))
     for t in axes(observed_mask, 2)
         observed_mask[:, t] .= !missing_mask[t]
     end
     return KalmanFilterResult(
-        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask)
+        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask, failed_at)
 end
 
 # Accessor methods for KalmanFilterResult (the shared ones are in accessors.jl)
@@ -234,14 +273,14 @@ end
 
 Return the `p × n` mask that is true where an individual observation was present.
 """
-observed_mask(r::KalmanFilterResult) = r.observed_mask
+observed_mask(r::KalmanFilterResult) = _require_output(r, :observed_mask).observed_mask
 
 """
     observed_rows(r::KalmanFilterResult, t::Integer) -> Vector{Int}
 
 Return the indices of the rows observed in period `t`, in increasing order.
 """
-observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
+observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
 
 # ============================================
 # KalmanFilterResultScalar - Scalar version
@@ -264,6 +303,12 @@ struct KalmanFilterResultScalar{T <: Real} <: AbstractFilterResult
     vt::Vector{T}          # n: innovations
     Ft::Vector{T}          # n: innovation variances
     missing_mask::BitVector
+    failed_at::Int         # 0, or the period in which the filter stopped
+end
+
+function KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft,
+        missing_mask::BitVector) where {T}
+    return KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft, missing_mask, 0)
 end
 
 # The scalar result stores neither the system nor the gains.
@@ -409,11 +454,20 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Missing data
     missing_mask::BitVector    # n: true where no row of the period was observed
     observed_mask::BitMatrix   # p × n: true where an individual value is present
+    # 0, or the period in which the filter stopped on a non-positive-definite F
+    failed_at::Int
+end
+
+function DiffuseFilterResult(p::KFParms, loglik::Real, d::Int, at, Pt, att, Ptt,
+        Pinf_store, Pstar_store, vt, Ft, Kt, diffuse_flag::Vector{Int},
+        missing_mask::BitVector, observed_mask::BitMatrix)
+    return DiffuseFilterResult(p, loglik, d, at, Pt, att, Ptt, Pinf_store, Pstar_store,
+        vt, Ft, Kt, diffuse_flag, missing_mask, observed_mask, 0)
 end
 
 # Accessor methods for DiffuseFilterResult (the shared ones are in accessors.jl)
-observed_mask(r::DiffuseFilterResult) = r.observed_mask
-observed_rows(r::DiffuseFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
+observed_mask(r::DiffuseFilterResult) = _require_output(r, :observed_mask).observed_mask
+observed_rows(r::DiffuseFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
 
 """
     diffuse_period(r::DiffuseFilterResult) -> Int
@@ -428,7 +482,10 @@ diffuse_period(r::DiffuseFilterResult) = r.d
 Return the diffuse (Pinf) and finite (Pstar) covariances during the diffuse period.
 Both arrays have dimension m × m × d where d is the diffuse period length.
 """
-diffuse_covariances(r::DiffuseFilterResult) = (r.Pinf_store, r.Pstar_store)
+function diffuse_covariances(r::DiffuseFilterResult)
+    _require_output(r, :diffuse_covariances)
+    return (r.Pinf_store, r.Pstar_store)
+end
 
 """
     diffuse_flags(r::DiffuseFilterResult) -> Vector{Int}
@@ -439,4 +496,4 @@ Return flags indicating which type of diffuse step was used at each time point.
 - 0: Finf was zero (Fstar-based update)
 - -1: no row was observed
 """
-diffuse_flags(r::DiffuseFilterResult) = r.diffuse_flag
+diffuse_flags(r::DiffuseFilterResult) = _require_output(r, :diffuse_flags).diffuse_flag

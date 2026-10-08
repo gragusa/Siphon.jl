@@ -538,15 +538,15 @@ function kalman_filter(
     state_dim = length(a1)
     ET = _filter_eltype(p, a1, P1)
 
-    at_store = Matrix{ET}(undef, state_dim, n)
-    Pt_store = Array{ET}(undef, state_dim, state_dim, n)
-    att_store = Matrix{ET}(undef, state_dim, n)
-    Ptt_store = Array{ET}(undef, state_dim, state_dim, n)
-    vt_store = Matrix{ET}(undef, obs_dim, n)
-    Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
-    Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
-    missing_mask = BitVector(undef, n)
-    observed_mask = BitMatrix(undef, obs_dim, n)
+    at_store = fill(ET(NaN), state_dim, n)
+    Pt_store = fill(ET(NaN), state_dim, state_dim, n)
+    att_store = fill(ET(NaN), state_dim, n)
+    Ptt_store = fill(ET(NaN), state_dim, state_dim, n)
+    vt_store = fill(ET(NaN), obs_dim, n)
+    Ft_store = fill(ET(NaN), obs_dim, obs_dim, n)
+    Kt_store = fill(ET(NaN), state_dim, obs_dim, n)
+    missing_mask = falses(n)
+    observed_mask = falses(obs_dim, n)
 
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
@@ -591,7 +591,7 @@ function kalman_filter(
                 if F_val <= zero(ET)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask, t)
                 end
                 Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
@@ -602,7 +602,7 @@ function kalman_filter(
                 if !issuccess(chol_result)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask, observed_mask, t)
                 end
                 Finv = inv(chol_result)
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -682,14 +682,14 @@ function kalman_filter(
     ET = _filter_eltype(p, a1, P1)
 
     # Output storage (heap-allocated, filled with static values)
-    at_store = Matrix{ET}(undef, M, n)
-    Pt_store = Array{ET}(undef, M, M, n)
-    att_store = Matrix{ET}(undef, M, n)
-    Ptt_store = Array{ET}(undef, M, M, n)
-    vt_store = Matrix{ET}(undef, P, n)
-    Ft_store = Array{ET}(undef, P, P, n)
-    Kt_store = Array{ET}(undef, M, P, n)
-    missing_mask = BitVector(undef, n)
+    at_store = fill(ET(NaN), M, n)
+    Pt_store = fill(ET(NaN), M, M, n)
+    att_store = fill(ET(NaN), M, n)
+    Ptt_store = fill(ET(NaN), M, M, n)
+    vt_store = fill(ET(NaN), P, n)
+    Ft_store = fill(ET(NaN), P, P, n)
+    Kt_store = fill(ET(NaN), M, P, n)
+    missing_mask = falses(n)
 
     Z = SMatrix{P, M, ET}(p.Z)
     H = SMatrix{P, P, ET}(p.H)
@@ -727,6 +727,11 @@ function kalman_filter(
 
             if P == 1
                 F_val = F[1, 1]
+                if F_val <= zero(ET)
+                    return KalmanFilterResult(
+                        p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
+                        vt_store, Ft_store, Kt_store, missing_mask; failed_at = t)
+                end
                 Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
@@ -736,7 +741,7 @@ function kalman_filter(
                 if !issuccess(chol_result)
                     return KalmanFilterResult(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                        vt_store, Ft_store, Kt_store, missing_mask)
+                        vt_store, Ft_store, Kt_store, missing_mask; failed_at = t)
                 end
                 Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -797,17 +802,17 @@ function kalman_filter_scalar(
     )
 
     # Predicted state storage: n entries
-    at_store = Vector{ET}(undef, n)
-    Pt_store = Vector{ET}(undef, n)
+    at_store = fill(ET(NaN), n)
+    Pt_store = fill(ET(NaN), n)
 
     # Filtered state storage: n entries
-    att_store = Vector{ET}(undef, n)
-    Ptt_store = Vector{ET}(undef, n)
+    att_store = fill(ET(NaN), n)
+    Ptt_store = fill(ET(NaN), n)
 
     # Innovation storage: n entries
-    vt_store = Vector{ET}(undef, n)
-    Ft_store = Vector{ET}(undef, n)
-    missing_mask = BitVector(undef, n)
+    vt_store = fill(ET(NaN), n)
+    Ft_store = fill(ET(NaN), n)
+    missing_mask = falses(n)
 
     a_pred = convert(ET, a1)
     P_pred = convert(ET, P1)
@@ -840,6 +845,10 @@ function kalman_filter_scalar(
 
             v = y_t - Z * a_pred
             F = Z * P_pred * Z + H
+            if F <= zero(ET)
+                return KalmanFilterResultScalar{ET}(ET(-Inf), at_store, Pt_store,
+                    att_store, Ptt_store, vt_store, Ft_store, missing_mask, t)
+            end
             Finv = one(ET) / F
 
             loglik += -ET(0.5) * (log(F) + v^2 * Finv)
@@ -1322,15 +1331,15 @@ function kalman_filter_diffuse(
     ET = _filter_eltype(p, a1, P1_star, P1_inf)
 
     # Allocate storage
-    at_store = Matrix{ET}(undef, state_dim, n)
-    Pt_store = Array{ET}(undef, state_dim, state_dim, n)
-    att_store = Matrix{ET}(undef, state_dim, n)
-    Ptt_store = Array{ET}(undef, state_dim, state_dim, n)
-    vt_store = Matrix{ET}(undef, obs_dim, n)
-    Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
-    Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
-    missing_mask = BitVector(undef, n)
-    observed_mask = BitMatrix(undef, obs_dim, n)
+    at_store = fill(ET(NaN), state_dim, n)
+    Pt_store = fill(ET(NaN), state_dim, state_dim, n)
+    att_store = fill(ET(NaN), state_dim, n)
+    Ptt_store = fill(ET(NaN), state_dim, state_dim, n)
+    vt_store = fill(ET(NaN), obs_dim, n)
+    Ft_store = fill(ET(NaN), obs_dim, obs_dim, n)
+    Kt_store = fill(ET(NaN), state_dim, obs_dim, n)
+    missing_mask = falses(n)
+    observed_mask = falses(obs_dim, n)
 
     # Temporary storage for diffuse period (will resize at end)
     Pinf_list = Vector{Matrix{ET}}()
@@ -1349,6 +1358,7 @@ function kalman_filter_diffuse(
     n_obs_rows = 0
     diffuse_ended = false
     d = 0  # Diffuse period length
+    failed_at = 0
 
     for t in 1:n
         y_t = view(y, :, t)
@@ -1409,7 +1419,7 @@ function kalman_filter_diffuse(
             if pt == 1
                 F_val = F[1, 1]
                 if F_val <= zero(ET)
-                    loglik = ET(-Inf)
+                    failed_at = t
                     break
                 end
                 Finv = fill(one(ET) / F_val, 1, 1)
@@ -1419,7 +1429,7 @@ function kalman_filter_diffuse(
                 F_sym = Symmetric((F + F') / 2)
                 chol_result = cholesky(F_sym; check = false)
                 if !issuccess(chol_result)
-                    loglik = ET(-Inf)
+                    failed_at = t
                     break
                 end
                 Finv = inv(chol_result)
@@ -1461,7 +1471,7 @@ function kalman_filter_diffuse(
                 (a_filt, Pstar_filt, Pinf_filt, G, ll, nrows, ok) = _univariate_diffuse_step(
                     a, Pstar, Pinf, Zr, Hr, v, tol)
                 if !ok
-                    loglik = ET(-Inf)
+                    failed_at = t
                     break
                 end
                 loglik += ll
@@ -1508,7 +1518,7 @@ function kalman_filter_diffuse(
                 if pt == 1
                     Fstar_val = Fstar[1, 1]
                     if Fstar_val <= zero(ET)
-                        loglik = ET(-Inf)
+                        failed_at = t
                         break
                     end
                     Fstar_inv = fill(one(ET) / Fstar_val, 1, 1)
@@ -1518,7 +1528,7 @@ function kalman_filter_diffuse(
                     Fstar_sym = Symmetric((Fstar + Fstar') / 2)
                     chol_result = cholesky(Fstar_sym; check = false)
                     if !issuccess(chol_result)
-                        loglik = ET(-Inf)
+                        failed_at = t
                         break
                     end
                     Fstar_inv = inv(chol_result)
@@ -1565,6 +1575,7 @@ function kalman_filter_diffuse(
 
     # The Gaussian constant counts every observed scalar that contributed.
     const_term = -n_obs_rows * log(ET(2π)) / 2
+    failed_at > 0 && (loglik = ET(-Inf))
 
     return DiffuseFilterResult(
         p,
@@ -1581,7 +1592,8 @@ function kalman_filter_diffuse(
         Kt_store,
         flag_list,
         missing_mask,
-        observed_mask
+        observed_mask,
+        failed_at
     )
 end
 

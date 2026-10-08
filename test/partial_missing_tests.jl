@@ -535,8 +535,8 @@ end
 
     result = kalman_filter(parms, y, a1, P1)
     @test loglikelihood(result) == -Inf
-    @test Siphon.missing_mask(result) isa BitVector
-    @test size(Siphon.observed_mask(result)) == (2, 2)
+    @test_throws "stopped in period 1" Siphon.missing_mask(result)
+    @test_throws "stopped in period 1" Siphon.observed_mask(result)
 end
 
 @testset "partial missing — StateSpaceModel and spec paths use the observed rows" begin

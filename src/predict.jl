@@ -129,6 +129,7 @@ function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::Abstract
 end
 
 function _predict(p::KFParms, y::AbstractMatrix, filt)
+    _require_output(filt, :predict)
     n = size(y, 2)
     obs_dim = size(y, 1)
     ET = eltype(filt.at)
@@ -212,6 +213,7 @@ function forecast(
 end
 
 function _forecast(p::KFParms, y::AbstractMatrix, filt, h::Int)
+    _require_output(filt, :forecast)
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = size(filt.at, 1)
@@ -286,6 +288,7 @@ function forecast_paths(
 end
 
 function _forecast_paths(p::KFParms, y::AbstractMatrix, filt, h::Int, n_paths::Int)
+    _require_output(filt, :forecast_paths)
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = size(filt.at, 1)

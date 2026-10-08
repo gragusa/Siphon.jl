@@ -57,7 +57,7 @@ end
 """
     optimize_ekf(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
                  ad_backend=Optimization.AutoForwardDiff(),
-                 use_static=true, prob_kwargs=NamedTuple(), kwargs...)
+                 use_static=true, prob_kwargs=NamedTuple(), warn=true, kwargs...)
 
 Maximum-likelihood estimation for an `EKFSpec`. Works in unconstrained
 parameter space via `TransformVariables`. Mirrors `optimize_ssm`.
@@ -72,7 +72,8 @@ gradients. The choice of `ad_backend` here affects only the *parameter*
 gradient; the *state* Jacobian is controlled by `spec.jacobian_mode`.
 
 # Returns
-A NamedTuple with `θ` (constrained), `loglik`, `result`, and `converged`.
+A NamedTuple with `θ` (constrained), `loglik`, `result`, and `converged`. A warning is
+emitted when the optimiser does not report convergence, unless `warn = false`.
 """
 function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
         method = Optim.LBFGS(),
@@ -80,6 +81,7 @@ function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
         ad_backend = Optimization.AutoForwardDiff(),
         use_static::Bool = true,
         prob_kwargs::NamedTuple = NamedTuple(),
+        warn::Bool = true,
         kwargs...)
-    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs...)
+    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end

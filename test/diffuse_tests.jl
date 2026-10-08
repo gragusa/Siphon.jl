@@ -546,7 +546,17 @@ end
     @test Siphon.shock_dim(ws) == r_dim
     @test Siphon.n_times(ws) == n
 
-    # Check storage dimensions
+    # The filter accessors throw until the filter has run
+    @test_throws "Call kalman_filter!(ws, y) first" predicted_states(ws)
+    @test_throws "Call kalman_filter!(ws, y) first" diffuse_flags(ws)
+
+    # Check storage dimensions after a run
+    set_params!(ws, [1.0 0.0 0.0; 0.0 1.0 0.0], Matrix(1.0I, p_dim, p_dim),
+        Matrix(0.5I, m_dim, m_dim), [1.0 0.0; 0.0 1.0; 0.0 0.0],
+        Matrix(1.0I, r_dim, r_dim))
+    Siphon.set_initial_diffuse!(ws, zeros(m_dim), Matrix(1.0I, m_dim, m_dim),
+        zeros(m_dim, m_dim))
+    kalman_filter!(ws, randn(MersenneTwister(5), p_dim, n))
     @test size(predicted_states(ws)) == (m_dim, n)
     @test size(filtered_states(ws)) == (m_dim, n)
     @test size(predicted_states_cov(ws)) == (m_dim, m_dim, n)

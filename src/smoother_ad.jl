@@ -219,6 +219,7 @@ function kalman_smoother(
         T::AbstractMatrix;
         compute_crosscov::Bool = false
 )
+    _require_output(result, :kalman_smoother)
     return kalman_smoother(
         Z,
         T,
@@ -266,7 +267,7 @@ function kalman_smoother(
         compute_crosscov::Bool = false
 )
     # Run filter first
-    filt = kalman_filter(p, y, a1, P1)
+    filt = _require_output(kalman_filter(p, y, a1, P1), :kalman_smoother)
 
     # Run smoother using predicted states (at, Pt)
     result = kalman_smoother(
@@ -319,7 +320,7 @@ function kalman_filter_and_smooth(
         P1::AbstractMatrix
 )
     # Run filter
-    filt = kalman_filter(p, y, a1, P1)
+    filt = _require_output(kalman_filter(p, y, a1, P1), :kalman_smoother)
 
     # Run smoother using predicted states, passing missing_mask
     result = kalman_smoother(

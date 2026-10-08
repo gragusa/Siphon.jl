@@ -32,6 +32,7 @@ for gradient computation.
 - `ad_backend`: AD backend for gradients (default: `Optimization.AutoForwardDiff()`)
 - `use_static::Bool=true`: Use StaticArrays for small matrices (dimensions ≤ 13)
 - `prob_kwargs`: NamedTuple of kwargs passed to `OptimizationProblem`
+- `warn::Bool=true`: Warn when the optimiser does not report convergence
 - `kwargs...`: All other kwargs passed to `Optimization.solve`
 
 # Default starting values
@@ -106,16 +107,18 @@ function optimize_ssm(
         ad_backend = Optimization.AutoForwardDiff(),
         use_static::Bool = true,
         prob_kwargs::NamedTuple = NamedTuple(),
+        warn::Bool = true,
         kwargs...
 )
-    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs...)
+    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end
 
 # Maximum likelihood shared by `optimize_ssm` and `optimize_ekf`. The search runs
 # in unconstrained coordinates, but the objective is the log-likelihood alone:
 # the log-Jacobian of the transform belongs to a density over parameters, not to
 # the likelihood, and including it would move the optimum.
-function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs...)
+function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn::Bool = true,
+        kwargs...)
     t = build_transformation(spec)
     θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0, y))
 
@@ -124,12 +127,18 @@ function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; kwargs.
     optf = OptimizationFunction(negloglik, ad_backend)
     prob = OptimizationProblem(optf, θ0_u; prob_kwargs...)
     result = Optimization.solve(prob, method; kwargs...)
+    converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
+    if warn && !converged
+        @warn "Maximum likelihood optimisation did not converge (return code " *
+              "$(result.retcode)). Try other starting values (θ0) or a larger `maxiters`. " *
+              "Pass `warn = false` to silence this warning."
+    end
 
     return (
         θ = TransformVariables.transform(t, result.u),
         loglik = -result.objective,
         result = result,
-        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
+        converged = converged
     )
 end
 
@@ -203,12 +212,15 @@ function optimize_ssm_with_stderr(
         spec::SSMSpec,
         y::AbstractMatrix;
         use_static::Bool = true,
+        warn::Bool = true,
         kwargs...
 )
-    opt_result = optimize_ssm(spec, y; use_static = use_static, kwargs...)
+    opt_result = optimize_ssm(spec, y; use_static = use_static, warn = false, kwargs...)
 
-    if !opt_result.converged
-        @warn "Optimization did not converge; standard errors may be unreliable"
+    if warn && !opt_result.converged
+        @warn "Maximum likelihood optimisation did not converge (return code " *
+              "$(opt_result.result.retcode)); the standard errors may be unreliable. " *
+              "Pass `warn = false` to silence this warning."
     end
 
     t = build_transformation(spec)

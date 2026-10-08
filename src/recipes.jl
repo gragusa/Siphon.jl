@@ -222,7 +222,7 @@ function SmootherResult(
         ws::KalmanWorkspace{T};
         time::Union{AbstractVector, Nothing} = nothing
 ) where {T}
-    SmootherResult{T}(ws.αs, ws.Vs, nothing, time)
+    SmootherResult{T}(smoothed_states(ws), smoothed_states_cov(ws), nothing, time)
 end
 
 # Accessor methods
@@ -427,20 +427,20 @@ plot(ws, vars=1, level=0.90)    # State 1 with 90% CI
 
     # Select data based on what to plot
     if what === :smoothed
-        states = ws.αs
-        covs = ws.Vs
+        states = smoothed_states(ws)
+        covs = smoothed_states_cov(ws)
         plot_title = "Smoothed States"
         line_color = SMOOTHER_COLOR
         fill_color = SMOOTHER_FILL
     elseif what === :filtered
-        states = ws.att
-        covs = ws.Ptt
+        states = filtered_states(ws)
+        covs = filtered_states_cov(ws)
         plot_title = "Filtered States"
         line_color = FILTER_COLOR
         fill_color = FILTER_FILL
     else  # :predicted
-        states = ws.at
-        covs = ws.Pt
+        states = predicted_states(ws)
+        covs = predicted_states_cov(ws)
         plot_title = "Predicted States"
         line_color = PREDICTED_COLOR
         fill_color = PREDICTED_FILL

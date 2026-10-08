@@ -195,16 +195,16 @@ function ekf_filter(
     state_dim = length(a1)
     ET = _ekf_filter_eltype(p, a1, P1)
 
-    at_store = Matrix{ET}(undef, state_dim, n)
-    Pt_store = Array{ET}(undef, state_dim, state_dim, n)
-    att_store = Matrix{ET}(undef, state_dim, n)
-    Ptt_store = Array{ET}(undef, state_dim, state_dim, n)
-    yt_store = Matrix{ET}(undef, obs_dim, n)
-    Zt_store = Array{ET}(undef, obs_dim, state_dim, n)
-    vt_store = Matrix{ET}(undef, obs_dim, n)
-    Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
-    Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
-    missing_mask = BitVector(undef, n)
+    at_store = fill(ET(NaN), state_dim, n)
+    Pt_store = fill(ET(NaN), state_dim, state_dim, n)
+    att_store = fill(ET(NaN), state_dim, n)
+    Ptt_store = fill(ET(NaN), state_dim, state_dim, n)
+    yt_store = fill(ET(NaN), obs_dim, n)
+    Zt_store = fill(ET(NaN), obs_dim, state_dim, n)
+    vt_store = fill(ET(NaN), obs_dim, n)
+    Ft_store = fill(ET(NaN), obs_dim, obs_dim, n)
+    Kt_store = fill(ET(NaN), state_dim, obs_dim, n)
+    missing_mask = falses(n)
 
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
@@ -248,7 +248,7 @@ function ekf_filter(
             if F_val <= zero(ET)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
             end
             Finv = fill(one(ET) / F_val, 1, 1)
             logdetF = log(F_val)
@@ -259,7 +259,7 @@ function ekf_filter(
             if !issuccess(chol_result)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
             end
             Finv = inv(chol_result)
             logdetF = 2 * sum(log.(diag(chol_result.U)))

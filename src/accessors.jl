@@ -13,6 +13,10 @@ Every subtype supports the filter accessors `predicted_states`, `predicted_state
 `kalman_gains`, `loglikelihood`, `missing_mask`, `system_matrices`, `initial_state` and
 `initial_state_cov`. The matrix accessors `obs_matrix`, `obs_cov`, `transition_matrix`,
 `selection_matrix` and `state_cov` are available where the result stores the system.
+
+A filter stops at the first period whose innovation covariance is not positive definite.
+It then returns a result whose log-likelihood is `-Inf`. The state and innovation
+accessors of such a result throw an `ArgumentError` that names the period.
 """
 abstract type AbstractFilterResult end
 
@@ -27,6 +31,11 @@ smoother accessors `smoothed_states`, `smoothed_states_cov` and `crosslag_covs`,
 hold values after `kalman_smoother!` (or `ekf_smoother!`) has run.
 
 The accessors return the workspace's own storage, not copies: the next run overwrites them.
+
+Before the first filter run, and after a run that stopped on an innovation covariance
+that was not positive definite, the accessors throw an `ArgumentError`. After a failed
+run `loglikelihood` returns `-Inf`. The smoother accessors also throw until the smoother
+has run on the current filter output.
 """
 abstract type AbstractFilterWorkspace end
 
@@ -36,6 +45,44 @@ const _FilterOutput = Union{AbstractFilterResult, AbstractFilterWorkspace}
 # `missing_mask` hold the filter output. Workspaces that wrap another one override it.
 _filter_store(x::_FilterOutput) = x
 
+# Run status of a filter output: 0 after a successful run, t > 0 when the run stopped
+# in period t because an innovation covariance was not positive definite, and
+# `_NOT_RUN` for a workspace that no filter has written to yet.
+const _NOT_RUN = -1
+_run_status(r::AbstractFilterResult) = r.failed_at
+_run_status(ws::AbstractFilterWorkspace) = _filter_store(ws).status
+
+# The calls named in error messages.
+_filter_call(::AbstractFilterWorkspace) = "kalman_filter!(ws, y)"
+_smoother_call(::AbstractFilterWorkspace) = "kalman_smoother!(ws)"
+
+function _failure_message(status::Integer)
+    return "the filter stopped in period $status because the innovation covariance " *
+           "was not positive definite, so the log-likelihood is -Inf and the filter " *
+           "output is not available"
+end
+
+# Throw unless `x` holds the output of a successful filter run.
+function _require_output(x::_FilterOutput, f::Symbol)
+    status = _run_status(x)
+    status == 0 && return x
+    status == _NOT_RUN && throw(ArgumentError(
+        "$f: the workspace holds no filter output. Call $(_filter_call(x)) first."))
+    throw(ArgumentError("$f: $(_failure_message(status))."))
+end
+
+# The storage of `x`, after checking that it holds the output of a successful run.
+_output(x::_FilterOutput, f::Symbol) = _filter_store(_require_output(x, f))
+
+# Throw unless the smoother has run on the current filter output of `ws`.
+function _require_smoothed(ws::AbstractFilterWorkspace, f::Symbol)
+    _require_output(ws, f)
+    _filter_store(ws).smoothed || throw(ArgumentError(
+        "$f: the smoother has not run on this filter output. " *
+        "Call $(_smoother_call(ws)) first."))
+    return ws
+end
+
 """
     predicted_states(x) -> Matrix
 
@@ -43,7 +90,7 @@ Return the predicted state means E[αₜ | y₁:ₜ₋₁] for t = 1:n (m × n).
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-predicted_states(x::_FilterOutput) = _filter_store(x).at
+predicted_states(x::_FilterOutput) = _output(x, :predicted_states).at
 
 """
     predicted_states_cov(x) -> Array{T,3}
@@ -52,7 +99,7 @@ Return the predicted state covariances Var[αₜ | y₁:ₜ₋₁] for t = 1:n (
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-predicted_states_cov(x::_FilterOutput) = _filter_store(x).Pt
+predicted_states_cov(x::_FilterOutput) = _output(x, :predicted_states_cov).Pt
 
 """
     filtered_states(x) -> Matrix
@@ -61,7 +108,7 @@ Return the filtered state means E[αₜ | y₁:ₜ] for t = 1:n (m × n).
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-filtered_states(x::_FilterOutput) = _filter_store(x).att
+filtered_states(x::_FilterOutput) = _output(x, :filtered_states).att
 
 """
     filtered_states_cov(x) -> Array{T,3}
@@ -70,7 +117,7 @@ Return the filtered state covariances Var[αₜ | y₁:ₜ] for t = 1:n (m × m 
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-filtered_states_cov(x::_FilterOutput) = _filter_store(x).Ptt
+filtered_states_cov(x::_FilterOutput) = _output(x, :filtered_states_cov).Ptt
 
 """
     prediction_errors(x) -> Matrix
@@ -81,7 +128,7 @@ the observed rows are packed into the leading rows; see `observed_rows`.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-prediction_errors(x::_FilterOutput) = _filter_store(x).vt
+prediction_errors(x::_FilterOutput) = _output(x, :prediction_errors).vt
 
 """
     prediction_errors_cov(x) -> Array{T,3}
@@ -91,7 +138,7 @@ observed periods are packed into the leading block, as in [`prediction_errors`](
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-prediction_errors_cov(x::_FilterOutput) = _filter_store(x).Ft
+prediction_errors_cov(x::_FilterOutput) = _output(x, :prediction_errors_cov).Ft
 
 """
     kalman_gains(x) -> Array{T,3}
@@ -100,16 +147,20 @@ Return the Kalman gains Kₜ for t = 1:n (m × p × n). Zero for periods with no
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-kalman_gains(x::_FilterOutput) = _filter_store(x).Kt
+kalman_gains(x::_FilterOutput) = _output(x, :kalman_gains).Kt
 
 """
     loglikelihood(x) -> Real
 
-Return the log-likelihood of the observed data.
+Return the log-likelihood of the observed data. It is `-Inf` when the filter stopped on
+an innovation covariance that was not positive definite.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-loglikelihood(x::_FilterOutput) = _filter_store(x).loglik
+function loglikelihood(x::_FilterOutput)
+    _run_status(x) == _NOT_RUN && _require_output(x, :loglikelihood)
+    return _filter_store(x).loglik
+end
 
 """
     missing_mask(x) -> BitVector
@@ -119,7 +170,7 @@ partially observed periods, see `observed_mask`.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-missing_mask(x::_FilterOutput) = _filter_store(x).missing_mask
+missing_mask(x::_FilterOutput) = _output(x, :missing_mask).missing_mask
 
 """
     smoothed_states(x) -> Matrix
@@ -129,7 +180,8 @@ Return the smoothed state means E[αₜ | y₁:ₙ] for t = 1:n (m × n).
 On a workspace this needs a prior `kalman_smoother!` run. On a fitted model the smoother
 runs on first use and its output is cached.
 """
-smoothed_states(ws::AbstractFilterWorkspace) = _filter_store(ws).αs
+smoothed_states(ws::AbstractFilterWorkspace) =
+    _filter_store(_require_smoothed(ws, :smoothed_states)).αs
 
 """
     smoothed_states_cov(x) -> Array{T,3}
@@ -139,7 +191,8 @@ Return the smoothed state covariances Var[αₜ | y₁:ₙ] for t = 1:n (m × m 
 On a workspace this needs a prior `kalman_smoother!` run. On a fitted model the smoother
 runs on first use and its output is cached.
 """
-smoothed_states_cov(ws::AbstractFilterWorkspace) = _filter_store(ws).Vs
+smoothed_states_cov(ws::AbstractFilterWorkspace) =
+    _filter_store(_require_smoothed(ws, :smoothed_states_cov)).Vs
 
 """
     crosslag_covs(ws) -> Array{T,3}
@@ -147,7 +200,13 @@ smoothed_states_cov(ws::AbstractFilterWorkspace) = _filter_store(ws).Vs
 Return the smoothed cross-lag covariances Cov[αₜ₊₁, αₜ | y₁:ₙ] for t = 1:n−1
 (m × m × (n−1)). Needs a prior `kalman_smoother!(ws; crosscov = true)` run.
 """
-crosslag_covs(ws::AbstractFilterWorkspace) = _filter_store(ws).Pcross
+function crosslag_covs(ws::AbstractFilterWorkspace)
+    store = _filter_store(_require_smoothed(ws, :crosslag_covs))
+    store.crosscov || throw(ArgumentError(
+        "crosslag_covs: the last smoother run skipped the cross-lag covariances. " *
+        "Call kalman_smoother!(ws; crosscov = true)."))
+    return store.Pcross
+end
 
 """
     system_matrices(x) -> KFParms
