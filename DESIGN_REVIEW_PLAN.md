@@ -289,10 +289,20 @@ Other author answers, verbatim:
   - **Affects:** `local_linear_trend(diffuse=:exact)`, `arma(...; diffuse=:exact)` with m ≥ 2, and any multi-step exact diffuse.
   - **Also review:** the functional diffuse `P_filt = P* − P* Z' Finf⁻¹ Z P*` (it uses Finf⁻¹ where DK's filtered covariance differs), and why `Kt` stores Kinf in the functional filter but Kstar in the in-place one.
   - **Fix:** flip both signs, flip the pin "exact diffuse update after a step with nonzero Pstar" in `known_bugs_tests.jl` and move it to `diffuse_tests.jl`. Then drop the asymmetry comment on `M` in `kalman_filter_diffuse!`, or keep the safer form.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-036
 - **Cluster**: correctness
 - **Notes**:
+  - **Functional** (`kalman_loglik_diffuse`, `kalman_filter_diffuse`): both signs are flipped to the DK form (`Kstar = (T P* Z' − Kinf F*) Finf⁻¹`, `P* ← T P* Linf' − Kinf Finf Kstar' + RQR`).
+  - **Filtered covariance in a Finf-invertible step**, now the κ → ∞ limit `P* − A M*' − M* A' + A F* A'` with `A = P∞ Z' F∞⁻¹`. The functional filter used `P* − M* F∞⁻¹ M*'`; the in-place one stored `P*`.
+  - **In-place** flag-1 branch, rewritten around `A`:
+    - it stores `K⁽⁰⁾ = T A` in `Kt` (it used to store Kstar), matching the functional filter;
+    - it updates `P∞ ← T (P∞ − A M∞') T'`, and predicts `a ← T aₜ|ₜ`, `P* ← T P*ₜ|ₜ T' + RQR` as the standard branch does (algebraically the DK recursion);
+    - it uses 5-arg `mul!` and no Kstar/Linf buffers; `tmp_mm_diff2` is now used only in the singular branch.
+  - The asymmetry comment on `M` in the standard in-place branch is dropped; the code (`Pstar Z'` then `rdiv!`) is kept.
+  - **Docs:** the `DiffuseFilterResult` docstring documents what `Pt`/`Ptt`/`Ft`/`Kt` hold during the diffuse period and the `-1` flag. This covers the CHUNK-027 "document `-1`" item for the result type.
+  - **Tests:** the pin moved to `diffuse_tests.jl` ("multi-step diffuse period matches the approximate limit"). It checks d = 2, `Pt[d+1]`, `Ptt[d]` and the tail loglik against κ = 1e8; `Pt` symmetry; `Pt[t+1] = T Ptt[t] T' + RQR` for all t; and functional vs in-place on `Pt`/`Ptt`/`Kt`.
+  - **Behaviour change:** exact-diffuse likelihoods and states change for every model whose diffuse period is longer than one step (e.g. `local_linear_trend(diffuse=:exact)`, multi-state `arma(...; diffuse=:exact)`). d = 1 models (Nile) are unchanged. No pinned reference values moved.
 
 ### CHUNK-039: exact-diffuse-singular-finf
 - **Kind**: `implement`
@@ -712,6 +722,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-010 (fix-isolated-bugs) → next: CHUNK-011
 - 2026-10-08 CHUNK-011 (fix-dfm-em-variance-update) → next: CHUNK-036
 - 2026-10-08 CHUNK-036 (partial-periods-in-exact-diffuse-filters) → next: CHUNK-038
+- 2026-10-08 CHUNK-038 (fix-exact-diffuse-update-sign) → next: CHUNK-039
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

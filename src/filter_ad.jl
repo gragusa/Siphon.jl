@@ -1042,18 +1042,19 @@ function kalman_loglik_diffuse(
             (flag, Finf_inv) = _safe_inverse(Finf, tol)
 
             if flag == 1
-                # Finf is invertible: exact diffuse update
+                # Finf is invertible: exact diffuse update (Durbin & Koopman 2012,
+                # §5.2), with Kinf = K⁽⁰⁾ and Kstar = K⁽¹⁾
                 Kinf = p.T * Pinf * Zr' * Finf_inv
                 Linf = p.T - Kinf * Zr
                 Fstar = Zr * Pstar * Zr' + Hr
-                Kstar = (p.T * Pstar * Zr' + Kinf * Fstar) * Finf_inv
+                Kstar = (p.T * Pstar * Zr' - Kinf * Fstar) * Finf_inv
 
                 # State update
                 a = p.T * a + Kinf * v
 
                 # Covariance updates
                 Pinf_new = p.T * Pinf * Linf'
-                Pstar_new = p.T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
+                Pstar_new = p.T * Pstar * Linf' - Kinf * Finf * Kstar' + RQR
 
                 Pinf = Pinf_new
                 Pstar = Pstar_new
@@ -1309,27 +1310,30 @@ function kalman_filter_diffuse(
             d += 1
 
             if flag == 1
-                # Finf invertible
+                # Finf invertible: exact diffuse update (Durbin & Koopman 2012,
+                # §5.2), with Kinf = K⁽⁰⁾ and Kstar = K⁽¹⁾
                 Kinf = p.T * Pinf * Zr' * Finf_inv
                 Linf = p.T - Kinf * Zr
                 Fstar = Zr * Pstar * Zr' + Hr
-                Kstar = (p.T * Pstar * Zr' + Kinf * Fstar) * Finf_inv
+                Kstar = (p.T * Pstar * Zr' - Kinf * Fstar) * Finf_inv
 
                 # Finf is stored as the innovation covariance during the diffuse period
                 _store_innovations!(vt_store, Ft_store, Kt_store, t, v, Finf, Kinf)
 
-                # Filtered state (use Kinf for gain in filtered estimate)
-                # During diffuse: a_filt = a + Pinf * Z' * Finf_inv * v
-                a_filt = a + Pinf * Zr' * Finf_inv * v
-                # P_filt approximation during diffuse
-                P_filt = Pstar - Pstar * Zr' * Finf_inv * Zr * Pstar
+                # Filtered state and the finite part of its covariance: the κ → ∞
+                # limit of a + P Z' F⁻¹ v and P - P Z' F⁻¹ Z P with
+                # P = κ Pinf + Pstar, where A = Pinf Z' Finf⁻¹.
+                M_star = Pstar * Zr'
+                A = Pinf * Zr' * Finf_inv
+                a_filt = a + A * v
+                P_filt = Pstar - A * M_star' - M_star * A' + A * Fstar * A'
 
                 att_store[:, t] = a_filt
                 Ptt_store[:, :, t] = P_filt
 
                 a = p.T * a + Kinf * v
                 Pinf = p.T * Pinf * Linf'
-                Pstar = p.T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
+                Pstar = p.T * Pstar * Linf' - Kinf * Finf * Kstar' + RQR
 
             else
                 # Finf singular, use Fstar

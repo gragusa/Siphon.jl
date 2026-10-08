@@ -121,6 +121,51 @@ end
     @test d >= 2  # Need at least 2 observations to identify both states
 end
 
+@testset "Diffuse filter - multi-step diffuse period matches the approximate limit" begin
+    # A local linear trend has d = 2, so the second diffuse step starts from a
+    # nonzero Pstar. After the diffuse period the exact filter is the κ → ∞ limit
+    # of the approximate one; the approximate likelihood of periods d+1:n is the
+    # difference of two full-sample likelihoods.
+    rng = MersenneTwister(8901)
+    n = 40
+    y = cumsum(cumsum(randn(rng, 1, n); dims = 2); dims = 2) .+ 5 .* randn(rng, 1, n)
+    p = KFParms([1.0 0.0], [25.0;;], [1.0 1.0; 0.0 1.0], Matrix(1.0I, 2, 2),
+        [1.0 0.0; 0.0 0.1])
+    a1, P1_star, P1_inf = zeros(2), zeros(2, 2), Matrix(1.0I, 2, 2)
+    res = kalman_filter(p, y, a1, P1_star, P1_inf)
+    d = diffuse_period(res)
+    @test d == 2
+    @test diffuse_flags(res) == [1, 1]
+
+    P_big = 1e8 * Matrix(1.0I, 2, 2)
+    approx = kalman_filter(p, y, a1, P_big)
+    @test res.Pt[:, :, d + 1] ≈ approx.Pt[:, :, d + 1] rtol = 1e-5
+    @test res.loglik ≈ kalman_loglik(p, y, a1, P_big) -
+                       kalman_loglik(p, y[:, 1:d], a1, P_big) rtol = 1e-6
+    @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
+    @test predicted_states(res)[:, (d + 1):end] ≈ predicted_states(approx)[:, (d + 1):end] rtol = 1e-5
+
+    # The last diffuse step resolves every diffuse direction, so its filtered
+    # covariance is finite and matches the limit too.
+    @test res.Ptt[:, :, d] ≈ approx.Ptt[:, :, d] rtol = 1e-5
+
+    # Covariances stay symmetric, and the stored filtered covariance predicts the
+    # next period's covariance in every period, diffuse or not.
+    RQR = p.R * p.Q * p.R'
+    @test all(t -> res.Pt[:, :, t] ≈ res.Pt[:, :, t]', 1:n)
+    @test all(t -> res.Pt[:, :, t + 1] ≈ p.T * res.Ptt[:, :, t] * p.T' + RQR, 1:(n - 1))
+
+    # The in-place filter stores the same quantities, including the diffuse-period
+    # gain K⁽⁰⁾ and filtered covariance.
+    ws = DiffuseKalmanWorkspace(p.Z, p.H, p.T, p.R, p.Q, a1, P1_star, P1_inf, n)
+    @test kalman_filter!(ws, y) ≈ res.loglik
+    @test predicted_states(ws) ≈ predicted_states(res)
+    @test filtered_states(ws) ≈ filtered_states(res)
+    @test variances_predicted_states(ws) ≈ res.Pt
+    @test variances_filtered_states(ws) ≈ res.Ptt
+    @test kalman_gains(ws) ≈ kalman_gains(res)
+end
+
 @testset "Diffuse filter - missing data handling" begin
     Random.seed!(4567)
 

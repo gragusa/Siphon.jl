@@ -471,6 +471,12 @@ observed rows are `findall(view(observed_mask, :, t))`.
 During the diffuse period (t ≤ d):
 - If `diffuse_flag[t] == 1`: Finf was invertible, used exact diffuse update
 - If `diffuse_flag[t] == 0`: Finf was singular, used Fstar-based update
+- If `diffuse_flag[t] == -1`: no row was observed
+
+`Pt` and `Ptt` hold the finite parts of the predicted and filtered covariances
+(the diffuse parts of the predicted covariance are in `Pinf_store`). In an exact
+diffuse step `Ft` holds `Finf = Z Pinf Z'` and `Kt` holds the gain
+`K⁽⁰⁾ = T Pinf Z' Finf⁻¹` that updates the state, following Durbin & Koopman (2012, §5.2).
 
 After the diffuse period (t > d), standard Kalman filter recursion is used.
 

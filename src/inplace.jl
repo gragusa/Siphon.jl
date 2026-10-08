@@ -1390,30 +1390,35 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
         if flag == 1
             # === Finf invertible: exact diffuse update, no likelihood term ===
+            # Durbin & Koopman (2012, §5.2). With A = Pinf * Z_t' * Finf^{-1},
+            # the filtered state and the finite part of its covariance are the
+            # κ → ∞ limits of the update with P = κ Pinf + Pstar:
+            #   a_filt     = a + A v
+            #   Pstar_filt = Pstar - A Mstar' - Mstar A' + A Fstar A'
+            #   Pinf_filt  = Pinf - A Minf'
+            # where Minf = Pinf Z_t' and Mstar = Pstar Z_t'. Predicting each
+            # through T gives the K⁽⁰⁾/K⁽¹⁾ recursion.
+            Minf = view(base.tmp_mp, :, 1:pt)
+            mul!(Minf, ws.Pinf, transpose(Zr))
+            A = view(ws.tmp_mp_diff, :, 1:pt)
+            mul!(A, Minf, Finf_inv)
 
-            # Filtered state: a_filt = a + Pinf * Z_t' * Finf^{-1} * v
-            PZt = view(base.tmp_mp, :, 1:pt)
-            mul!(PZt, ws.Pinf, transpose(Zr))                 # Pinf * Z_t'
-            mul!(tmp_p2r, Finf_inv, v_t)
-            mul!(base.tmp_m2, PZt, tmp_p2r)
+            # a_filt = a + A v
+            mul!(base.tmp_m2, A, v_t)
             for i in 1:m
                 att_view[i] = a_curr[i] + base.tmp_m2[i]
             end
-            # Filtered covariance: the finite part only
-            copyto!(Ptt_view, ws.Pstar)
 
-            # Kinf = T * Pinf * Z_t' * Finf^{-1}
-            Kinf = view(ws.tmp_mp_diff, :, 1:pt)
-            mul!(Kinf, base.Tmat, PZt)
-            mul!(PZt, Kinf, Finf_inv)
-            copyto!(Kinf, PZt)
+            # Kinf = K⁽⁰⁾ = T A, stored as the gain during the diffuse period,
+            # with Finf as the innovation covariance.
+            mul!(K_t, base.Tmat, A)
+            copyto!(view(Ft_view, 1:pt, 1:pt), Finf)
 
-            # Linf = T - Kinf * Z_t
-            mul!(ws.tmp_mm_diff1, Kinf, Zr)
-            for j in 1:m, i in 1:m
-
-                ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
-            end
+            # Pinf = T (Pinf - A Minf') T'
+            copyto!(ws.tmp_mm_diff1, ws.Pinf)
+            mul!(ws.tmp_mm_diff1, A, transpose(Minf), -one(T), one(T))
+            mul!(base.tmp_mm2, base.Tmat, ws.tmp_mm_diff1)
+            mul!(ws.Pinf, base.tmp_mm2, Tt)
 
             # Fstar = Z_t * Pstar * Z_t' + H_t
             Fstar = view(ws.tmp_pp_diff, 1:pt, 1:pt)
@@ -1421,36 +1426,23 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
             mul!(Fstar, ZrP, transpose(Zr))
             Fstar .+= Hr
 
-            # Kstar = (T * Pstar * Z_t' + Kinf * Fstar) * Finf^{-1}, stored in Kt
-            mul!(PZt, ws.Pstar, transpose(Zr))
-            mul!(K_t, base.Tmat, PZt)
-            mul!(PZt, Kinf, Fstar)
-            K_t .+= PZt
-            mul!(PZt, K_t, Finf_inv)
-            copyto!(K_t, PZt)
+            # Pstar_filt = Pstar - A Mstar' - Mstar A' + A Fstar A'
+            Mstar = Minf                              # Minf is no longer needed
+            mul!(Mstar, ws.Pstar, transpose(Zr))
+            copyto!(Ptt_view, ws.Pstar)
+            mul!(Ptt_view, A, transpose(Mstar), -one(T), one(T))
+            mul!(Ptt_view, Mstar, transpose(A), -one(T), one(T))
+            AF = Mstar                                # Mstar is no longer needed
+            mul!(AF, A, Fstar)
+            mul!(Ptt_view, AF, transpose(A), one(T), one(T))
 
-            # Finf is stored as the innovation covariance during the diffuse period
-            copyto!(view(Ft_view, 1:pt, 1:pt), Finf)
-
-            # State prediction: a = T * a + Kinf * v
-            mul!(base.tmp_m2, base.Tmat, a_curr)
-            mul!(a_curr, Kinf, v_t)
-            a_curr .+= base.tmp_m2
-
-            # Pinf = T * Pinf * Linf'
-            mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-            mul!(ws.tmp_mm_diff2, base.tmp_mm2, ws.tmp_mm_diff1')
-            copyto!(ws.Pinf, ws.tmp_mm_diff2)
-
-            # Pstar = T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
-            mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-            mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')
-            mul!(PZt, Kinf, Finf)
-            mul!(ws.tmp_mm_diff2, PZt, K_t')
+            # Predict next: a = T * a_filt, Pstar = T * Pstar_filt * T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
             for j in 1:m, i in 1:m
 
-                ws.Pstar[i, j] = base.tmp_mm3[i, j] + ws.tmp_mm_diff2[i, j] +
-                                 base.RQR[i, j]
+                ws.Pstar[i, j] += base.RQR[i, j]
             end
         else
             # === Standard update on Pstar ===
@@ -1488,9 +1480,7 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
             end
             base.loglik += -T(0.5) * (logdetF + quad_form)
 
-            # M = Pstar * Z_t' * F^{-1} (m×pt). Formed from Pstar * Z_t' rather
-            # than transposing F^{-1} * Z_t * Pstar: the exact diffuse step can
-            # leave Pstar asymmetric, and the two then differ.
+            # M = Pstar * Z_t' * F^{-1} (m×pt)
             Mr = view(base.tmp_mp, :, 1:pt)
             mul!(Mr, ws.Pstar, transpose(Zr))
             rdiv!(Mr, L_lower')
