@@ -332,6 +332,9 @@ include("diffuse_tests.jl")
 # Extended Kalman Filter tests
 include("ekf_tests.jl")
 
+# Accessors shared by results, workspaces and models
+include("accessor_tests.jl")
+
 # Per-element (partially observed period) missing data
 include("partial_missing_tests.jl")
 

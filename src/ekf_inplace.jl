@@ -87,7 +87,8 @@ In-place workspace for Extended Kalman Filter operations. Mirrors
 Construct via `EKFWorkspace(p::EKFParms, a1, P1, n)` or by passing the system
 matrices and measurement object directly.
 """
-mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache}
+mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <:
+               AbstractFilterWorkspace
     # Dimensions
     obs_dim::Int      # p
     state_dim::Int    # m
@@ -727,16 +728,12 @@ end
 # Accessors (mirror KalmanWorkspace where possible)
 # ============================================================================
 
-predicted_states(ws::EKFWorkspace) = ws.at
-variances_predicted_states(ws::EKFWorkspace) = ws.Pt
-filtered_states(ws::EKFWorkspace) = ws.att
-variances_filtered_states(ws::EKFWorkspace) = ws.Ptt
-prediction_errors(ws::EKFWorkspace) = ws.vt
-variances_prediction_errors(ws::EKFWorkspace) = ws.Ft
-kalman_gains(ws::EKFWorkspace) = ws.Kt
-loglikelihood(ws::EKFWorkspace) = ws.loglik
+# The shared accessors are in accessors.jl.
 predicted_observations(ws::EKFWorkspace) = ws.yt
 measurement_jacobians(ws::EKFWorkspace) = ws.Zt
-smoothed_states(ws::EKFWorkspace) = ws.αs
-variances_smoothed_states(ws::EKFWorkspace) = ws.Vs
-crosslag_covs(ws::EKFWorkspace) = ws.Pcross
+
+system_matrices(ws::EKFWorkspace) =
+    EKFParms(ws.measurement, ws.jacobian_mode, ws.H, ws.Tmat, ws.R, ws.Q)
+obs_matrix(::EKFWorkspace) = throw(ArgumentError(
+    "the extended Kalman filter has no observation matrix; " *
+    "use measurement_jacobians for the linearisation at each period"))

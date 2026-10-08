@@ -4,28 +4,31 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-037: fix-dfm-ar-error-loadings
-`DynamicFactorModel` with AR idiosyncratic errors no longer puts the errors in the state with `H = 0`, which made the EM loadings update a fixed point. The observation equation is now quasi-differenced (`X̃ₜ = λ(L)(1 − δ(L)L) fₜ + vₜ`, `H = diag(σ²)`), and the EM alternates loadings, δ and σ² (ECM). Forecasting with AR errors iterates an augmented state of factors plus the last r observations.
+CHUNK-012: introduce-abstract-supertypes-and-accessor-vocabulary (first breaking chunk)
+Filter results subtype `AbstractFilterResult` and the in-place workspaces subtype `AbstractFilterWorkspace`. The accessors live once in `src/accessors.jl` and read through `_filter_store`. The `variances_*` names became `*_cov`. `system_matrices` returns a `KFParms`/`EKFParms` everywhere, `parameters` is θ on models only, and there are new `initial_state`/`initial_state_cov`. The single-matrix setters are now `set_Z!`…`set_Q!`. `docs/src/conversion_guide.md` was created.
 
 ## Key decisions / shim choices
-- With AR errors the likelihood is conditional on the first r observations. A period contributes only if it and its r predecessors are observed. Documented in the `fit!` docstring and the DFM tutorial.
-- The shock dimension is now k for all DFMs (R = [I_k; 0], Q = Σ_η). The unused idiosyncratic shock columns were dropped.
-- Internal helpers `compute_error_sufficient_stats!` and `update_ar_errors!` were replaced by `_update_dfm_ar!`. Workspace fields changed (all internal, none exported).
+- No shims (author: "forget about breaking").
+- `system_matrices(model)` returns `KFParms` instead of a NamedTuple; field access is unchanged.
+- `obs_matrix` … `state_cov` are untyped generics `f(x) = system_matrices(x).Z` etc. Any type with `system_matrices` gets them.
+- `AbstractStateSpaceModel` owns `isfitted`/`isconverged`/`niterations`/`loglikelihood` via `_require_fitted` + `_fit_hint`.
 
 ## State of the codebase
-- Files modified: `src/inplace.jl`, `test/dfm_tests.jl`, `test/known_bugs_tests.jl`, `docs/src/tutorials/dynamic_factor.md`
-- Test suite: pass (`Pkg.test()`); Known bugs shows 2 broken pins (profile_em_ssm θ, EM diagonal T)
+- Files modified: src/{accessors.jl (new), Siphon.jl, types.jl, filter_ad.jl, ekf_types.jl, ekf_inplace.jl, inplace.jl, recipes.jl}; test/{accessor_tests.jl (new), runtests.jl, arma_tests.jl, diffuse_tests.jl, partial_missing_tests.jl, recipe_tests.jl, simsmooth_tests.jl}; docs/{make.jl, src/conversion_guide.md (new), src/api/optimization.md, src/tutorials/ekf.md, src/tutorials/visualization.md}
+- Test suite: pass (`Pkg.test()`), 2 broken pins unchanged, Aqua 10/10
 - Ambiguity count: 0 (no change)
 - Staged but uncommitted: yes
 
 ## Cluster status
-- correctness: 11 of 11 complete
+- type-hierarchy: 1 of 3 complete (CHUNK-013, CHUNK-014 remain; CHUNK-014 is api-unification but depends on 012)
 
 ## Next chunk
-CHUNK-012: introduce-abstract-supertypes-and-accessor-vocabulary. This is the first breaking chunk. It adds the abstract result and workspace types, one accessor vocabulary (`filtered_states_cov` style), `parameters` / `system_matrices` semantics, and renames the setter `update_*!` functions that collide with the EM M-step names. It must create `docs/src/conversion_guide.md` and add it to `docs/make.jl`.
+CHUNK-013: apply-failure-model. Apply policy (i)–(v): no uninitialised arrays, `DimensionMismatch` in place of `@assert`, accessors on unrun workspaces throw, a convergence `@warn`, and so on.
 
 ## Watch out for
-- CHUNK-012 renames the single-matrix setters `update_Z!` … `update_Q!` (inplace.jl ~505-519), which share names with the EM M-step functions the DFM still calls (`update_T!`, `update_Q!`, `update_Z!`, `update_H!`).
-- The DFM tests use `Random.seed!(3)` before construction because the initial loadings use the global RNG. A CHUNK-022/026 `rng` keyword should keep that draw order or update the tests.
-- New Open Questions: `compute_sufficient_stats!` has an S_αα vs S_yα period mismatch with missing periods (for CHUNK-019), and the DFM tutorial has a stray `include("src/inplace.jl")` (for CHUNK-032).
-- The `no-plan-comments.py` PostToolUse hook in the user's settings points at a missing file; it errors after every Edit or Write, but the edits apply.
+- Every breaking chunk must add rows to `docs/src/conversion_guide.md`.
+- Workspace accessors still return garbage before a run. CHUNK-013 should add a "has run" flag; the shared accessors in `accessors.jl` are the single place to check it (e.g. inside `_filter_store` or a wrapper).
+- DFM still lacks `system_matrices`/filter accessors and keeps `innovation_cov` (CHUNK-020).
+- The docs build (`docs/make.jl`) was not run this session.
+- Don't run `Pkg.develop` in `test/`. It creates `test/Project.toml` and rewrites the tracked `test/Manifest.toml`. Use `Pkg.test()`.
+- The `no-plan-comments.py` PostToolUse hook still errors after every Write (the file is missing); the edits apply.

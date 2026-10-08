@@ -163,7 +163,7 @@ EKF-specific fields:
 - `yt` — predicted measurement `h(a_t, t)` (p × n)
 - `Zt` — measurement Jacobian `∂h/∂α` evaluated at `a_t` (p × m × n)
 """
-struct EKFFilterResult{T <: Real, P <: EKFParms}
+struct EKFFilterResult{T <: Real, P <: EKFParms} <: AbstractFilterResult
     p::P
     loglik::T
     at::Matrix{T}           # m × n
@@ -178,20 +178,11 @@ struct EKFFilterResult{T <: Real, P <: EKFParms}
     missing_mask::BitVector
 end
 
-# Reuse linear accessors where possible
-parameters(r::EKFFilterResult) = r.p
-obs_cov(r::EKFFilterResult) = r.p.H
-transition_matrix(r::EKFFilterResult) = r.p.T
-selection_matrix(r::EKFFilterResult) = r.p.R
-state_cov(r::EKFFilterResult) = r.p.Q
-predicted_states(r::EKFFilterResult) = r.at
-variances_predicted_states(r::EKFFilterResult) = r.Pt
-filtered_states(r::EKFFilterResult) = r.att
-variances_filtered_states(r::EKFFilterResult) = r.Ptt
-prediction_errors(r::EKFFilterResult) = r.vt
-variances_prediction_errors(r::EKFFilterResult) = r.Ft
-kalman_gains(r::EKFFilterResult) = r.Kt
-loglikelihood(r::EKFFilterResult) = r.loglik
+# The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
+# single observation matrix.
+obs_matrix(::EKFFilterResult) = throw(ArgumentError(
+    "the extended Kalman filter has no observation matrix; " *
+    "use measurement_jacobians for the linearisation at each period"))
 
 """
     predicted_observations(r::EKFFilterResult) -> Matrix

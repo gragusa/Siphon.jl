@@ -110,7 +110,7 @@ original row each leading position corresponds to.
 - `loglik`: Log-likelihood value
 - `n_obs_valid`: Count of non-missing observations
 """
-mutable struct KalmanWorkspace{T <: Real}
+mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Dimensions
     obs_dim::Int      # p
     state_dim::Int    # m
@@ -294,86 +294,8 @@ end
 # Accessor methods for KalmanWorkspace
 # ============================================
 
-"""
-    predicted_states(ws::KalmanWorkspace) -> Matrix
-
-Return predicted state means E[αₜ | y₁:ₜ₋₁] (m × n).
-"""
-predicted_states(ws::KalmanWorkspace) = ws.at
-
-"""
-    variances_predicted_states(ws::KalmanWorkspace) -> Array{T,3}
-
-Return predicted state covariances Var[αₜ | y₁:ₜ₋₁] (m × m × n).
-"""
-variances_predicted_states(ws::KalmanWorkspace) = ws.Pt
-
-"""
-    filtered_states(ws::KalmanWorkspace) -> Matrix
-
-Return filtered state means E[αₜ | y₁:ₜ] (m × n).
-"""
-filtered_states(ws::KalmanWorkspace) = ws.att
-
-"""
-    variances_filtered_states(ws::KalmanWorkspace) -> Array{T,3}
-
-Return filtered state covariances Var[αₜ | y₁:ₜ] (m × m × n).
-"""
-variances_filtered_states(ws::KalmanWorkspace) = ws.Ptt
-
-"""
-    smoothed_states(ws::KalmanWorkspace) -> Matrix
-
-Return smoothed state means E[αₜ | y₁:ₙ] (m × n).
-Must call `kalman_smoother!(ws)` first.
-"""
-smoothed_states(ws::KalmanWorkspace) = ws.αs
-
-"""
-    variances_smoothed_states(ws::KalmanWorkspace) -> Array{T,3}
-
-Return smoothed state covariances Var[αₜ | y₁:ₙ] (m × m × n).
-Must call `kalman_smoother!(ws)` first.
-"""
-variances_smoothed_states(ws::KalmanWorkspace) = ws.Vs
-
-"""
-    prediction_errors(ws::KalmanWorkspace) -> Matrix
-
-Return prediction errors (innovations) vₜ = yₜ - Z*aₜ (p × n).
-NaN for missing observations.
-"""
-prediction_errors(ws::KalmanWorkspace) = ws.vt
-
-"""
-    variances_prediction_errors(ws::KalmanWorkspace) -> Array{T,3}
-
-Return innovation covariances Var[yₜ | y₁:ₜ₋₁] (p × p × n).
-"""
-variances_prediction_errors(ws::KalmanWorkspace) = ws.Ft
-
-"""
-    kalman_gains(ws::KalmanWorkspace) -> Array{T,3}
-
-Return Kalman gains Kₜ (m × p × n). Zero for missing observations.
-"""
-kalman_gains(ws::KalmanWorkspace) = ws.Kt
-
-"""
-    loglikelihood(ws::KalmanWorkspace) -> Real
-
-Return log-likelihood of non-missing observations.
-"""
-loglikelihood(ws::KalmanWorkspace) = ws.loglik
-
-"""
-    missing_mask(ws::KalmanWorkspace) -> BitVector
-
-Return a BitVector that is true for each period in which no row was observed.
-For periods that are partially observed, see [`observed_mask`](@ref).
-"""
-missing_mask(ws::KalmanWorkspace) = ws.missing_mask
+# The shared accessors are in accessors.jl.
+system_matrices(ws::KalmanWorkspace) = KFParms(ws.Z, ws.H, ws.Tmat, ws.R, ws.Q)
 
 """
     observed_mask(ws::KalmanWorkspace) -> BitMatrix
@@ -505,18 +427,18 @@ function update_params!(
     return ws
 end
 
-# Individual parameter updaters for fine-grained control
-update_Z!(ws::KalmanWorkspace, Z::AbstractMatrix) = (copyto!(ws.Z, Z); ws)
-update_H!(ws::KalmanWorkspace, H::AbstractMatrix) = (copyto!(ws.H, H); ws)
-update_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix) = (copyto!(ws.Tmat, Tmat); ws)
+# Single-matrix setters. The EM M-step functions are `update_Z!(kf_ws, em_ws, n)` etc.
+set_Z!(ws::KalmanWorkspace, Z::AbstractMatrix) = (copyto!(ws.Z, Z); ws)
+set_H!(ws::KalmanWorkspace, H::AbstractMatrix) = (copyto!(ws.H, H); ws)
+set_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix) = (copyto!(ws.Tmat, Tmat); ws)
 
-function update_R!(ws::KalmanWorkspace, R::AbstractMatrix)
+function set_R!(ws::KalmanWorkspace, R::AbstractMatrix)
     copyto!(ws.R, R)
     _update_RQR!(ws)
     return ws
 end
 
-function update_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
+function set_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
     copyto!(ws.Q, Q)
     _update_RQR!(ws)
     return ws
@@ -965,15 +887,6 @@ end
 # Additional Accessors (aliases and new ones)
 # ============================================
 
-"""Return cross-lag covariances Cov[αₜ₊₁,αₜ|y₁:ₙ] as view."""
-crosslag_covs(ws::KalmanWorkspace) = ws.Pcross
-
-"""Return innovations yₜ - Z*aₜ as view (alias for prediction_errors)."""
-innovations(ws::KalmanWorkspace) = ws.vt
-
-"""Return innovation covariances as view (alias for variances_prediction_errors)."""
-innovation_covs(ws::KalmanWorkspace) = ws.Ft
-
 """Return stored Cholesky factors of Ft as view."""
 cholesky_factors(ws::KalmanWorkspace) = ws.Ft_L
 
@@ -1021,7 +934,7 @@ kalman_filter_diffuse!(ws, y)
 - `kalman_filter_diffuse!`: In-place diffuse filter
 - `kalman_filter_diffuse`: Pure functional version
 """
-mutable struct DiffuseKalmanWorkspace{T <: Real}
+mutable struct DiffuseKalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Embed standard workspace (for shared functionality)
     base::KalmanWorkspace{T}
 
@@ -1156,23 +1069,15 @@ function set_initial_diffuse!(
     return ws
 end
 
-# Delegate accessors to base
+# The filter output lives in the base workspace; the shared accessors read it from there.
+_filter_store(ws::DiffuseKalmanWorkspace) = ws.base
+system_matrices(ws::DiffuseKalmanWorkspace) = system_matrices(ws.base)
+
 obs_dim(ws::DiffuseKalmanWorkspace) = ws.base.obs_dim
 state_dim(ws::DiffuseKalmanWorkspace) = ws.base.state_dim
 shock_dim(ws::DiffuseKalmanWorkspace) = ws.base.shock_dim
 n_times(ws::DiffuseKalmanWorkspace) = ws.base.n_times
 
-predicted_states(ws::DiffuseKalmanWorkspace) = ws.base.at
-variances_predicted_states(ws::DiffuseKalmanWorkspace) = ws.base.Pt
-filtered_states(ws::DiffuseKalmanWorkspace) = ws.base.att
-variances_filtered_states(ws::DiffuseKalmanWorkspace) = ws.base.Ptt
-smoothed_states(ws::DiffuseKalmanWorkspace) = ws.base.αs
-variances_smoothed_states(ws::DiffuseKalmanWorkspace) = ws.base.Vs
-prediction_errors(ws::DiffuseKalmanWorkspace) = ws.base.vt
-variances_prediction_errors(ws::DiffuseKalmanWorkspace) = ws.base.Ft
-kalman_gains(ws::DiffuseKalmanWorkspace) = ws.base.Kt
-loglikelihood(ws::DiffuseKalmanWorkspace) = ws.base.loglik
-missing_mask(ws::DiffuseKalmanWorkspace) = ws.base.missing_mask
 observed_mask(ws::DiffuseKalmanWorkspace) = ws.base.observed_mask
 observed_rows(ws::DiffuseKalmanWorkspace, t::Integer) = observed_rows(ws.base, t)
 
@@ -2667,6 +2572,38 @@ Subtypes:
 """
 abstract type AbstractStateSpaceModel end
 
+# Every model stores `fitted`, `converged`, `iterations` and `loglik`.
+_fit_hint(::AbstractStateSpaceModel) = "fit!(MLE(), model, y) or fit!(EM(), model, y)"
+
+function _require_fitted(model::AbstractStateSpaceModel)
+    model.fitted ||
+        throw(ArgumentError("Model not fitted. Call $(_fit_hint(model)) first."))
+    return nothing
+end
+
+"""
+    isfitted(model::AbstractStateSpaceModel) -> Bool
+
+Return whether the model has been fitted (or built with known parameters).
+"""
+isfitted(model::AbstractStateSpaceModel) = model.fitted
+
+"""
+    isconverged(model::AbstractStateSpaceModel) -> Bool
+
+Return whether the estimation converged. Throws if the model is not fitted.
+"""
+isconverged(model::AbstractStateSpaceModel) = (_require_fitted(model); model.converged)
+
+"""
+    niterations(model::AbstractStateSpaceModel) -> Int
+
+Return the number of estimation iterations. Throws if the model is not fitted.
+"""
+niterations(model::AbstractStateSpaceModel) = (_require_fitted(model); model.iterations)
+
+loglikelihood(model::AbstractStateSpaceModel) = (_require_fitted(model); model.loglik)
+
 # ============================================
 # StateSpaceModel
 # ============================================
@@ -2979,34 +2916,14 @@ end
 # StateSpaceModel Status Accessors
 # ============================================
 
-"""Check if model has been fitted."""
-isfitted(model::StateSpaceModel) = model.fitted
+"""
+    parameters(model::StateSpaceModel) -> NamedTuple
 
-"""Check if estimation converged. Throws if not fitted."""
-function isconverged(model::StateSpaceModel)
-    model.fitted || throw(
-        ArgumentError(
-        "Model not fitted. Call fit!(MLE(), model, y) or fit!(EM(), model, y) first.",
-    ),
-    )
-    return model.converged
-end
-
-"""Return log-likelihood at fitted parameters. Throws if not fitted."""
-function loglikelihood(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    return model.loglik
-end
-
-"""Return number of iterations. Throws if not fitted."""
-function niterations(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    return model.iterations
-end
-
-"""Return fitted parameters as NamedTuple. Throws if not fitted."""
+Return the fitted parameters θ as a NamedTuple keyed by parameter name. Throws if the
+model is not fitted.
+"""
 function parameters(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
+    _require_fitted(model)
     return _ssm_get_theta_namedtuple(model)
 end
 
@@ -3062,41 +2979,22 @@ end
 # StateSpaceModel Filter Accessors
 # ============================================
 
-"""Return filtered states E[αₜ|y₁:ₜ] (m × n). Throws if not fitted."""
-function filtered_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call fit! first."))
-    return model.att
+function _require_filter(model::StateSpaceModel)
+    model.filter_valid || throw(ArgumentError(
+        "Filter not run. Call fit!(MLE(), model, y), fit!(EM(), model, y) or " *
+        "kalman_filter!(model, y) first."))
+    return nothing
 end
 
-"""Return filtered state covariances Var[αₜ|y₁:ₜ] (m × m × n). Throws if not fitted."""
-function filtered_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Ptt
-end
-
-"""Return predicted states E[αₜ|y₁:ₜ₋₁] (m × n). Throws if not fitted."""
-function predicted_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.at
-end
-
-"""Return predicted state covariances Var[αₜ|y₁:ₜ₋₁] (m × m × n). Throws if not fitted."""
-function predicted_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Pt
-end
-
-"""Return prediction errors / innovations yₜ - E[yₜ|y₁:ₜ₋₁] (p × n). Throws if not fitted."""
-function prediction_errors(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.vt
-end
-
-"""Return innovation covariances Var[yₜ|y₁:ₜ₋₁] (p × p × n). Throws if not fitted."""
-function prediction_errors_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Ft
-end
+filtered_states(model::StateSpaceModel) = (_require_filter(model); model.att)
+filtered_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Ptt)
+predicted_states(model::StateSpaceModel) = (_require_filter(model); model.at)
+predicted_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Pt)
+prediction_errors(model::StateSpaceModel) = (_require_filter(model); model.vt)
+prediction_errors_cov(model::StateSpaceModel) = (_require_filter(model); model.Ft)
+kalman_gains(model::StateSpaceModel) = (_require_filter(model); model.Kt)
+missing_mask(model::StateSpaceModel) = (_require_filter(model); model.missing_mask)
+observed_mask(model::StateSpaceModel) = (_require_filter(model); model.observed_mask)
 
 # ============================================
 # StateSpaceModel Smoother (Lazy Computation)
@@ -3104,7 +3002,7 @@ end
 
 """Compute smoother and cache results."""
 function _ssm_compute_smoother!(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+    _require_filter(model)
     Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
         "Smoothing is not available for exact diffuse initialisation (diffuse = :exact). " *
         "Use approximate diffuse initialisation (diffuse = true) to smooth."))
@@ -3134,7 +3032,7 @@ Return smoothed states E[αₜ|y₁:ₙ] (m × n).
 Computes smoother on first call and caches the result.
 """
 function smoothed_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call fit! first."))
+    _require_filter(model)
     if !model.smoother_computed
         _ssm_compute_smoother!(model)
     end
@@ -3149,7 +3047,7 @@ Return smoothed state covariances Var[αₜ|y₁:ₙ] (m × m × n).
 Computes smoother on first call and caches the result.
 """
 function smoothed_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+    _require_filter(model)
     if !model.smoother_computed
         _ssm_compute_smoother!(model)
     end
@@ -3161,99 +3059,43 @@ end
 # ============================================
 
 """
-    obs_matrix(model::StateSpaceModel)
+    system_matrices(model::StateSpaceModel) -> KFParms
 
-Return observation matrix Z (p × m) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function obs_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.Z
-end
-
-"""
-    obs_cov(model::StateSpaceModel)
-
-Return observation noise covariance H (p × p) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function obs_cov(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.H
-end
-
-"""
-    transition_matrix(model::StateSpaceModel)
-
-Return state transition matrix T (m × m) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function transition_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.T
-end
-
-"""
-    selection_matrix(model::StateSpaceModel)
-
-Return state noise selection matrix R (m × r) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function selection_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.R
-end
-
-"""
-    state_cov(model::StateSpaceModel)
-
-Return state noise covariance Q (r × r) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function state_cov(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.Q
-end
-
-"""
-    system_matrices(model::StateSpaceModel)
-
-Return all system matrices as a NamedTuple (Z, H, T, R, Q) at fitted parameters.
-
-This is more efficient than calling individual accessors when multiple matrices are needed.
+Return the system matrices at the fitted parameters as a `KFParms` (fields `Z`, `H`,
+`T`, `R`, `Q`). Throws if the model is not fitted.
 
 # Example
 ```julia
-mats = system_matrices(model)
-mats.Z  # observation matrix
-mats.H  # observation covariance
-mats.T  # transition matrix
-mats.R  # selection matrix
-mats.Q  # state covariance
+p = system_matrices(model)
+p.Z  # observation matrix
+filt = kalman_filter(p, y, initial_state(model), initial_state_cov(model))
 ```
-
-Throws if model is not fitted.
 """
 function system_matrices(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return (Z = kfparms.Z, H = kfparms.H, T = kfparms.T, R = kfparms.R, Q = kfparms.Q)
+    _require_fitted(model)
+    return Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
+end
+
+"""
+    initial_state(model::StateSpaceModel) -> Vector
+
+Return the initial state mean a₁ at the fitted parameters. Throws if the model is not
+fitted.
+"""
+function initial_state(model::StateSpaceModel)
+    _require_fitted(model)
+    return first(Siphon.build_initial_state(model.spec, _ssm_get_theta_namedtuple(model)))
+end
+
+"""
+    initial_state_cov(model::StateSpaceModel) -> Matrix
+
+Return the initial state covariance P₁ at the fitted parameters; under exact diffuse
+initialisation, its finite part P₁*. Throws if the model is not fitted.
+"""
+function initial_state_cov(model::StateSpaceModel)
+    _require_fitted(model)
+    return last(Siphon.build_initial_state(model.spec, _ssm_get_theta_namedtuple(model)))
 end
 
 # ============================================
@@ -5091,45 +4933,7 @@ end
 # Status Accessors
 # ============================================
 
-"""
-    isfitted(model::DynamicFactorModel) -> Bool
-
-Check whether the model has been fitted.
-"""
-isfitted(model::DynamicFactorModel) = model.fitted
-
-"""
-    isconverged(model::DynamicFactorModel) -> Bool
-
-Check whether EM converged. Throws error if model not fitted.
-"""
-function isconverged(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.converged
-end
-
-"""
-    loglikelihood(model::DynamicFactorModel) -> T
-
-Return final log-likelihood. Throws error if model not fitted.
-"""
-function loglikelihood(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.loglik
-end
-
-"""
-    niterations(model::DynamicFactorModel) -> Int
-
-Return number of EM iterations. Throws error if model not fitted.
-"""
-function niterations(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.iterations
-end
+_fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 
 # ============================================
 # Factor Accessors

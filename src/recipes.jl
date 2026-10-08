@@ -227,7 +227,7 @@ end
 
 # Accessor methods
 smoothed_states(r::SmootherResult) = r.alpha
-variances_smoothed_states(r::SmootherResult) = r.V
+smoothed_states_cov(r::SmootherResult) = r.V
 
 """
     ForecastResult{T<:Real}
@@ -270,8 +270,8 @@ end
 # Accessor methods
 forecast_observations(r::ForecastResult) = r.yhat
 forecast_states(r::ForecastResult) = r.a
-variances_forecast_states(r::ForecastResult) = r.P
-variances_forecast_observations(r::ForecastResult) = r.F
+forecast_states_cov(r::ForecastResult) = r.P
+forecast_observations_cov(r::ForecastResult) = r.F
 
 # ============================================================================
 # Color Scheme

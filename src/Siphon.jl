@@ -7,6 +7,7 @@ using Random: Random, AbstractRNG, randn!
 using RecipesBase
 using SpecialFunctions: erfcinv
 
+include("accessors.jl")
 include("types.jl")
 include("filter_ad.jl")
 include("smoother_ad.jl")
@@ -27,14 +28,15 @@ export kalman_smoother, kalman_smoother_scalar, kalman_filter_and_smooth
 # Note: Use 5-arg kalman_loglik/kalman_filter for diffuse (P1_inf triggers diffuse)
 export diffuse_period, diffuse_covariances, diffuse_flags
 
-# Accessor methods for KalmanFilterResult
-export parameters
+# Abstract types and the accessors shared by results, workspaces and models
+export AbstractFilterResult, AbstractFilterWorkspace, AbstractStateSpaceModel
+export parameters, system_matrices
 export obs_matrix, obs_cov, transition_matrix, selection_matrix, state_cov
-export predicted_states, filtered_states
-export variances_predicted_states, variances_filtered_states
-export prediction_errors, variances_prediction_errors
+export initial_state, initial_state_cov
+export predicted_states, predicted_states_cov, filtered_states, filtered_states_cov
+export prediction_errors, prediction_errors_cov
 export kalman_gains, loglikelihood
-export smoothed_states, variances_smoothed_states
+export smoothed_states, smoothed_states_cov, crosslag_covs
 
 # Include DSL submodule (before predict.jl which depends on SSMSpec)
 include("dsl/dsl.jl")
@@ -128,9 +130,8 @@ export EMWorkspace, compute_sufficient_stats!, em_estimate!
 export MLE, EM  # Estimation method markers
 
 # High-level StateSpaceModel API
-export StateSpaceModel, fit!, system_matrices
-export smoothed_states_cov, predicted_states_cov, filtered_states_cov
-export prediction_errors_cov, isfitted, backend
+export StateSpaceModel, fit!
+export isfitted, backend
 
 # Dynamic Factor Model
 export DynamicFactorModel, DynamicFactorModelSpec
@@ -141,6 +142,6 @@ export isconverged, niterations, innovation_cov, ar_coefficients, idiosyncratic_
 export SmootherResult, ForecastResult, ObservablePlot
 export confidence_bands, select_vars, quantile_normal
 export forecast_observations, forecast_states
-export variances_forecast_states, variances_forecast_observations
+export forecast_states_cov, forecast_observations_cov
 
 end # module

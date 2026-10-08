@@ -147,7 +147,7 @@ end
     @test ll_full ≈ ll_reduced
     @test filtered_states(ws_full) ≈ filtered_states(ws_reduced)
     @test smoothed_states(ws_full) ≈ smoothed_states(ws_reduced)
-    @test variances_smoothed_states(ws_full) ≈ variances_smoothed_states(ws_reduced)
+    @test smoothed_states_cov(ws_full) ≈ smoothed_states_cov(ws_reduced)
 end
 
 @testset "partial missing — in-place filter matches a reduced-system reference" begin
@@ -166,7 +166,7 @@ end
     @test loglik ≈ ref.loglik
     @test filtered_states(ws) ≈ ref.a_filt
     @test smoothed_states(ws) ≈ ref.α
-    @test variances_smoothed_states(ws) ≈ ref.V
+    @test smoothed_states_cov(ws) ≈ ref.V
 
     @test Siphon.n_observed(ws, 4) == 2
     @test Siphon.n_observed(ws, 12) == 1
@@ -201,7 +201,7 @@ end
     @test kalman_filter!(ws, y) ≈ loglikelihood(result)
     kalman_smoother!(ws)
     @test smoothed_states(ws) ≈ smoothed.alpha
-    @test variances_smoothed_states(ws) ≈ smoothed.V
+    @test smoothed_states_cov(ws) ≈ smoothed.V
 end
 
 @testset "partial missing — mixed-frequency censoring" begin
@@ -221,7 +221,7 @@ end
 
     @test loglik ≈ ref.loglik
     @test smoothed_states(ws) ≈ ref.α
-    @test variances_smoothed_states(ws) ≈ ref.V
+    @test smoothed_states_cov(ws) ≈ ref.V
 
     @test [Siphon.n_observed(ws, t) for t in 1:6] == [2, 2, 4, 2, 2, 4]
     @test count(Siphon.observed_mask(ws)) == 2 * s.n + 2 * div(s.n, 3)

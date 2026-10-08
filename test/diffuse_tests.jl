@@ -162,8 +162,8 @@ end
     @test kalman_filter!(ws, y) ≈ res.loglik
     @test predicted_states(ws) ≈ predicted_states(res)
     @test filtered_states(ws) ≈ filtered_states(res)
-    @test variances_predicted_states(ws) ≈ res.Pt
-    @test variances_filtered_states(ws) ≈ res.Ptt
+    @test predicted_states_cov(ws) ≈ res.Pt
+    @test filtered_states_cov(ws) ≈ res.Ptt
     @test kalman_gains(ws) ≈ kalman_gains(res)
 end
 
@@ -262,7 +262,7 @@ end
             @test kalman_filter!(ws, y) ≈ res.loglik
             @test diffuse_flags(ws) == flags
             @test filtered_states(ws) ≈ filtered_states(res)
-            @test variances_filtered_states(ws) ≈ res.Ptt
+            @test filtered_states_cov(ws) ≈ res.Ptt
             @test kalman_gains(ws) ≈ kalman_gains(res)
         end
     end
@@ -549,7 +549,7 @@ end
     # Check storage dimensions
     @test size(predicted_states(ws)) == (m_dim, n)
     @test size(filtered_states(ws)) == (m_dim, n)
-    @test size(variances_predicted_states(ws)) == (m_dim, m_dim, n)
+    @test size(predicted_states_cov(ws)) == (m_dim, m_dim, n)
     @test size(prediction_errors(ws)) == (p_dim, n)
     @test size(kalman_gains(ws)) == (m_dim, p_dim, n)
 end

@@ -97,7 +97,7 @@ ws = EKFWorkspace(measurement, AnalyticJacobian(), H, T, R, Q, a1, P1, n)
 ll = ekf_filter!(ws, y)
 ekf_smoother!(ws; crosscov=true)
 αs = smoothed_states(ws)
-Vs = variances_smoothed_states(ws)
+Vs = smoothed_states_cov(ws)
 ```
 
 Allocation budget: after a warm-up call, both `ekf_filter!` and the combined
@@ -299,7 +299,7 @@ ekf_filter_and_smooth!(ws, y; crosscov = true)
 ```
 
 Smoothed RMSE on each component is typically 10-20% lower than filtered RMSE,
-and `Vs = variances_smoothed_states(ws)` is positive semidefinite throughout.
+and `Vs = smoothed_states_cov(ws)` is positive semidefinite throughout.
 
 ## Choosing Between Jacobian Modes
 

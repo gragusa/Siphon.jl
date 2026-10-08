@@ -398,11 +398,20 @@ Other author answers, verbatim:
   - **New accessors.** Add accessors for the fitted `a1`/`P1` and for cross-lag covariances (export `crosslag_covs`). Make `obs_matrix` and the other system-matrix accessors work on workspaces too.
   - **Names.** Resolve the near-homonyms `innovation_cov` (the DFM's Σ_η) vs `innovation_covs` (`Ft`). Rename the single-matrix setters `update_Z!`…`update_Q!` (`inplace.jl:505-519`), which collide with the EM M-step functions `update_Z!(kf, em, n)` (`:1930`).
   - Update `docs/src/conversion_guide.md`, creating it if this is the first breaking chunk.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-006
 - **Cluster**: type-hierarchy
 - **Notes**:
+  - **New `src/accessors.jl`** (included first) holds `AbstractFilterResult` and `AbstractFilterWorkspace` (both exported, with `AbstractStateSpaceModel`), plus each shared accessor defined once over `Union{AbstractFilterResult, AbstractFilterWorkspace}`. They read fields through the internal hook `_filter_store(x)`, which returns `ws.base` for `DiffuseKalmanWorkspace`. The per-type copies in `types.jl`, `ekf_types.jl`, `ekf_inplace.jl` and `inplace.jl` are gone; only type-specific ones remain (`observed_mask`/`observed_rows`, diffuse, EKF observations/Jacobians).
+  - **Vocabulary:** `variances_*` → `*_cov`, including `forecast_states_cov`/`forecast_observations_cov` on `ForecastResult` and `SmootherResult`/`SmootherWorkspace`. `crosslag_covs` is exported.
+  - **`parameters`/`system_matrices`:** `parameters` is defined only on models (θ NamedTuple). `system_matrices` returns a `KFParms` on results, workspaces (aliasing the workspace buffers) and `StateSpaceModel`, which used to return a NamedTuple. On EKF it returns the `EKFParms`, and `obs_matrix` throws `ArgumentError`. `obs_matrix` … `state_cov` are untyped generics over `system_matrices(x)`. `KalmanFilterResultScalar`'s `system_matrices`/`kalman_gains` throw `ArgumentError` (it stores neither; CHUNK-016 replaces the type).
+  - **New accessors:** `initial_state`/`initial_state_cov` (results read `at[:,1]`/`Pt[:,:,1]`; workspaces `a1`/`P1`, which is P1* for diffuse; models build them from the spec). `kalman_gains`, `missing_mask`, `observed_mask` on `StateSpaceModel`.
+  - **AbstractStateSpaceModel:** `isfitted`, `isconverged`, `niterations` and `loglikelihood` are defined once, through `_require_fitted`, whose message comes from `_fit_hint(model)` (DFM: `fit!(EM(), model, y)`). `StateSpaceModel` filter accessors share `_require_filter`, whose message names `fit!` and `kalman_filter!(model, y)`. This covers part of failure-policy (iv) for models; CHUNK-013 still owns workspaces.
+  - **Names:** the unexported aliases `innovations`/`innovation_covs` are removed. The setters `update_Z!`…`update_Q!(ws, M)` → `set_Z!`…`set_Q!` (unexported).
+  - **Left for CHUNK-020:** DFM `system_matrices`/filter accessors and `innovation_cov`. With `Q = Σ_η` it could become `state_cov(dfm)`, but with AR errors `Z` is the quasi-differenced composite, so that needs a deliberate decision.
+  - **Docs:** `docs/src/conversion_guide.md` created and added to `make.jl`; the tutorials and `api/optimization.md` are updated. The docs build was not run.
+  - **Tests:** new `test/accessor_tests.jl` (78 checks): results vs workspaces, diffuse, EKF, StateSpaceModel (system matrices + initial state reproduce the loglik), DFM status messages, setters. `Pkg.test()` passes (2 broken pins, unchanged); Aqua 10/10; ambiguities 0.
 
 ### CHUNK-013: apply-failure-model
 - **Kind**: `implement`
@@ -743,6 +752,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-038 (fix-exact-diffuse-update-sign) → next: CHUNK-039
 - 2026-10-08 CHUNK-039 (exact-diffuse-singular-finf) → next: CHUNK-037
 - 2026-10-08 CHUNK-037 (fix-dfm-ar-error-loadings) → next: CHUNK-012
+- 2026-10-08 CHUNK-012 (introduce-abstract-supertypes-and-accessor-vocabulary) → next: CHUNK-013
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

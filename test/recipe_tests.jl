@@ -124,7 +124,7 @@ end
 
     # Accessor methods
     @test smoothed_states(sr) == sr.alpha
-    @test variances_smoothed_states(sr) == sr.V
+    @test smoothed_states_cov(sr) == sr.V
 end
 
 @testset "ForecastResult wrapper" begin

@@ -178,23 +178,21 @@ reduced-system quantities in their leading rows and columns for that period; the
 observed rows are `findall(view(observed_mask, :, t))`.
 
 # Accessor Methods
-Use accessor methods for clear, consistent API:
-- `parameters(r)` → `p` (KFParms)
-- `obs_matrix(r)` → `p.Z`
-- `obs_cov(r)` → `p.H`
-- `transition_matrix(r)` → `p.T`
-- `selection_matrix(r)` → `p.R`
-- `state_cov(r)` → `p.Q`
+The accessors of [`AbstractFilterResult`](@ref):
+- `system_matrices(r)` → `p` (KFParms)
+- `obs_matrix(r)`, `obs_cov(r)`, `transition_matrix(r)`, `selection_matrix(r)`,
+  `state_cov(r)` → `p.Z`, `p.H`, `p.T`, `p.R`, `p.Q`
 - `predicted_states(r)` → `at`
-- `variances_predicted_states(r)` → `Pt`
+- `predicted_states_cov(r)` → `Pt`
 - `filtered_states(r)` → `att`
-- `variances_filtered_states(r)` → `Ptt`
+- `filtered_states_cov(r)` → `Ptt`
 - `prediction_errors(r)` → `vt`
-- `variances_prediction_errors(r)` → `Ft`
+- `prediction_errors_cov(r)` → `Ft`
 - `kalman_gains(r)` → `Kt`
 - `loglikelihood(r)` → `loglik`
+- `initial_state(r)`, `initial_state_cov(r)` → `at[:, 1]`, `Pt[:, :, 1]`
 """
-struct KalmanFilterResult{T <: Real, P <: KFParms}
+struct KalmanFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Model parameters
     p::P
     # Log-likelihood
@@ -230,113 +228,7 @@ function KalmanFilterResult(
         p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask)
 end
 
-# Accessor methods for KalmanFilterResult
-"""
-    parameters(r::KalmanFilterResult) -> KFParms
-
-Return the model parameters (Z, H, T, R, Q).
-"""
-parameters(r::KalmanFilterResult) = r.p
-
-"""
-    obs_matrix(r::KalmanFilterResult)
-
-Return observation matrix Z (p × m).
-"""
-obs_matrix(r::KalmanFilterResult) = r.p.Z
-
-"""
-    obs_cov(r::KalmanFilterResult)
-
-Return observation noise covariance H (p × p).
-"""
-obs_cov(r::KalmanFilterResult) = r.p.H
-
-"""
-    transition_matrix(r::KalmanFilterResult)
-
-Return state transition matrix T (m × m).
-"""
-transition_matrix(r::KalmanFilterResult) = r.p.T
-
-"""
-    selection_matrix(r::KalmanFilterResult)
-
-Return state noise selection matrix R (m × r).
-"""
-selection_matrix(r::KalmanFilterResult) = r.p.R
-
-"""
-    state_cov(r::KalmanFilterResult)
-
-Return state noise covariance Q (r × r).
-"""
-state_cov(r::KalmanFilterResult) = r.p.Q
-
-"""
-    predicted_states(r::KalmanFilterResult) -> Matrix
-
-Return predicted state means E[αₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: at)
-"""
-predicted_states(r::KalmanFilterResult) = r.at
-
-"""
-    variances_predicted_states(r::KalmanFilterResult) -> Array{T,3}
-
-Return predicted state covariances Var[αₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: Pt)
-"""
-variances_predicted_states(r::KalmanFilterResult) = r.Pt
-
-"""
-    filtered_states(r::KalmanFilterResult) -> Matrix
-
-Return filtered state means E[αₜ | y₁:ₜ] for t = 1:n. (FKF: att)
-"""
-filtered_states(r::KalmanFilterResult) = r.att
-
-"""
-    variances_filtered_states(r::KalmanFilterResult) -> Array{T,3}
-
-Return filtered state covariances Var[αₜ | y₁:ₜ] for t = 1:n. (FKF: Ptt)
-"""
-variances_filtered_states(r::KalmanFilterResult) = r.Ptt
-
-"""
-    prediction_errors(r::KalmanFilterResult) -> Matrix
-
-Return prediction errors (innovations) vₜ = yₜ - E[yₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: vt)
-NaN for missing observations.
-"""
-prediction_errors(r::KalmanFilterResult) = r.vt
-
-"""
-    variances_prediction_errors(r::KalmanFilterResult) -> Array{T,3}
-
-Return innovation covariances Var[yₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: Ft)
-"""
-variances_prediction_errors(r::KalmanFilterResult) = r.Ft
-
-"""
-    kalman_gains(r::KalmanFilterResult) -> Array{T,3}
-
-Return Kalman gains Kₜ for t = 1:n. Zero for missing observations.
-"""
-kalman_gains(r::KalmanFilterResult) = r.Kt
-
-"""
-    loglikelihood(r::KalmanFilterResult) -> Real
-
-Return log-likelihood of non-missing observations.
-"""
-loglikelihood(r::KalmanFilterResult) = r.loglik
-
-"""
-    missing_mask(r::KalmanFilterResult) -> BitVector
-
-Return the mask that is true for each period in which no row was observed.
-"""
-missing_mask(r::KalmanFilterResult) = r.missing_mask
-
+# Accessor methods for KalmanFilterResult (the shared ones are in accessors.jl)
 """
     observed_mask(r::KalmanFilterResult) -> BitMatrix
 
@@ -363,7 +255,7 @@ Scalar (univariate state) version of KalmanFilterResult.
 Same naming conventions as KalmanFilterResult but with vectors instead of matrices
 for state quantities.
 """
-struct KalmanFilterResultScalar{T <: Real}
+struct KalmanFilterResultScalar{T <: Real} <: AbstractFilterResult
     loglik::T
     at::Vector{T}          # n: predicted states
     Pt::Vector{T}          # n: predicted variances
@@ -374,14 +266,13 @@ struct KalmanFilterResultScalar{T <: Real}
     missing_mask::BitVector
 end
 
-# Accessor methods for scalar version
-predicted_states(r::KalmanFilterResultScalar) = r.at
-variances_predicted_states(r::KalmanFilterResultScalar) = r.Pt
-filtered_states(r::KalmanFilterResultScalar) = r.att
-variances_filtered_states(r::KalmanFilterResultScalar) = r.Ptt
-prediction_errors(r::KalmanFilterResultScalar) = r.vt
-variances_prediction_errors(r::KalmanFilterResultScalar) = r.Ft
-loglikelihood(r::KalmanFilterResultScalar) = r.loglik
+# The scalar result stores neither the system nor the gains.
+system_matrices(::KalmanFilterResultScalar) = throw(ArgumentError(
+    "KalmanFilterResultScalar does not store the system matrices"))
+kalman_gains(::KalmanFilterResultScalar) = throw(ArgumentError(
+    "KalmanFilterResultScalar does not store the Kalman gains"))
+initial_state(r::KalmanFilterResultScalar) = r.at[1]
+initial_state_cov(r::KalmanFilterResultScalar) = r.Pt[1]
 
 # ============================================
 # SmootherWorkspace - Pre-allocated smoother storage
@@ -427,11 +318,11 @@ Return smoothed state means E[αₜ | y₁:ₙ] from workspace.
 smoothed_states(w::SmootherWorkspace) = w.alpha
 
 """
-    variances_smoothed_states(w::SmootherWorkspace) -> Array{T,3}
+    smoothed_states_cov(w::SmootherWorkspace) -> Array{T,3}
 
 Return smoothed state covariances Var[αₜ | y₁:ₙ] from workspace.
 """
-variances_smoothed_states(w::SmootherWorkspace) = w.V
+smoothed_states_cov(w::SmootherWorkspace) = w.V
 
 # ============================================
 # DiffuseFilterResult - Exact diffuse initialization
@@ -493,7 +384,7 @@ After the diffuse period (t > d), standard Kalman filter recursion is used.
 - `kalman_loglik_diffuse`: Compute log-likelihood with diffuse initialization
 - `KalmanFilterResult`: Standard filter result without diffuse initialization
 """
-struct DiffuseFilterResult{T <: Real, P <: KFParms}
+struct DiffuseFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Model parameters
     p::P
     # Log-likelihood (non-diffuse observations only)
@@ -520,22 +411,7 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms}
     observed_mask::BitMatrix   # p × n: true where an individual value is present
 end
 
-# Accessor methods for DiffuseFilterResult
-parameters(r::DiffuseFilterResult) = r.p
-obs_matrix(r::DiffuseFilterResult) = r.p.Z
-obs_cov(r::DiffuseFilterResult) = r.p.H
-transition_matrix(r::DiffuseFilterResult) = r.p.T
-selection_matrix(r::DiffuseFilterResult) = r.p.R
-state_cov(r::DiffuseFilterResult) = r.p.Q
-predicted_states(r::DiffuseFilterResult) = r.at
-variances_predicted_states(r::DiffuseFilterResult) = r.Pt
-filtered_states(r::DiffuseFilterResult) = r.att
-variances_filtered_states(r::DiffuseFilterResult) = r.Ptt
-prediction_errors(r::DiffuseFilterResult) = r.vt
-variances_prediction_errors(r::DiffuseFilterResult) = r.Ft
-kalman_gains(r::DiffuseFilterResult) = r.Kt
-loglikelihood(r::DiffuseFilterResult) = r.loglik
-missing_mask(r::DiffuseFilterResult) = r.missing_mask
+# Accessor methods for DiffuseFilterResult (the shared ones are in accessors.jl)
 observed_mask(r::DiffuseFilterResult) = r.observed_mask
 observed_rows(r::DiffuseFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
 

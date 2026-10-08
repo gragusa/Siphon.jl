@@ -517,8 +517,8 @@ Returns a `KalmanFilterResult` with:
 - `missing_mask`: BitVector, true where a period has no observed row (length n)
 - `observed_mask`: BitMatrix (p × n), true where an individual value is present
 
-Use accessor methods: `predicted_states`, `filtered_states`, `variances_predicted_states`,
-`variances_filtered_states`, `prediction_errors`, `variances_prediction_errors`,
+Use accessor methods: `predicted_states`, `filtered_states`, `predicted_states_cov`,
+`filtered_states_cov`, `prediction_errors`, `prediction_errors_cov`,
 `kalman_gains`, `loglikelihood`.
 
 # Missing Data

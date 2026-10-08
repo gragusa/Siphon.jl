@@ -266,7 +266,7 @@ The default color scheme uses consistent colors across plot types:
 - `smoothed_states`: Get smoothed state means
 - `filtered_states`: Get filtered state means
 - `predicted_states`: Get predicted state means
-- `variances_smoothed_states`: Get smoothed state covariances
+- `smoothed_states_cov`: Get smoothed state covariances
 - `loglikelihood`: Get log-likelihood
 
 ### Helper Functions
