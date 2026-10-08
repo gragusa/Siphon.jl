@@ -235,6 +235,7 @@ function simulation_smoother!(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
         rng::Random.AbstractRNG = Random.default_rng(),
         smoothed::Union{Nothing, AbstractMatrix} = nothing) where {T}
+    y = _nan_obs(y)
     m, p, n = sws.state_dim, sws.obs_dim, sws.n_times
     size(y) == (p, n) || throw(DimensionMismatch(
         "observations are $(size(y)) but the workspace expects ($p, $n)"))
@@ -293,6 +294,7 @@ function simulation_smoother(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
         rng::Random.AbstractRNG = Random.default_rng(),
         n_draws::Integer = 1) where {T}
+    y = _nan_obs(y)
     n_draws >= 1 || throw(ArgumentError("n_draws must be at least 1, got $n_draws"))
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)

@@ -126,3 +126,40 @@ Estimation that ends without converging now warns. Pass `warn = false` to silenc
 | `optimize_ssm_with_stderr` | as `optimize_ssm`; it already warned, and now accepts `warn` |
 
 `isconverged(model)` and the `converged` fields are unchanged.
+
+## Missing data
+
+Every filter, smoother, forecasting function and estimator now accepts observations
+with `missing` entries (for example a `Matrix{Union{Missing, Float64}}`) and treats them
+like `NaN`. Converting with `missing_to_nan` first is no longer necessary.
+
+The period counts are split by meaning:
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `count_missing(y)` (periods with at least one missing value) | `count_incomplete_periods(y)` |
+| `ismissing_obs(y_t::AbstractVector)` (any value missing) | `isincomplete_period(y_t)` |
+| `ismissing_obs(x::Real)` | `isnan(x)` |
+| (none) | `count_missing_periods(y)` and `ismissing_period(y_t)`: periods with no value, the ones `missing_mask` marks |
+
+`missing_to_nan` and `nan_to_missing` keep the element type instead of forcing `Float64`:
+`Union{Missing, Float32}` becomes `Float32`, and `nan_to_missing` returns
+`Union{Missing, eltype(y)}`. Integer input still becomes `Float64`, which can hold `NaN`.
+`missing_to_nan` of an array that is already floating point returns it unchanged.
+
+### Innovations in series positions
+
+`prediction_errors`, `prediction_errors_cov` and `kalman_gains` now index by series in
+every period:
+
+| Quantity in a period where only some rows are observed | Siphon 0.1 | Now |
+|:----------|:-----------|:----|
+| `prediction_errors(x)[:, t]` | the innovations of the observed rows packed into the leading rows, then `NaN` | row `i` is the innovation of series `i`; `NaN` where series `i` is unobserved |
+| `prediction_errors_cov(x)[:, :, t]` | packed into the leading block | rows and columns by series; `NaN` for unobserved series |
+| `kalman_gains(x)[:, :, t]` | packed into the leading columns | column `i` for series `i`; zero for unobserved series |
+
+In a period with no observed row, `prediction_errors_cov` is now `NaN`. Before, the
+functional filter reported `Z P Z' + H` there and the in-place filter reported `NaN`.
+
+These three accessors now return new arrays on workspaces as well as on results. The
+packed layout remains in the fields `vt`, `Ft` and `Kt`, together with `observed_rows`.

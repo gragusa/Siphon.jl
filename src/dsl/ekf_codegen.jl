@@ -122,6 +122,7 @@ same name regardless of whether they have an `EKFParms` or an `EKFSpec`.
 """
 function ekf_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix;
         use_static::Bool = true)
+    y = _nan_obs(y)
     ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
     return ekf_loglik(ss.p, y, ss.a1, ss.P1)
 end

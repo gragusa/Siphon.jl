@@ -9,6 +9,7 @@ using SpecialFunctions: erfcinv
 
 include("accessors.jl")
 include("types.jl")
+include("missing.jl")
 include("filter_ad.jl")
 include("smoother_ad.jl")
 
@@ -62,7 +63,8 @@ include("recipes.jl")
 export predict, forecast, forecast_paths
 
 # Missing data utilities
-export missing_to_nan, nan_to_missing, count_missing, ismissing_obs
+export missing_to_nan, nan_to_missing
+export ismissing_period, isincomplete_period, count_missing_periods, count_incomplete_periods
 
 # EKF extension exports
 export AbstractEKFMeasurement, EKFParms, EKFFilterResult

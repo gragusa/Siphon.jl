@@ -91,6 +91,7 @@ function ekf_loglik(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    y = _nan_obs(y)
     _require_no_partial_periods(y, "ekf_loglik")
     n = size(y, 2)
     obs_dim = size(y, 1)
@@ -189,6 +190,7 @@ function ekf_filter(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    y = _nan_obs(y)
     _require_no_partial_periods(y, "ekf_filter")
     n = size(y, 2)
     obs_dim = size(y, 1)

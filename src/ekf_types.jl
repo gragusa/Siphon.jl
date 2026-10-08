@@ -184,6 +184,10 @@ function EKFFilterResult(p::EKFParms, loglik::Real, at, Pt, att, Ptt, yt, Zt, vt
     return EKFFilterResult(p, loglik, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt, missing_mask, 0)
 end
 
+# The EKF rejects partially observed periods, so a period is observed in full or not at all.
+_observed_mask(r::EKFFilterResult) = repeat(.!transpose(r.missing_mask), size(r.vt, 1))
+observed_mask(r::EKFFilterResult) = _observed_mask(_require_output(r, :observed_mask))
+
 # The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
 # single observation matrix.
 obs_matrix(::EKFFilterResult) = throw(ArgumentError(

@@ -226,6 +226,7 @@ function kalman_loglik(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    y = _nan_obs(y)
     n = size(y, 2)
     ET = _filter_eltype(p, a1, P1)
 
@@ -340,6 +341,7 @@ function kalman_loglik(
         a1::SVector{M},
         P1::SMatrix{M, M}
 ) where {P, M, R}
+    y = _nan_obs(y)
     # The static kernel drops whole periods; partially observed ones need the
     # per-element filter.
     _first_partial_period(y) === nothing ||
@@ -450,6 +452,7 @@ function kalman_loglik_scalar(
         P1::Real,
         y::AbstractVector
 )
+    y = _nan_obs(y)
     n = length(y)
     ET = promote_type(
         typeof(Z), typeof(H), typeof(Tmat), typeof(R), typeof(Q), typeof(a1), typeof(P1))
@@ -533,6 +536,7 @@ function kalman_filter(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    y = _nan_obs(y)
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
@@ -674,6 +678,7 @@ function kalman_filter(
         a1::SVector{M},
         P1::SMatrix{M, M}
 ) where {P, M, R}
+    y = _nan_obs(y)
     # The static kernel drops whole periods; partially observed ones need the
     # per-element filter.
     _first_partial_period(y) === nothing ||
@@ -790,6 +795,7 @@ function kalman_filter_scalar(
         P1::Real,
         y::AbstractVector
 )
+    y = _nan_obs(y)
     n = length(y)
     ET = promote_type(
         typeof(Z),
@@ -1089,6 +1095,7 @@ function kalman_loglik_diffuse(
         P1_inf::AbstractMatrix;
         tol::Real = 1e-8
 )
+    y = _nan_obs(y)
     n = size(y, 2)
 
     ET = _filter_eltype(p, a1, P1_star, P1_inf)
@@ -1324,6 +1331,7 @@ function kalman_filter_diffuse(
         P1_inf::AbstractMatrix;
         tol::Real = 1e-8
 )
+    y = _nan_obs(y)
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
@@ -1643,6 +1651,7 @@ function kalman_loglik(
         P1_inf::AbstractMatrix;
         tol::Real = 1e-8
 )
+    y = _nan_obs(y)
     return kalman_loglik_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
 end
 
@@ -1688,5 +1697,6 @@ function kalman_filter(
         P1_inf::AbstractMatrix;
         tol::Real = 1e-8
 )
+    y = _nan_obs(y)
     return kalman_filter_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
 end

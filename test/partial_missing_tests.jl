@@ -318,15 +318,17 @@ end
     @test filtered_states(ws) ≈ filtered_states(res)
     @test isapprox(prediction_errors(ws), prediction_errors(res); nans = true)
 
-    # Innovations of a partial period sit in the leading rows, as in the
-    # non-diffuse filters, and the mask records which rows they are.
+    # The stored innovations of a partial period sit in the leading rows, as in the
+    # non-diffuse filters, the mask records which rows they are, and the accessor
+    # spreads them back to series positions.
     @test Siphon.observed_mask(res) == .!isnan.(s.y)
     @test Siphon.observed_mask(ws) == .!isnan.(s.y)
     @test Siphon.observed_rows(res, 8) == [2]
     @test collect(Siphon.observed_rows(ws, 8)) == [2]
+    @test isfinite(res.vt[1, 8]) && isnan(res.vt[2, 8])
     vt = prediction_errors(res)
-    @test isfinite(vt[1, 8]) && isnan(vt[2, 8])
-    @test vt[1, 8] ≈ prediction_errors(approx)[1, 8] rtol = 1e-5
+    @test isnan(vt[1, 8]) && vt[2, 8] == res.vt[1, 8]
+    @test vt[2, 8] ≈ prediction_errors(approx)[2, 8] rtol = 1e-5
     @test Siphon.missing_mask(res) == [t == 15 for t in axes(s.y, 2)]
 end
 

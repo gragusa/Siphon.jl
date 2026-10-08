@@ -96,7 +96,8 @@ When a period is partially observed the filter works on the reduced system forme
 by those rows, so `vt`, `Ft`, `Ft_L` and `Kt` carry pₜ-sized blocks in their
 leading rows and columns for that period; entries beyond pₜ are `NaN` for `vt` and
 `Ft` and zero for `Ft_L` and `Kt`. Use `observed_rows(ws, t)` to recover which
-original row each leading position corresponds to.
+original row each leading position corresponds to. The accessors `prediction_errors`,
+`prediction_errors_cov` and `kalman_gains` return copies in series positions.
 
 ## Smoother storage
 - `αs`: Smoothed states E[αₜ|y₁:ₙ] (m × n)
@@ -528,6 +529,7 @@ Uses BLAS Level 3 operations where possible for performance.
 Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 """
 function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
 
     _check_obs(ws, "kalman_filter!", y)
@@ -947,6 +949,7 @@ Run filter and smoother in one call.
   skipped.
 """
 function filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true)
+    y = _nan_obs(y)
     loglik = kalman_filter!(ws, y)
     ws.status == 0 && kalman_smoother!(ws; crosscov = crosscov)
     return loglik
@@ -1236,6 +1239,7 @@ observed rows than diffuse directions they load on) is processed one row at a ti
 factor.
 """
 function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     base = ws.base
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
@@ -1576,6 +1580,7 @@ for exact diffuse, `KalmanWorkspace` for standard initialization.
 See also: [`kalman_filter!`](@ref) (standard version with KalmanWorkspace)
 """
 function kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix)
+    y = _nan_obs(y)
     kalman_filter_diffuse!(ws, y)
 end
 
@@ -2338,6 +2343,7 @@ function em_estimate!(
         min_degen_iter::Int = 50,
         warn::Bool = true
 ) where {T}
+    y = _nan_obs(y)
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
     converged = false
@@ -3106,9 +3112,18 @@ filtered_states(model::StateSpaceModel) = (_require_filter(model); model.att)
 filtered_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Ptt)
 predicted_states(model::StateSpaceModel) = (_require_filter(model); model.at)
 predicted_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Pt)
-prediction_errors(model::StateSpaceModel) = (_require_filter(model); model.vt)
-prediction_errors_cov(model::StateSpaceModel) = (_require_filter(model); model.Ft)
-kalman_gains(model::StateSpaceModel) = (_require_filter(model); model.Kt)
+function prediction_errors(model::StateSpaceModel)
+    _require_filter(model)
+    return _unpack_innovations(model.vt, model.observed_mask)
+end
+function prediction_errors_cov(model::StateSpaceModel)
+    _require_filter(model)
+    return _unpack_innovation_covs(model.Ft, model.observed_mask)
+end
+function kalman_gains(model::StateSpaceModel)
+    _require_filter(model)
+    return _unpack_gains(model.Kt, model.observed_mask)
+end
 missing_mask(model::StateSpaceModel) = (_require_filter(model); model.missing_mask)
 observed_mask(model::StateSpaceModel) = (_require_filter(model); model.observed_mask)
 
@@ -3239,6 +3254,7 @@ ll = kalman_loglik(model, y)
 ```
 """
 function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
@@ -3279,6 +3295,7 @@ att = filtered_states(model)
 ```
 """
 function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
@@ -3393,6 +3410,7 @@ function fit!(
         verbose::Bool = false,
         kwargs...
 ) where {T}
+    y = _nan_obs(y)
     _check_model_obs(model, "fit!(MLE(), ...)", y)
 
     use_static = _resolve_static_choice(
@@ -3482,6 +3500,7 @@ function fit!(
         degen_lim::Real = 1e-4,
         min_degen_iter::Int = 50
 ) where {T}
+    y = _nan_obs(y)
     _check_model_obs(model, "fit!(EM(), ...)", y)
     _require_no_partial_periods(y, "fit!(EM(), ...)",
         "Use fit!(MLE(), ...), which handles them.")
@@ -5206,6 +5225,7 @@ function fit!(
         verbose::Bool = false,
         warn::Bool = true
 ) where {T}
+    y = _nan_obs(y)
     N, n = size(y)
     spec = model.spec
 

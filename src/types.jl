@@ -202,7 +202,9 @@ Following FKF (R package) naming conventions:
 
 Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
 reduced-system quantities in their leading rows and columns for that period; the
-observed rows are `findall(view(observed_mask, :, t))`.
+observed rows are `findall(view(observed_mask, :, t))`. The accessors
+`prediction_errors`, `prediction_errors_cov` and `kalman_gains` return them in series
+positions instead.
 
 # Accessor Methods
 The accessors of [`AbstractFilterResult`](@ref):
@@ -213,9 +215,8 @@ The accessors of [`AbstractFilterResult`](@ref):
 - `predicted_states_cov(r)` → `Pt`
 - `filtered_states(r)` → `att`
 - `filtered_states_cov(r)` → `Ptt`
-- `prediction_errors(r)` → `vt`
-- `prediction_errors_cov(r)` → `Ft`
-- `kalman_gains(r)` → `Kt`
+- `prediction_errors(r)`, `prediction_errors_cov(r)`, `kalman_gains(r)` → `vt`, `Ft`,
+  `Kt` spread back to series positions (copies)
 - `loglikelihood(r)` → `loglik`
 - `initial_state(r)`, `initial_state_cov(r)` → `at[:, 1]`, `Pt[:, :, 1]`
 """
@@ -311,6 +312,13 @@ function KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft,
     return KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft, missing_mask, 0)
 end
 
+observed_mask(r::KalmanFilterResultScalar) =
+    .!transpose(_require_output(r, :observed_mask).missing_mask)
+
+# One series: the innovations are already in place.
+prediction_errors(r::KalmanFilterResultScalar) = copy(_output(r, :prediction_errors).vt)
+prediction_errors_cov(r::KalmanFilterResultScalar) = copy(_output(r, :prediction_errors_cov).Ft)
+
 # The scalar result stores neither the system nor the gains.
 system_matrices(::KalmanFilterResultScalar) = throw(ArgumentError(
     "KalmanFilterResultScalar does not store the system matrices"))
@@ -401,7 +409,9 @@ The diffuse period ends when `norm(Pinf) < tol`.
 
 Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
 reduced-system quantities in their leading rows and columns for that period; the
-observed rows are `findall(view(observed_mask, :, t))`.
+observed rows are `findall(view(observed_mask, :, t))`. The accessors
+`prediction_errors`, `prediction_errors_cov` and `kalman_gains` return them in series
+positions instead.
 
 # Notes
 During the diffuse period (t ≤ d):

@@ -31,6 +31,8 @@ smoother accessors `smoothed_states`, `smoothed_states_cov` and `crosslag_covs`,
 hold values after `kalman_smoother!` (or `ekf_smoother!`) has run.
 
 The accessors return the workspace's own storage, not copies: the next run overwrites them.
+The exceptions are `prediction_errors`, `prediction_errors_cov` and `kalman_gains`, which
+return new arrays in series positions.
 
 Before the first filter run, and after a run that stopped on an innovation covariance
 that was not positive definite, the accessors throw an `ArgumentError`. After a failed
@@ -69,6 +71,49 @@ function _require_output(x::_FilterOutput, f::Symbol)
     status == _NOT_RUN && throw(ArgumentError(
         "$f: the workspace holds no filter output. Call $(_filter_call(x)) first."))
     throw(ArgumentError("$f: $(_failure_message(status))."))
+end
+
+# The `p × n` mask of observed values. The EKF types override it.
+_observed_mask(x::_FilterOutput) = _filter_store(x).observed_mask
+
+# The filters store the innovations, their covariances and the gains of a partially
+# observed period in the leading rows and columns of the period's slice. These spread
+# them back to series positions: NaN (zero for the gains) where a value was not observed.
+function _unpack_innovations(vt::AbstractMatrix, mask::AbstractMatrix{Bool})
+    out = fill!(similar(vt), NaN)
+    for t in axes(vt, 2)
+        k = 0
+        for i in axes(vt, 1)
+            mask[i, t] || continue
+            k += 1
+            out[i, t] = vt[k, t]
+        end
+    end
+    return out
+end
+
+function _unpack_innovation_covs(Ft::AbstractArray{<:Any, 3}, mask::AbstractMatrix{Bool})
+    out = fill!(similar(Ft), NaN)
+    for t in axes(Ft, 3)
+        rows = findall(view(mask, :, t))
+        for (l, j) in pairs(rows), (k, i) in pairs(rows)
+            out[i, j, t] = Ft[k, l, t]
+        end
+    end
+    return out
+end
+
+function _unpack_gains(Kt::AbstractArray{<:Any, 3}, mask::AbstractMatrix{Bool})
+    out = fill!(similar(Kt), 0)
+    for t in axes(Kt, 3)
+        k = 0
+        for j in axes(Kt, 2)
+            mask[j, t] || continue
+            k += 1
+            out[:, j, t] .= view(Kt, :, k, t)
+        end
+    end
+    return out
 end
 
 # The storage of `x`, after checking that it holds the output of a successful run.
@@ -123,31 +168,42 @@ filtered_states_cov(x::_FilterOutput) = _output(x, :filtered_states_cov).Ptt
     prediction_errors(x) -> Matrix
 
 Return the prediction errors (innovations) vₜ = yₜ − E[yₜ | y₁:ₜ₋₁] for t = 1:n (p × n).
-Periods with no observed row hold NaN. In a partially observed period the innovations of
-the observed rows are packed into the leading rows; see `observed_rows`.
+Row `i` of column `t` belongs to series `i`; it is NaN when that value was not observed.
+
+The result is a new array, not the workspace's storage.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-prediction_errors(x::_FilterOutput) = _output(x, :prediction_errors).vt
+function prediction_errors(x::_FilterOutput)
+    return _unpack_innovations(_output(x, :prediction_errors).vt, _observed_mask(x))
+end
 
 """
     prediction_errors_cov(x) -> Array{T,3}
 
-Return the innovation covariances Var[yₜ | y₁:ₜ₋₁] for t = 1:n (p × p × n). Partially
-observed periods are packed into the leading block, as in [`prediction_errors`](@ref).
+Return the innovation covariances Var[yₜ | y₁:ₜ₋₁] for t = 1:n (p × p × n), indexed by
+series as in [`prediction_errors`](@ref). Rows and columns of series not observed in
+period `t` are NaN.
+
+The result is a new array, not the workspace's storage.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-prediction_errors_cov(x::_FilterOutput) = _output(x, :prediction_errors_cov).Ft
+function prediction_errors_cov(x::_FilterOutput)
+    return _unpack_innovation_covs(_output(x, :prediction_errors_cov).Ft, _observed_mask(x))
+end
 
 """
     kalman_gains(x) -> Array{T,3}
 
-Return the Kalman gains Kₜ for t = 1:n (m × p × n). Zero for periods with no observed row.
+Return the Kalman gains Kₜ for t = 1:n (m × p × n). Column `i` belongs to series `i`; it is
+zero when that value was not observed.
+
+The result is a new array, not the workspace's storage.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-kalman_gains(x::_FilterOutput) = _output(x, :kalman_gains).Kt
+kalman_gains(x::_FilterOutput) = _unpack_gains(_output(x, :kalman_gains).Kt, _observed_mask(x))
 
 """
     loglikelihood(x) -> Real

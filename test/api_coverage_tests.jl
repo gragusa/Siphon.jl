@@ -93,13 +93,22 @@ end
     @test ismissing(back[1, 2]) && ismissing(back[2, 3])
     @test isequal(back, ym)
 
+    # Element types are kept rather than forced to Float64
+    @test missing_to_nan(Union{Missing, Float32}[1.0f0 missing]) isa Matrix{Float32}
+    @test missing_to_nan([1 2; 3 4]) isa Matrix{Float64}
+    @test missing_to_nan(fill(missing, 2, 2)) isa Matrix{Float64}
+    @test nan_to_missing(Float32[1 NaN]) isa Matrix{Union{Missing, Float32}}
+
     y = [1.0 NaN 3.0 NaN; 4.0 5.0 6.0 NaN]
-    # count_missing counts periods with any missing element
-    @test count_missing(y) == 2
-    @test ismissing_obs(y[:, 2])
-    @test !ismissing_obs(y[:, 1])
-    @test ismissing_obs(NaN)
-    @test !ismissing_obs(1.0)
+    # "missing" periods have no value; "incomplete" periods lack at least one
+    @test count_missing_periods(y) == 1
+    @test count_incomplete_periods(y) == 2
+    @test ismissing_period(y[:, 4]) && !ismissing_period(y[:, 2])
+    @test isincomplete_period(y[:, 2]) && !isincomplete_period(y[:, 1])
+    @test ismissing_period([missing, NaN]) && isincomplete_period([1.0, missing])
+    r = kalman_filter(KFParms(ones(2, 1), Matrix(1.0I, 2, 2), [1.0;;], [1.0;;], [1.0;;]),
+        y, [0.0], [1.0;;])
+    @test count(Siphon.missing_mask(r)) == count_missing_periods(y)
 end
 
 @testset "static-array helpers" begin

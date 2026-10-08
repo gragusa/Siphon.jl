@@ -472,11 +472,38 @@ Other author answers, verbatim:
   - expose the innovations of partially observed periods in series positions if decided;
   - make `missing_to_nan`/`nan_to_missing` preserve the element type instead of forcing Float64;
   - make the "missing" vocabulary consistent across results, workspaces and models.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-003, CHUNK-009, CHUNK-012
 - **Cluster**: api-unification
 - **Notes**:
+  - **New `src/missing.jl`**, included after `types.jl` so the DSL can import `_nan_obs`. It holds `missing_to_nan`/`nan_to_missing`, which moved from `predict.jl`.
+  - **`missing` input:** `_nan_obs(y)` dispatches: real arrays pass through unchanged (no allocation); `Union{Missing,Real}` arrays are converted. It is inserted as `y = _nan_obs(y)` at the top of 42 public entry points:
+    - functional filters, loglik, smoothers, diffuse, scalar and static paths;
+    - EKF functional and in-place;
+    - in-place `kalman_filter!`/`filter_and_smooth!`/diffuse;
+    - `em_estimate!`;
+    - model `kalman_loglik`/`kalman_filter!`;
+    - every `fit!`, including DFM;
+    - `predict`/`forecast`/`forecast_paths`;
+    - simulation smoother, `SmootherResult(p, y, …)`;
+    - the DSL `optimize_ssm(_with_stderr)`, `optimize_ekf`, `SSMLogDensity`, `EKFLogDensity`, `ssm_loglik`, `objective_function`, `ekf_loglik(spec…)`.
+
+    Low-level `compute_sufficient_stats!` does not convert; `em_estimate!` does it first.
+  - **Counts:** `count_missing`/`ismissing_obs` were removed. The replacements are `count_missing_periods`/`ismissing_period` (no value, matching `missing_mask`) and `count_incomplete_periods`/`isincomplete_period` (at least one value absent). All four accept NaN or `missing` entries and are exported. The scalar `ismissing_obs(::Real)` is gone (use `isnan`).
+  - **Element types:** `missing_to_nan` keeps `float(nonmissingtype(eltype))` via `similar`, and returns `float(y)` (no copy) for float arrays. `nan_to_missing` keeps `Union{Missing,eltype}`.
+  - **Series positions:**
+    - `prediction_errors`, `prediction_errors_cov` and `kalman_gains` unpack through `_unpack_innovations`/`_unpack_innovation_covs`/`_unpack_gains` (accessors.jl), keyed by `_observed_mask(x)`. EKF overrides it from `missing_mask`, since the EKF rejects partial periods.
+    - They now return copies on every type. The packed layout stays in the fields and `observed_rows`.
+    - In a period with no observed row, `prediction_errors_cov` is NaN. The functional filter used to report `Z P Z' + H` there, unlike the in-place one.
+    - The model methods (inplace.jl) use the same helpers; the scalar result returns `copy` of its vectors.
+  - **Vocabulary:** `observed_mask` was added for `EKFFilterResult`, `EKFWorkspace` and `KalmanFilterResultScalar` (1 × n). Every filter output now has `missing_mask` + `observed_mask`.
+  - **Docs:** a "Missing data" section was added to the conversion guide, and `docs/src/api/core.md` (and the stale `src/api/core.md`) list the new names. The docs build was not run.
+  - **Tests:**
+    - New `test/missing_input_tests.jl` (105 checks): `missing` vs NaN on every layer; the series-position innovations, covariances and gains checked against `Z P Z' + H` and `T P Z' F⁻¹` per period, functional = in-place = model = diffuse; vocabulary on EKF/scalar.
+    - `api_coverage_tests.jl` covers the new counts and element types.
+    - `partial_missing_tests.jl` now checks series positions plus the packed field.
+  - **Verification:** `Pkg.test()` passes (2 broken pins unchanged, Aqua 10/10); ambiguities 0.
 
 ### CHUNK-015: unify-filter-smoother-interfaces
 - **Kind**: `implement`
@@ -787,6 +814,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-037 (fix-dfm-ar-error-loadings) → next: CHUNK-012
 - 2026-10-08 CHUNK-012 (introduce-abstract-supertypes-and-accessor-vocabulary) → next: CHUNK-013
 - 2026-10-08 CHUNK-013 (apply-failure-model) → next: CHUNK-014
+- 2026-10-08 CHUNK-014 (apply-missing-data-model) → next: CHUNK-015
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

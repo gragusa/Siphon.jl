@@ -266,6 +266,7 @@ function kalman_smoother(
         P1::AbstractMatrix;
         compute_crosscov::Bool = false
 )
+    y = _nan_obs(y)
     # Run filter first
     filt = _require_output(kalman_filter(p, y, a1, P1), :kalman_smoother)
 
@@ -319,6 +320,7 @@ function kalman_filter_and_smooth(
         a1::AbstractVector,
         P1::AbstractMatrix
 )
+    y = _nan_obs(y)
     # Run filter
     filt = _require_output(kalman_filter(p, y, a1, P1), :kalman_smoother)
 

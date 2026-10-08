@@ -46,8 +46,10 @@ forecast_paths
 ```@docs
 missing_to_nan
 nan_to_missing
-count_missing
-ismissing_obs
+ismissing_period
+isincomplete_period
+count_missing_periods
+count_incomplete_periods
 ```
 
 ## StaticArrays Utilities

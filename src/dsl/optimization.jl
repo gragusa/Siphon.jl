@@ -110,6 +110,7 @@ function optimize_ssm(
         warn::Bool = true,
         kwargs...
 )
+    y = _nan_obs(y)
     return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end
 
@@ -215,6 +216,7 @@ function optimize_ssm_with_stderr(
         warn::Bool = true,
         kwargs...
 )
+    y = _nan_obs(y)
     opt_result = optimize_ssm(spec, y; use_static = use_static, warn = false, kwargs...)
 
     if warn && !opt_result.converged

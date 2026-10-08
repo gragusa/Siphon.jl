@@ -518,6 +518,7 @@ Returns a callable that computes -loglik for a given parameter vector theta.
 Uses the AD-compatible kalman_loglik function.
 """
 function objective_function(spec::SSMSpec, y)
+    y = _nan_obs(y)
     function negloglik(theta)
         ss = build_linear_state_space(spec, theta, y; use_static = false)
         return -_ss_loglik(ss, y)
@@ -533,7 +534,7 @@ Compute log-likelihood directly from spec and NamedTuple parameters.
 This is the recommended high-level API for likelihood evaluation.
 """
 ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix) =
-    _spec_loglik(spec, θ, y, false)
+    _spec_loglik(spec, θ, _nan_obs(y), false)
 
 """
     _spec_loglik(spec, θ::NamedTuple, y, use_static::Bool)

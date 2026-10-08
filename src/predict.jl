@@ -6,78 +6,10 @@ Prediction and forecasting functions for state-space models.
 Provides:
 - `predict`: In-sample fitted values (yₜ|ₜ₋₁ = Z * aₜ)
 - `forecast`: Out-of-sample h-step ahead forecasts
-- Missing data utilities (NaN-based)
 """
 
 using LinearAlgebra
 using .DSL: SSMSpec, build_linear_state_space, _ss_filter
-
-# ============================================
-# Missing Data Utilities
-# ============================================
-
-"""
-    ismissing_obs(y_t::AbstractVector) -> Bool
-
-Check if observation vector contains any missing values (NaN).
-"""
-ismissing_obs(y_t::AbstractVector) = any(isnan, y_t)
-
-"""
-    ismissing_obs(y_t::Real) -> Bool
-
-Check if scalar observation is missing (NaN).
-"""
-ismissing_obs(y_t::Real) = isnan(y_t)
-
-"""
-    missing_to_nan(y::AbstractArray)
-
-Convert `missing` values to `NaN`. Returns a Float64 array.
-
-Use this if your data contains `missing` values:
-```julia
-y_clean = missing_to_nan(y_with_missing)
-```
-"""
-function missing_to_nan(y::AbstractArray{<:Union{Missing, Real}})
-    result = Array{Float64}(undef, size(y))
-    for i in eachindex(y)
-        val = y[i]
-        result[i] = ismissing(val) ? NaN : Float64(val)
-    end
-    result
-end
-
-missing_to_nan(y::AbstractArray{<:Real}) = convert(Array{Float64}, y)
-
-# Edge case: array of only Missing values
-missing_to_nan(y::AbstractArray{Missing}) = fill(NaN, size(y))
-
-"""
-    nan_to_missing(y::AbstractArray)
-
-Convert `NaN` values to `missing`. Returns a Union{Float64, Missing} array.
-
-Use this if you prefer working with `missing`:
-```julia
-y_missing = nan_to_missing(y_with_nan)
-```
-"""
-function nan_to_missing(y::AbstractArray{<:Real})
-    result = Array{Union{Float64, Missing}}(undef, size(y))
-    for i in eachindex(y)
-        result[i] = isnan(y[i]) ? missing : y[i]
-    end
-    result
-end
-
-"""
-    count_missing(y::AbstractMatrix) -> Int
-
-Count number of time periods with at least one missing observation.
-"""
-count_missing(y::AbstractMatrix) = count(t -> ismissing_obs(view(y, :, t)), axes(y, 2))
 
 # ============================================
 # Prediction (In-Sample Fitted Values)
@@ -113,6 +45,7 @@ plot!(vec(pred.yhat), label="predicted")
 ```
 """
 function predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; use_static::Bool = true)
+    y = _nan_obs(y)
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
     return _predict(ss.p, y, _ss_filter(ss, y))
 end
@@ -125,6 +58,7 @@ Low-level prediction using KFParms directly.
 Returns predicted states (at = a_{t|t-1}) and related quantities.
 """
 function predict(p::KFParms, y::AbstractMatrix, a1::AbstractVector, P1::AbstractMatrix)
+    y = _nan_obs(y)
     return _predict(p, y, kalman_filter(p, y, a1, P1))
 end
 
@@ -191,6 +125,7 @@ function forecast(
         h::Int;
         use_static::Bool = true
 )
+    y = _nan_obs(y)
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
     return _forecast(ss.p, y, _ss_filter(ss, y), h)
 end
@@ -209,6 +144,7 @@ function forecast(
         P1::AbstractMatrix,
         h::Int
 )
+    y = _nan_obs(y)
     return _forecast(p, y, kalman_filter(p, y, a1, P1), h)
 end
 
@@ -272,6 +208,7 @@ function forecast_paths(
         n_paths::Int;
         use_static::Bool = true
 )
+    y = _nan_obs(y)
     ss = build_linear_state_space(spec, θ, y; use_static = use_static)
     return _forecast_paths(ss.p, y, _ss_filter(ss, y), h, n_paths)
 end
@@ -284,6 +221,7 @@ function forecast_paths(
         h::Int,
         n_paths::Int
 )
+    y = _nan_obs(y)
     return _forecast_paths(p, y, kalman_filter(p, y, a1, P1), h, n_paths)
 end
 

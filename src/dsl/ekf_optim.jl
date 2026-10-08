@@ -27,6 +27,7 @@ struct EKFLogDensity{S <: EKFSpec, Tr, Y <: AbstractMatrix}
 end
 
 function EKFLogDensity(spec::EKFSpec, y::AbstractMatrix; use_static::Bool = true)
+    y = _nan_obs(y)
     t = build_transformation(spec)
     return EKFLogDensity{typeof(spec), typeof(t), typeof(y)}(spec, t, y, use_static)
 end
@@ -83,5 +84,6 @@ function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
         prob_kwargs::NamedTuple = NamedTuple(),
         warn::Bool = true,
         kwargs...)
+    y = _nan_obs(y)
     return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end

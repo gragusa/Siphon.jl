@@ -185,6 +185,7 @@ function SmootherResult(
         P1;
         time::Union{AbstractVector, Nothing} = nothing
 )
+    y = _nan_obs(y)
     filt = kalman_filter(p, y, a1, P1)
     nt = kalman_smoother(
         p.Z,

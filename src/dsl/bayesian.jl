@@ -120,6 +120,7 @@ function SSMLogDensity(
         prior = nothing,
         use_static::Bool = true
 )
+    y = _nan_obs(y)
     t = build_transformation(spec)
     SSMLogDensity(spec, t, y, prior, use_static)
 end

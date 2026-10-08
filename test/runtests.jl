@@ -338,6 +338,9 @@ include("accessor_tests.jl")
 # Failure model: -Inf objectives, guarded accessors, shape errors, warnings
 include("failure_tests.jl")
 
+# Observations with `missing` entries; innovations in series positions
+include("missing_input_tests.jl")
+
 # Per-element (partially observed period) missing data
 include("partial_missing_tests.jl")
 

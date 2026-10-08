@@ -433,6 +433,7 @@ per-step Jacobian `tmp_Zt` and the measurement linearisation stored in
 definite; the workspace accessors then throw.
 """
 function ekf_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
     _check_obs(ws, "ekf_filter!", y)
     _require_no_partial_periods(y, "ekf_filter!")
@@ -742,6 +743,7 @@ end
 Run `ekf_filter!` followed by `ekf_smoother!`.
 """
 function ekf_filter_and_smooth!(ws::EKFWorkspace, y::AbstractMatrix; crosscov::Bool = true)
+    y = _nan_obs(y)
     ll = ekf_filter!(ws, y)
     ws.status == 0 && ekf_smoother!(ws; crosscov = crosscov)
     return ll
@@ -755,6 +757,8 @@ end
 predicted_observations(ws::EKFWorkspace) =
     _require_output(ws, :predicted_observations).yt
 measurement_jacobians(ws::EKFWorkspace) = _require_output(ws, :measurement_jacobians).Zt
+_observed_mask(ws::EKFWorkspace) = repeat(.!transpose(ws.missing_mask), ws.obs_dim)
+observed_mask(ws::EKFWorkspace) = _observed_mask(_require_output(ws, :observed_mask))
 _filter_call(::EKFWorkspace) = "ekf_filter!(ws, y)"
 _smoother_call(::EKFWorkspace) = "ekf_smoother!(ws)"
 
