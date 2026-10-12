@@ -352,8 +352,9 @@ end
 
     P_big = [1e8;;]
     approx = kalman_filter(p, y, a1, P_big)
-    @test res.loglik ≈ kalman_loglik(p, y, a1, P_big) -
-                       kalman_loglik(p, y[:, 1:1], a1, P_big) rtol = 1e-6
+    @test res.loglik ≈
+          kalman_loglik(p, y, a1, P_big) -
+          kalman_loglik(p, y[:, 1:1], a1, P_big) rtol = 1e-6
     @test predicted_states(res)[:, 2:end] ≈ predicted_states(approx)[:, 2:end] rtol = 1e-5
     @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
 

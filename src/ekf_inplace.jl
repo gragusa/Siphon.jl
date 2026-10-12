@@ -742,14 +742,16 @@ end
 # ============================================================================
 
 # The shared accessors are in accessors.jl.
-predicted_observations(ws::EKFWorkspace) =
-    _require_output(ws, :predicted_observations).yt
+predicted_observations(ws::EKFWorkspace) = _require_output(ws, :predicted_observations).yt
 measurement_jacobians(ws::EKFWorkspace) = _require_output(ws, :measurement_jacobians).Zt
 _observed_mask(ws::EKFWorkspace) = repeat(.!transpose(ws.missing_mask), ws.obs_dim)
 observed_mask(ws::EKFWorkspace) = _observed_mask(_require_output(ws, :observed_mask))
 
-system_matrices(ws::EKFWorkspace) =
+function system_matrices(ws::EKFWorkspace)
     EKFParms(ws.measurement, ws.jacobian_mode, ws.H, ws.Tmat, ws.R, ws.Q)
-obs_matrix(::EKFWorkspace) = throw(ArgumentError(
-    "the extended Kalman filter has no observation matrix; " *
-    "use measurement_jacobians for the linearisation at each period"))
+end
+function obs_matrix(::EKFWorkspace)
+    throw(ArgumentError(
+        "the extended Kalman filter has no observation matrix; " *
+        "use measurement_jacobians for the linearisation at each period"))
+end

@@ -190,9 +190,11 @@ observed_mask(r::EKFFilterResult) = _observed_mask(_require_output(r, :observed_
 
 # The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
 # single observation matrix.
-obs_matrix(::EKFFilterResult) = throw(ArgumentError(
-    "the extended Kalman filter has no observation matrix; " *
-    "use measurement_jacobians for the linearisation at each period"))
+function obs_matrix(::EKFFilterResult)
+    throw(ArgumentError(
+        "the extended Kalman filter has no observation matrix; " *
+        "use measurement_jacobians for the linearisation at each period"))
+end
 
 """
     predicted_observations(r::EKFFilterResult) -> Matrix

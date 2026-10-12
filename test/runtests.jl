@@ -224,7 +224,8 @@ end
     alpha_smooth = smoothed_states(smooth)
     V_smooth = smoothed_states_cov(smooth)
     @test_throws ArgumentError crosslag_covs(smooth)
-    @test size(crosslag_covs(kalman_smoother(result; crosscov = true))) == (1, 1, size(y, 2) - 1)
+    @test size(crosslag_covs(kalman_smoother(result; crosscov = true))) ==
+          (1, 1, size(y, 2) - 1)
 
     # One call does the filtering too
     @test smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile)) == alpha_smooth
@@ -274,7 +275,8 @@ end
     # Compare with separate calls
     ll = kalman_loglik(p, y, a1_nile, P1_nile)
     @test isapprox(loglikelihood(filt), ll, rtol = 1e-10)
-    @test smoothed_states(smooth) == smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile))
+    @test smoothed_states(smooth) ==
+          smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile))
 end
 
 @testset "kalman_filter and kalman_smoother on a scalar KFParms" begin

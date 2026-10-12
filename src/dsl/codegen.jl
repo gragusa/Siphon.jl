@@ -321,8 +321,9 @@ end
 The diffuse part `P1_inf` of the initial state covariance, or `nothing` when
 the spec does not use exact diffuse initialisation.
 """
-build_diffuse_covariance(spec::SSMSpec, θ::NamedTuple) =
+function build_diffuse_covariance(spec::SSMSpec, θ::NamedTuple)
     spec.P1_inf === nothing ? nothing : build_matrix(spec.P1_inf, θ)
+end
 
 function build_diffuse_covariance(spec::SSMSpec, theta::AbstractVector)
     spec.P1_inf === nothing && return nothing
@@ -504,10 +505,14 @@ end
 
 # Log-likelihood and filter for the output of `build_linear_state_space`,
 # using the exact diffuse filter when the model has a diffuse part.
-_ss_loglik(ss, y) = ss.P1_inf === nothing ? kalman_loglik(ss.p, y, ss.a1, ss.P1) :
-                    kalman_loglik(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
-_ss_filter(ss, y) = ss.P1_inf === nothing ? kalman_filter(ss.p, y, ss.a1, ss.P1) :
-                    kalman_filter(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+function _ss_loglik(ss, y)
+    ss.P1_inf === nothing ? kalman_loglik(ss.p, y, ss.a1, ss.P1) :
+    kalman_loglik(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+end
+function _ss_filter(ss, y)
+    ss.P1_inf === nothing ? kalman_filter(ss.p, y, ss.a1, ss.P1) :
+    kalman_filter(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+end
 
 """
     objective_function(spec::SSMSpec, y)
@@ -533,8 +538,9 @@ Compute log-likelihood directly from spec and NamedTuple parameters.
 
 This is the recommended high-level API for likelihood evaluation.
 """
-ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix) =
+function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
     _spec_loglik(spec, θ, _nan_obs(y), false)
+end
 
 """
     _spec_loglik(spec, θ::NamedTuple, y, use_static::Bool)

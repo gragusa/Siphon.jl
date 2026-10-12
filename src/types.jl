@@ -28,8 +28,10 @@ struct KFParms{Zt, Ht, Tt, Rt, Qt}
     end
 end
 
-KFParms(Z, H, T, R, Q) = KFParms{typeof(Z), typeof(H), typeof(T), typeof(R), typeof(Q)}(
-    Z, H, T, R, Q)
+function KFParms(Z, H, T, R, Q)
+    KFParms{typeof(Z), typeof(H), typeof(T), typeof(R), typeof(Q)}(
+        Z, H, T, R, Q)
+end
 
 # Throw a DimensionMismatch naming `caller` unless `size(A) == dims`.
 function _check_size(caller, name, A, dims::Tuple)

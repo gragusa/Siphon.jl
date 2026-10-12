@@ -1503,6 +1503,7 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
             Fr = view(base.tmp_pp1, 1:pt, 1:pt)
             mul!(Fr, ZrP, transpose(Zr))
             for l in 1:pt, k in 1:pt
+
                 Fr[k, l] += Hr[k, l]
                 Ft_view[k, l] = Fr[k, l]
             end
@@ -1516,6 +1517,7 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
             end
             L_lower = LowerTriangular(cholF.factors)
             for j in 1:pt, i in j:pt
+
                 base.Ft_L[i, j, t] = L_lower[i, j]
             end
 
@@ -2999,8 +3001,9 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     return nothing
 end
 
-_store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult}) =
+function _store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult})
     copyto!(mask, filt.observed_mask)
+end
 
 """Copy filter results from KalmanWorkspace to model."""
 function _ssm_copy_from_workspace!(model::StateSpaceModel, kf_ws::KalmanWorkspace)
@@ -4735,7 +4738,6 @@ function _update_dfm_ar!(
             mul!(U[l + 1], V_t, G[l + 1]')
         end
         @inbounds for i in 1:N, l2 in 0:r, l1 in 0:r
-
             S_cc[l1 + 1, l2 + 1, i] += μ[i, l1 + 1] * μ[i, l2 + 1] +
                                        dot(view(G[l1 + 1], i, :), view(U[l2 + 1], :, i))
         end

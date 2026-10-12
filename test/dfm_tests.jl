@@ -101,7 +101,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         e = zeros(N, n)
         for t in 3:n
             f[t] = 0.7 * f[t - 1] + randn(rng)
-            e[:, t] .= 0.5 .* e[:, t - 1] .+ 0.2 .* e[:, t - 2] .+ sqrt.(DFM_σ²) .* randn(rng, N)
+            e[:, t] .= 0.5 .* e[:, t - 1] .+ 0.2 .* e[:, t - 2] .+
+                       sqrt.(DFM_σ²) .* randn(rng, N)
         end
         y = DFM_λ * f' .+ λ1 * circshift(f, 1)' .+ e
         Random.seed!(3)

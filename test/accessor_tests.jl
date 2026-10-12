@@ -29,7 +29,7 @@ using Random
     @test ws isa AbstractFilterWorkspace
 
     for acc in (predicted_states, predicted_states_cov, filtered_states,
-            filtered_states_cov, kalman_gains)
+        filtered_states_cov, kalman_gains)
         @test acc(res) ≈ acc(ws)
     end
     @test prediction_errors(res)[:, [1:6; 13:n]] ≈ prediction_errors(ws)[:, [1:6; 13:n]]
@@ -41,7 +41,7 @@ using Random
     sm = system_matrices(ws)
     @test sm isa KFParms
     for (acc, M) in ((obs_matrix, Z), (obs_cov, H), (transition_matrix, Tm),
-            (selection_matrix, R), (state_cov, Q))
+        (selection_matrix, R), (state_cov, Q))
         @test acc(res) == M
         @test acc(ws) == M
     end

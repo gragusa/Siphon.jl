@@ -79,8 +79,9 @@ isincomplete_period(y_t::AbstractVector) = any(_isabsent, y_t)
 Count the periods (columns of the `p × n` matrix `y`) in which no value is present.
 This is `count(missing_mask(result))` for a filter run on `y`.
 """
-count_missing_periods(y::AbstractMatrix) =
+function count_missing_periods(y::AbstractMatrix)
     count(t -> ismissing_period(view(y, :, t)), axes(y, 2))
+end
 
 """
     count_incomplete_periods(y::AbstractMatrix) -> Int
@@ -88,5 +89,6 @@ count_missing_periods(y::AbstractMatrix) =
 Count the periods (columns of the `p × n` matrix `y`) in which at least one value is
 absent, including those in which every value is absent.
 """
-count_incomplete_periods(y::AbstractMatrix) =
+function count_incomplete_periods(y::AbstractMatrix)
     count(t -> isincomplete_period(view(y, :, t)), axes(y, 2))
+end

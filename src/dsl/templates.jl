@@ -114,8 +114,9 @@ Union type for diffuse initialization specification:
 const DiffuseSpec = Union{Bool, Symbol}
 
 function _check_diffuse(diffuse::DiffuseSpec)
-    diffuse isa Bool || diffuse === :exact || throw(ArgumentError(
-        "diffuse must be true, false or :exact, got $(repr(diffuse))"))
+    diffuse isa Bool || diffuse === :exact ||
+        throw(ArgumentError(
+            "diffuse must be true, false or :exact, got $(repr(diffuse))"))
     return nothing
 end
 

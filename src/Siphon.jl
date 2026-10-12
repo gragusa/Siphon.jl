@@ -67,7 +67,8 @@ export forecast_states_cov, forecast_observations_cov
 
 # Missing data utilities
 export missing_to_nan, nan_to_missing
-export ismissing_period, isincomplete_period, count_missing_periods, count_incomplete_periods
+export ismissing_period, isincomplete_period, count_missing_periods,
+       count_incomplete_periods
 
 # EKF extension exports
 export AbstractEKFMeasurement, EKFParms, EKFFilterResult

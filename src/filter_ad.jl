@@ -998,6 +998,7 @@ function _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, 
             # Exact diffuse step for one row.
             c = Fstar_i / Finf_i^2
             for k in 1:m, l in 1:m
+
                 Pstar[l, k] += c * Minf[l] * Minf[k] -
                                (Mstar[l] * Minf[k] + Minf[l] * Mstar[k]) / Finf_i
                 Pinf[l, k] -= Minf[l] * Minf[k] / Finf_i
@@ -1009,6 +1010,7 @@ function _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, 
             loglik -= (log(Fstar_i) + v_i^2 / Fstar_i) / 2
             nrows += 1
             for k in 1:m, l in 1:m
+
                 Pstar[l, k] -= Mstar[l] * Mstar[k] / Fstar_i
             end
             gain = Mstar
@@ -1205,7 +1207,8 @@ function kalman_loglik(
 
             if flag == 2
                 # Finf is singular but nonzero: process the rows one at a time.
-                (a_filt, Pstar_filt, Pinf_filt, _, ll, nrows, ok) = _univariate_diffuse_step(
+                (a_filt, Pstar_filt, Pinf_filt, _, ll,
+                    nrows, ok) = _univariate_diffuse_step(
                     a, Pstar, Pinf, Zr, Hr, v, tol)
                 ok || return ET(-Inf)
                 loglik += ll
@@ -1496,7 +1499,8 @@ function kalman_filter(
             if flag == 2
                 # Finf singular but nonzero: process the rows one at a time. The
                 # stored gain is the one that updates the state, a_filt = a + G v.
-                (a_filt, Pstar_filt, Pinf_filt, G, ll, nrows, ok) = _univariate_diffuse_step(
+                (a_filt, Pstar_filt, Pinf_filt, G, ll,
+                    nrows, ok) = _univariate_diffuse_step(
                     a, Pstar, Pinf, Zr, Hr, v, tol)
                 if !ok
                     failed_at = t

@@ -139,7 +139,9 @@ end
 Siphon.measurement(m::MissingTestLinearMeasurement, a, t) = m.Z * a
 Siphon.measurement!(out, m::MissingTestLinearMeasurement, a, t) = (mul!(out, m.Z, a); out)
 Siphon.measurement_jacobian(m::MissingTestLinearMeasurement, a, t) = m.Z
-Siphon.measurement_jacobian!(Z, m::MissingTestLinearMeasurement, a, t) = (copyto!(Z, m.Z); Z)
+function Siphon.measurement_jacobian!(Z, m::MissingTestLinearMeasurement, a, t)
+    (copyto!(Z, m.Z); Z)
+end
 
 @testset "every filter output has the missing-data vocabulary" begin
     y = randn(MersenneTwister(24), 2, 10)

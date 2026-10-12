@@ -141,8 +141,9 @@ end
     P_big = 1e8 * Matrix(1.0I, 2, 2)
     approx = kalman_filter(p, y, a1, P_big)
     @test res.Pt[:, :, d + 1] ≈ approx.Pt[:, :, d + 1] rtol = 1e-5
-    @test res.loglik ≈ kalman_loglik(p, y, a1, P_big) -
-                       kalman_loglik(p, y[:, 1:d], a1, P_big) rtol = 1e-6
+    @test res.loglik ≈
+          kalman_loglik(p, y, a1, P_big) -
+          kalman_loglik(p, y[:, 1:d], a1, P_big) rtol = 1e-6
     @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
     @test predicted_states(res)[:, (d + 1):end] ≈ predicted_states(approx)[:, (d + 1):end] rtol = 1e-5
 

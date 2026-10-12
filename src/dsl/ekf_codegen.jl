@@ -117,8 +117,9 @@ Evaluate the extended Kalman filter log-likelihood of an `EKFSpec` at constraine
 parameters `θ`. Equivalent to `kalman_loglik(p, y, a1, P1)` after building
 `(p, a1, P1)` from the spec.
 """
-ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix) =
+function ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
     _spec_loglik(spec, θ, _nan_obs(y), false)
+end
 
 # ============================================================================
 # custom_ekf

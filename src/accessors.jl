@@ -93,6 +93,7 @@ function _unpack_innovation_covs(Ft::AbstractArray{<:Any, 3}, mask::AbstractMatr
     for t in axes(Ft, 3)
         rows = findall(view(mask, :, t))
         for (l, j) in pairs(rows), (k, i) in pairs(rows)
+
             out[i, j, t] = Ft[k, l, t]
         end
     end
@@ -199,7 +200,9 @@ The result is a new array, not the workspace's storage.
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-kalman_gains(x::_FilterOutput) = _unpack_gains(_output(x, :kalman_gains).Kt, _observed_mask(x))
+function kalman_gains(x::_FilterOutput)
+    _unpack_gains(_output(x, :kalman_gains).Kt, _observed_mask(x))
+end
 
 """
     loglikelihood(x) -> Real
@@ -232,8 +235,9 @@ Return the smoothed state means E[αₜ | y₁:ₙ] for t = 1:n (m × n).
 On a workspace this needs a prior `kalman_smoother!` run. On a fitted model the smoother
 runs on first use and its output is cached.
 """
-smoothed_states(ws::AbstractFilterWorkspace) =
+function smoothed_states(ws::AbstractFilterWorkspace)
     _filter_store(_require_smoothed(ws, :smoothed_states)).αs
+end
 
 """
     smoothed_states_cov(x) -> Array{T,3}
@@ -243,8 +247,9 @@ Return the smoothed state covariances Var[αₜ | y₁:ₙ] for t = 1:n (m × m 
 On a workspace this needs a prior `kalman_smoother!` run. On a fitted model the smoother
 runs on first use and its output is cached.
 """
-smoothed_states_cov(ws::AbstractFilterWorkspace) =
+function smoothed_states_cov(ws::AbstractFilterWorkspace)
     _filter_store(_require_smoothed(ws, :smoothed_states_cov)).Vs
+end
 
 """
     crosslag_covs(ws) -> Array{T,3}
