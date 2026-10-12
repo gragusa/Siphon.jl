@@ -10,6 +10,8 @@ using DataFrames
 using ForwardDiff
 using Random
 
+include("em_helpers.jl")
+
 @testset "kalman_smoother basic" begin
     # Simple local level model
     Z = [1.0;;]
@@ -91,97 +93,83 @@ end
     @test isapprox(model.theta_values[var_level_idx], 1469.1, rtol = 0.10)
 end
 
-@testset "_em_local_level log-likelihood monotonicity" begin
-    spec = local_level()
+@testset "EM log-likelihood is monotone" begin
     Random.seed!(456)
     y = randn(1, 50) .* 10 .+ 100
-
-    # Use internal function directly for testing
-    result = Siphon.DSL._em_local_level(spec, y; maxiter = 50, verbose = false)
-
-    # Log-likelihood should be monotonically non-decreasing
-    for i in 2:length(result.loglik_history)
-        @test result.loglik_history[i] >= result.loglik_history[i - 1] - 1e-8
-    end
+    one_ = ones(1, 1)
+    result = em_matrices(one_, one_, one_, fill(100.0, 1, 1), fill(50.0, 1, 1), y,
+        [0.0], fill(1e7, 1, 1); Z_free = falses(1, 1), T_free = falses(1, 1),
+        maxiter = 50)
+    @test all(diff(result.loglik_history) .>= -1e-8)
 end
 
-@testset "_em_local_level finds MLE" begin
-    # EM should find the maximum likelihood estimate
-    # Test on Nile data where the MLE is known from Durbin & Koopman (2012)
+@testset "fit!(EM()) finds the local level MLE" begin
     nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
     y = reshape(Float64.(nile[!, 1]), 1, :)
-
     spec = local_level()
-    result_em = Siphon.DSL._em_local_level(spec, y; maxiter = 300, tol_ll = 1e-8)
+    model = StateSpaceModel(spec, size(y, 2))
+    fit!(EM(), model, y; maxiter = 5000, tol = 1e-10)
 
-    @test result_em.converged
-
-    # EM should match D&K reference MLE values
-    # var_obs ≈ 15099, var_level ≈ 1469.1
-    @test isapprox(result_em.theta.var_obs, 15099.0, rtol = 0.01)
-    @test isapprox(result_em.theta.var_level, 1469.1, rtol = 0.01)
-
-    # Log-likelihood should match D&K value
-    # ll ≈ -641.59
-    @test isapprox(result_em.loglik, -641.59, rtol = 0.001)
+    @test isconverged(model)
+    # Durbin & Koopman (2012): var_obs ≈ 15099, var_level ≈ 1469.1, ll ≈ -641.59
+    @test isapprox(parameters(model).var_obs, 15099.0, rtol = 0.01)
+    @test isapprox(parameters(model).var_level, 1469.1, rtol = 0.01)
+    @test isapprox(loglikelihood(model), -641.59, rtol = 0.001)
+    @test ssm_loglik(spec, parameters(model), y) ≈ loglikelihood(model)
 end
 
-@testset "_em_local_level with fixed var_obs" begin
-    # Fix var_obs, estimate var_level only
-    spec_fixed = local_level(var_obs = 15099.0)
-
+@testset "fit!(EM()) keeps fixed variances" begin
     nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
     y = reshape(Float64.(nile[!, 1]), 1, :)
 
-    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
+    spec = local_level(var_obs = 15099.0)
+    @test param_names(spec) == [:var_level]
+    model = StateSpaceModel(spec, size(y, 2))
+    fit!(EM(), model, y; maxiter = 1000, tol = 1e-8)
+    @test isconverged(model)
+    @test system_matrices(model).H == fill(15099.0, 1, 1)
+    @test isapprox(parameters(model).var_level, 1469.1, rtol = 0.1)
+    @test ssm_loglik(spec, parameters(model), y) ≈ loglikelihood(model)
 
-    @test result.converged
-    @test length(param_names(spec_fixed)) == 1
-    @test :var_level in param_names(spec_fixed)
-
-    # Should recover var_level ≈ 1469.1
-    @test isapprox(result.theta.var_level, 1469.1, rtol = 0.1)
+    spec = local_level(var_level = 1469.0)
+    @test param_names(spec) == [:var_obs]
+    model = StateSpaceModel(spec, size(y, 2))
+    fit!(EM(), model, y; maxiter = 1000, tol = 1e-8)
+    @test isconverged(model)
+    @test system_matrices(model).Q == fill(1469.0, 1, 1)
+    @test isapprox(parameters(model).var_obs, 15099.0, rtol = 0.1)
+    @test ssm_loglik(spec, parameters(model), y) ≈ loglikelihood(model)
 end
 
-@testset "_em_local_level with fixed var_level" begin
-    # Fix var_level, estimate var_obs only
-    spec_fixed = local_level(var_level = 1469.0)
-
+@testset "fit!(EM()) with missing periods matches the MLE" begin
     nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
     y = reshape(Float64.(nile[!, 1]), 1, :)
-
-    result = Siphon.DSL._em_local_level(spec_fixed, y; maxiter = 300, tol_ll = 1e-8)
-
-    @test result.converged
-    @test length(param_names(spec_fixed)) == 1
-    @test :var_obs in param_names(spec_fixed)
-
-    # Should recover var_obs ≈ 15099
-    @test isapprox(result.theta.var_obs, 15099.0, rtol = 0.1)
+    y[1, 21:40] .= NaN
+    spec = local_level()
+    em = fit!(EM(), StateSpaceModel(spec, size(y, 2)), y; maxiter = 5000, tol = 1e-12)
+    mle = fit!(MLE(), StateSpaceModel(spec, size(y, 2)), y)
+    @test loglikelihood(em) ≈ loglikelihood(mle) rtol = 1e-6
+    @test parameters(em).var_obs ≈ parameters(mle).var_obs rtol = 1e-2
+    @test parameters(em).var_level ≈ parameters(mle).var_level rtol = 1e-2
 end
 
 @testset "EMResult fields" begin
-    spec = local_level()
     Random.seed!(111)
     y = randn(1, 50) .* 10 .+ 100
+    one_ = ones(1, 1)
+    result = em_matrices(one_, one_, one_, fill(100.0, 1, 1), fill(50.0, 1, 1), y,
+        [0.0], fill(1e7, 1, 1); Z_free = falses(1, 1), T_free = falses(1, 1),
+        maxiter = 50)
 
-    # Use internal function to get EMResult
-    result = Siphon.DSL._em_local_level(spec, y; maxiter = 50)
-
-    # Check all fields exist and have correct types
-    @test result.theta isa NamedTuple
-    @test result.theta_vec isa Vector{Float64}
-    @test result.loglik isa Float64
-    @test result.loglik_history isa Vector{Float64}
+    @test result isa EMResult{Float64}
     @test result.converged isa Bool
     @test result.iterations isa Int
-    @test result.smoothed_states isa Matrix{Float64}
-    @test result.smoothed_cov isa Array{Float64, 3}
-
-    # Check dimensions
-    @test size(result.smoothed_states) == (1, 50)
-    @test size(result.smoothed_cov) == (1, 1, 50)
-    @test length(result.theta_vec) == length(param_names(spec))
+    @test result.loglik isa Float64
+    @test length(result.loglik_history) == result.iterations
+    @test (result.Z, result.T, result.R) == (one_, one_, one_)
+    @test result.a1 == [0.0]
+    @test result.P1 == fill(1e7, 1, 1)
+    @test occursin("EMResult(p = 1, m = 1", sprint(show, result))
 end
 
 @testset "kalman_smoother AD compatibility" begin
@@ -216,319 +204,159 @@ end
 # Full Covariance EM Tests
 # ============================================
 
-@testset "_em_general_ssm_full_cov basic bivariate" begin
-    # Simple bivariate model: 2 observations, 2 states
-    # yₜ = Z αₜ + εₜ, εₜ ~ N(0, H)
-    # αₜ₊₁ = T αₜ + ηₜ, ηₜ ~ N(0, Q)
-
+@testset "EM with full covariances" begin
     Random.seed!(42)
-
-    # True parameters
     Z_true = [1.0 0.0; 0.0 1.0]
     T_true = [0.9 0.0; 0.0 0.8]
     R = [1.0 0.0; 0.0 1.0]
-    H_true = [1.0 0.3; 0.3 1.5]  # Correlated obs noise
-    Q_true = [0.5 0.1; 0.1 0.4]  # Correlated state noise
-
-    n = 200
-    m = 2
-    p = 2
-
-    # Simulate data
-    states = zeros(m, n)
-    y = zeros(p, n)
-
-    # Cholesky for sampling
+    H_true = [1.0 0.3; 0.3 1.5]
+    Q_true = [0.5 0.1; 0.1 0.4]
+    n, m, p = 200, 2, 2
     L_Q = cholesky(Symmetric(Q_true)).L
     L_H = cholesky(Symmetric(H_true)).L
-
-    states[:, 1] = zeros(m)
+    states = zeros(m, n)
+    y = zeros(p, n)
     for t in 1:n
-        if t > 1
-            states[:, t] = T_true * states[:, t - 1] + L_Q * randn(m)
-        end
+        t > 1 && (states[:, t] = T_true * states[:, t - 1] + L_Q * randn(m))
         y[:, t] = Z_true * states[:, t] + L_H * randn(p)
     end
 
-    # Initial values (different from true)
-    Z_init = [1.0 0.0; 0.0 1.0]
-    T_init = [0.5 0.0; 0.0 0.5]
-    H_init = [2.0 0.0; 0.0 2.0]
-    Q_init = [1.0 0.0; 0.0 1.0]
-    a1 = zeros(m)
-    P1 = 10.0 * Matrix{Float64}(I, m, m)
+    result = em_matrices(Z_true, [0.5 0.0; 0.0 0.5], R, [2.0 0.0; 0.0 2.0],
+        [1.0 0.0; 0.0 1.0], y, zeros(m), 10.0 * Matrix{Float64}(I, m, m);
+        Z_free = falses(p, m), maxiter = 500, tol = 1e-5)
 
-    # Fix Z and estimate T, H, Q
-    Z_free = falses(p, m)
-    T_free = trues(m, m)
-    H_free = trues(p, p)
-    Q_free = trues(m, m)
-
-    result = Siphon.DSL._em_general_ssm_full_cov(
-        Z_init,
-        T_init,
-        R,
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free,
-        Q_free = Q_free,
-        maxiter = 500,
-        tol_ll = 1e-5,
-        verbose = false
-    )
-
-    # May not fully converge but should make progress
     @test result.iterations > 1
     @test isfinite(result.loglik)
-
-    # Check H is positive definite
-    @test all(eigvals(Symmetric(result.H)) .> 0)
-    # Check Q is positive definite
-    @test all(eigvals(Symmetric(result.Q)) .> 0)
-
-    # Check H is symmetric
-    @test result.H ≈ result.H' atol=1e-10
-
-    # Check Q is symmetric
-    @test result.Q ≈ result.Q' atol=1e-10
-
-    # Estimated parameters should be in reasonable range
-    # (not exact due to finite sample)
+    @test all(diff(result.loglik_history) .>= -1e-6)
+    @test isposdef(Symmetric(result.H))
+    @test isposdef(Symmetric(result.Q))
+    @test result.H ≈ result.H' atol = 1e-10
+    @test result.Q ≈ result.Q' atol = 1e-10
     @test 0.5 < result.T[1, 1] < 1.0
     @test 0.5 < result.T[2, 2] < 1.0
 end
 
-@testset "_em_general_ssm_full_cov log-likelihood monotonicity" begin
-    Random.seed!(123)
-
-    # Simple 2x2 model
-    Z = [1.0 0.0; 0.0 1.0]
-    T = [0.8 0.0; 0.0 0.7]
-    R = [1.0 0.0; 0.0 1.0]
-    H = [1.0 0.2; 0.2 1.0]
-    Q = [0.5 0.0; 0.0 0.5]
-    a1 = [0.0, 0.0]
-    P1 = 10.0 * Matrix{Float64}(I, 2, 2)
-
-    y = randn(2, 50)
-
-    result = Siphon.DSL._em_general_ssm_full_cov(
-        Z,
-        T,
-        R,
-        H,
-        Q,
-        y,
-        a1,
-        P1;
-        maxiter = 50,
-        verbose = false
-    )
-
-    # Log-likelihood should be monotonically non-decreasing
-    for i in 2:length(result.loglik_history)
-        @test result.loglik_history[i] >= result.loglik_history[i - 1] - 1e-6
-    end
-end
-
-@testset "_em_general_ssm_full_cov fixed parameters" begin
+@testset "EM keeps fixed cells" begin
     Random.seed!(456)
-
-    # Test with some parameters fixed
     Z = [1.0 0.0; 0.0 1.0]
     T = [0.9 0.0; 0.0 0.8]
-    R = [1.0 0.0; 0.0 1.0]
     H_init = [1.0 0.0; 0.0 1.0]
     Q_init = [0.5 0.0; 0.0 0.5]
-    a1 = [0.0, 0.0]
-    P1 = 10.0 * Matrix{Float64}(I, 2, 2)
-
     y = randn(2, 100)
 
-    # Fix Z and T, only estimate H and Q
-    Z_free = falses(2, 2)
-    T_free = falses(2, 2)
-    H_free = trues(2, 2)
-    Q_free = trues(2, 2)
-
-    result = Siphon.DSL._em_general_ssm_full_cov(
-        Z,
-        T,
-        R,
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free,
-        Q_free = Q_free,
-        maxiter = 100,
-        verbose = false
-    )
-
-    # Z and T should remain unchanged
-    @test result.Z ≈ Z
-    @test result.T ≈ T
-
-    # H and Q should be estimated (and different from init)
+    result = em_matrices(Z, T, Z, H_init, Q_init, y, zeros(2), 10.0 * Matrix(1.0I, 2, 2);
+        Z_free = falses(2, 2), T_free = falses(2, 2), maxiter = 100)
+    @test result.Z == Z
+    @test result.T == T
     @test !(result.H ≈ H_init)
     @test !(result.Q ≈ Q_init)
+
+    # Diagonal masks keep the off-diagonal cells at zero.
+    result = em_matrices(Z, T, Z, H_init, Q_init, y, zeros(2), 10.0 * Matrix(1.0I, 2, 2);
+        H_free = trues(2), Q_free = trues(2), maxiter = 100)
+    @test result.H[1, 2] == result.H[2, 1] == 0.0
+    @test result.Q[1, 2] == result.Q[2, 1] == 0.0
+    @test all(diff(result.loglik_history) .>= -1e-6)
 end
 
-@testset "project_psd" begin
-    # Test that project_psd produces positive definite matrices
+@testset "EM with tied and restricted cells" begin
+    Random.seed!(7)
+    n = 400
+    Q_true = [0.5 0.3; 0.3 0.4]
+    L_Q = cholesky(Q_true).L
+    α = zeros(2, n)
+    for t in 2:n
+        α[:, t] = 0.7 * α[:, t - 1] + L_Q * randn(2)
+    end
+    y = α + 0.3 * randn(2, n)
+    I2 = Matrix(1.0I, 2, 2)
+    diagmask = Matrix(I2 .== 1)
 
-    # Already PSD matrix
-    A = [2.0 1.0; 1.0 2.0]
-    A_proj = Siphon.DSL.project_psd(A)
-    @test all(eigvals(A_proj) .> 0)
-    @test A_proj ≈ A atol=1e-8
+    # T = φ I with full Q: the two diagonal cells stay equal.
+    tied = em_matrices(I2, 0.5 * I2, I2, 0.2 * I2, I2, y, zeros(2), 10 * I2;
+        Z_free = falses(2, 2), T_free = diagmask,
+        T_ties = [[CartesianIndex(1, 1), CartesianIndex(2, 2)]], maxiter = 300)
+    @test tied.T[1, 1] == tied.T[2, 2]
+    @test tied.T[1, 2] == tied.T[2, 1] == 0.0
+    @test all(diff(tied.loglik_history) .>= -1e-8)
+    @test isapprox(tied.T[1, 1], 0.7; atol = 0.1)
 
-    # Matrix with negative eigenvalue
-    B = [1.0 2.0; 2.0 1.0]  # eigenvalues: 3, -1
-    B_proj = Siphon.DSL.project_psd(B)
-    @test all(eigvals(B_proj) .> 0)
-    @test B_proj ≈ B_proj' atol=1e-10  # symmetric
+    # Diagonal T with full Q: the restricted M-step weights the rows by Q⁻¹,
+    # so EM stays monotone.
+    diagT = em_matrices(I2, 0.5 * I2, I2, 0.2 * I2, I2, y, zeros(2), 10 * I2;
+        Z_free = falses(2, 2), T_free = diagmask, maxiter = 300)
+    @test diagT.T[1, 2] == diagT.T[2, 1] == 0.0
+    @test all(diff(diagT.loglik_history) .>= -1e-8)
+    @test diagT.loglik >= tied.loglik - 1e-8
 
-    # Zero matrix should become positive definite
-    C = zeros(2, 2)
-    C_proj = Siphon.DSL.project_psd(C)
-    @test all(eigvals(C_proj) .>= 1e-10)
+    # A tied T needs a nonsingular R Q Rᵀ.
+    @test_throws "EM cannot update the tied cells of T" em_matrices(
+        I2, 0.5 * I2, [1.0 0.0; 0.0 0.0], 0.2 * I2, I2, y, zeros(2), 10 * I2;
+        Z_free = falses(2, 2), T_free = diagmask, Q_free = falses(2, 2),
+        T_ties = [[CartesianIndex(1, 1), CartesianIndex(2, 2)]], maxiter = 3)
 end
 
-@testset "em_ssm_diagonal matches full_cov with diagonal constraints" begin
-    # Test that em_ssm_diagonal convenience wrapper produces
-    # the same results as _em_general_ssm_full_cov with diagonal constraints
-    Random.seed!(42)
-
-    # Setup: simple 2-state, 2-observation model
-    p, m, n = 2, 2, 100
-    r = 2
-
-    # Initial parameters
-    Z_init = [1.0 0.0; 0.0 1.0]
-    T_init = [0.8 0.0; 0.0 0.7]
-    R = [1.0 0.0; 0.0 1.0]
-    H_init_diag = [1.0, 1.5]
-    Q_init_diag = [0.5, 0.8]
-    a1 = zeros(m)
-    P1 = 10.0 * Matrix{Float64}(I, m, m)
-
-    # Generate data
-    y = randn(p, n)
-
-    # Free masks
-    Z_free = trues(p, m)
-    T_free = trues(m, m)
-    H_free_diag = trues(p)
-    Q_free_diag = trues(r)
-
-    # Method 1: em_ssm_diagonal wrapper
-    result_wrapper = Siphon.DSL.em_ssm_diagonal(
-        Z_init,
-        T_init,
-        R,
-        H_init_diag,
-        Q_init_diag,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free_diag,
-        Q_free = Q_free_diag,
-        maxiter = 200,
-        tol_ll = 1e-8,
-        verbose = false
+@testset "fit!(EM()) with tied parameters" begin
+    Random.seed!(11)
+    n = 300
+    α = zeros(2, n)
+    for t in 2:n
+        α[:, t] = 0.8 * α[:, t - 1] + [0.7, 0.5] .* randn(2)
+    end
+    y = α + 0.4 * randn(2, n)
+    φ = FreeParam(:φ, init = 0.5, lower = -1.0, upper = 1.0)
+    h = FreeParam(:h, init = 1.0, lower = 0.0)
+    spec = custom_ssm(
+        Z = [1.0 0.0; 0.0 1.0],
+        H = [h 0.0; 0.0 h],
+        T = [φ 0.0; 0.0 φ],
+        R = [1.0 0.0; 0.0 1.0],
+        Q = diag_free(2, :q),
+        a1 = [0.0, 0.0],
+        P1 = [10.0 0.0; 0.0 10.0]
     )
-
-    # Method 2: _em_general_ssm_full_cov with diagonal constraints
-    H_init_full = Diagonal(H_init_diag) |> Matrix
-    Q_init_full = Diagonal(Q_init_diag) |> Matrix
-
-    # Only diagonal elements are free
-    H_free_full = falses(p, p)
-    H_free_full[1, 1] = true
-    H_free_full[2, 2] = true
-
-    Q_free_full = falses(r, r)
-    Q_free_full[1, 1] = true
-    Q_free_full[2, 2] = true
-
-    result_full = Siphon.DSL._em_general_ssm_full_cov(
-        Z_init,
-        T_init,
-        R,
-        H_init_full,
-        Q_init_full,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free_full,
-        Q_free = Q_free_full,
-        maxiter = 200,
-        tol_ll = 1e-8,
-        verbose = false
-    )
-
-    # Both methods should produce the same results
-    @test maximum(abs.(result_wrapper.Z - result_full.Z)) < 1e-10
-    @test maximum(abs.(result_wrapper.T - result_full.T)) < 1e-10
-    @test maximum(abs.(result_wrapper.H_diag - diag(result_full.H))) < 1e-10
-    @test maximum(abs.(result_wrapper.Q_diag - diag(result_full.Q))) < 1e-10
-    @test abs(result_wrapper.loglik - result_full.loglik) < 1e-10
-    # Off-diagonals should be exactly zero (they were fixed)
-    @test result_full.H[1, 2] == 0.0
-    @test result_full.Q[1, 2] == 0.0
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 2000, tol = 1e-10)
+    mats = system_matrices(model)
+    @test mats.T[1, 1] == mats.T[2, 2] == parameters(model).φ
+    @test mats.H[1, 1] == mats.H[2, 2] == parameters(model).h
+    @test ssm_loglik(spec, parameters(model), y) ≈ loglikelihood(model)
+    mle = fit!(MLE(), StateSpaceModel(spec, n), y)
+    @test loglikelihood(model) ≈ loglikelihood(mle) rtol = 1e-5
 end
 
-@testset "_mstep_full_cov produces symmetric matrices" begin
-    Random.seed!(789)
+@testset "fit!(EM()) with a symmetric covariance cell" begin
+    Random.seed!(12)
+    n = 300
+    L_H = cholesky([1.0 0.4; 0.4 0.8]).L
+    α = zeros(2, n)
+    for t in 2:n
+        α[:, t] = 0.6 * α[:, t - 1] + 0.5 * randn(2)
+    end
+    y = α + L_H * randn(2, n)
+    h12 = FreeParam(:h12, init = 0.0, lower = -Inf)
+    spec = custom_ssm(
+        Z = [1.0 0.0; 0.0 1.0],
+        H = [FreeParam(:h11, init = 1.0, lower = 0.0) h12;
+             h12 FreeParam(:h22, init = 1.0, lower = 0.0)],
+        T = [0.6 0.0; 0.0 0.6],
+        R = [1.0 0.0; 0.0 1.0],
+        Q = [0.25 0.0; 0.0 0.25],
+        a1 = [0.0, 0.0],
+        P1 = [10.0 0.0; 0.0 10.0]
+    )
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter = 1000, tol = 1e-10)
+    H = system_matrices(model).H
+    @test H[1, 2] == H[2, 1] == parameters(model).h12
+    @test parameters(model).h12 > 0.1
+    @test ssm_loglik(spec, parameters(model), y) ≈ loglikelihood(model)
+end
 
-    # Setup test data
-    p, m, n = 2, 2, 50
-    r = 2
-
-    Z = [1.0 0.0; 0.0 1.0]
-    T = [0.9 0.0; 0.0 0.8]
-    R = [1.0 0.0; 0.0 1.0]
-    H = [1.0 0.3; 0.3 1.0]
-    Q = [0.5 0.1; 0.1 0.5]
-    a1 = zeros(m)
-    P1 = 10.0 * Matrix{Float64}(I, m, m)
-
-    y = randn(p, n)
-
-    # Run filter and smoother
-    kfp = KFParms(Z, H, T, R, Q)
-    filt = kalman_filter(kfp, y, a1, P1)
-    smooth = kalman_smoother(filt; crosscov = true)
-
-    # Run M-step
-    Z_new, T_new,
-    H_new,
-    Q_new = Siphon.DSL._mstep_full_cov(
-        Z, T, R, y, smoothed_states(smooth), smoothed_states_cov(smooth),
-        crosslag_covs(smooth))
-
-    # Check symmetry
-    @test H_new ≈ H_new' atol=1e-10
-    @test Q_new ≈ Q_new' atol=1e-10
-
-    # Check dimensions
-    @test size(H_new) == (p, p)
-    @test size(Q_new) == (r, r)
-    @test size(Z_new) == (p, m)
-    @test size(T_new) == (m, m)
+@testset "fit!(EM()) rejects parameters it cannot update" begin
+    spec = dns_model([3, 12, 24, 60, 120]; diffuse = false)
+    @test_throws "fit!(EM(), ...) cannot estimate λ (it enters Z through a matrix expression)" fit!(
+        EM(), StateSpaceModel(spec, 20), randn(5, 20))
 end
 
 @testset "block_diag matches manual block-diagonal spec under EM" begin
@@ -798,9 +626,8 @@ end
     @test abs(θ.mu0 - 5.0) < 3.0
     @test θ.p0 ≥ 0.0   # variance non-negative
 
-    # The fitted (a1, P1) in the workspace match what _find_param_value
-    # returns to the model's theta_values — i.e., the fix that lets EM
-    # actually surface FreeParams in a1/P1 is wired through.
+    # The fitted (a1, P1) in the workspace match the parameters that
+    # fit!(EM()) stores on the model.
     kf_ws = model.workspaces_ref[].kf_ws
     @test kf_ws.a1[1] ≈ θ.mu0
     @test kf_ws.P1[1, 1] ≈ θ.p0
@@ -837,8 +664,8 @@ end
     a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
     kf_ws = KalmanWorkspace(kfp.Z, kfp.H, kfp.T, kfp.R, kfp.Q, a1_init, P1_init, n)
     em_ws = Siphon.EMWorkspace(kf_ws)
-    Siphon._set_em_masks_from_spec!(em_ws, spec)
-    result = em_estimate!(kf_ws, em_ws, y; maxiter = 50, tol = 0.0, verbose = false)
+    Siphon.set_em_masks!(em_ws, spec)
+    result = Siphon.em_estimate!(kf_ws, em_ws, y; maxiter = 50, tol = 0.0, verbose = false)
 
     @test all(diff(result.loglik_history) .>= -1e-8)
 end

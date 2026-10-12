@@ -257,8 +257,8 @@ end
 
     # EM whose starting values make the filter fail stops at once and says why.
     kf_ws = KalmanWorkspace(fail_Z, fail_H, fail_T, fail_R, fail_Q, fail_a1, [1.0;;], n)
-    em_ws = EMWorkspace(kf_ws)
-    res = @test_logs (:warn, r"EM stopped at iteration 1: the filter stopped in period 1") em_estimate!(
+    em_ws = Siphon.EMWorkspace(kf_ws)
+    res = @test_logs (:warn, r"EM stopped at iteration 1: the filter stopped in period 1") Siphon.em_estimate!(
         kf_ws, em_ws, y)
     @test !res.converged
     @test res.loglik == -Inf

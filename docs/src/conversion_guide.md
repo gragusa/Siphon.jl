@@ -334,3 +334,45 @@ Changed behavior:
   arrays.
 - `static = :on` with exact diffuse initialization (`diffuse = :exact`) throws an
   `ArgumentError`. Previously it fell back to plain arrays without saying so.
+
+## EM estimation
+
+`fit!(EM(), model, y)` is the EM entry point for a spec, and `profile_em_ssm` is built on
+it. The workspace layer underneath is public but not exported: `Siphon.EMWorkspace`,
+`Siphon.em_estimate!`, `Siphon.compute_sufficient_stats!` and `Siphon.set_em_masks!`.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!` (exported) | `Siphon.EMWorkspace`, `Siphon.em_estimate!`, `Siphon.compute_sufficient_stats!` |
+| `Siphon._set_em_masks_from_spec!(em_ws, spec)` | `Siphon.set_em_masks!(em_ws, spec)` |
+| `Siphon.DSL._em_general_ssm_full_cov(Z, T, R, H, Q, y, a1, P1; Z_free, T_free, H_free, Q_free, …)` | `Siphon.em_estimate!` on a `KalmanWorkspace` with the masks set on `Siphon.EMWorkspace(kf_ws)` |
+| `Siphon.DSL.em_ssm_diagonal(…)` | as above, with diagonal `H_free`/`Q_free` and `em_ws.H_diag_only = true` |
+| `Siphon.DSL._em_local_level(spec, y)` | `fit!(EM(), StateSpaceModel(spec, n), y)` |
+| `setup_dfm_workspaces`, `extract_loadings`, `extract_factors` | `DynamicFactorModel` with `loadings` and `factors` |
+| `EMResult` fields `theta`, `theta_vec`, `smoothed_states`, `smoothed_cov` (from the DSL EMs) | `EMResult` holds `Z`, `H`, `T`, `R`, `Q`, `a1`, `P1`; parameters come from `parameters(model)` or `ProfileEMResult.θ` |
+| `profile_em_ssm(…; tol_ll)` | `profile_em_ssm(…; tol)`, the relative change in the log-likelihood as in `fit!(EM(), …)` |
+| `ProfileEMResult.em_result::NamedTuple` | `ProfileEMResult.em_result::EMResult` |
+| `verbose = true` printed with `println` | logs with `@info` |
+
+Changed behavior:
+
+- `fit!(EM(), …)` throws an `ArgumentError` for parameters that EM cannot update: those
+  inside a `MatrixExpr` (such as `λ` of `dns_model`), in `R`, or in an expression.
+  Previously they stayed at their initial values without notice.
+- EM keeps cells that share a parameter equal, for example `T_structure = :ar1` and
+  `H_structure = :scalar` in `dns_model`.
+- EM keeps fixed cells of `H` fixed. Previously it overwrote them.
+- With full covariance `Q` or `H` (`cov_free`, `Q_structure = :full`), `profile_em_ssm`
+  returns the correlation parameters of the estimated matrix. Previously it returned 0,
+  so `ssm_loglik(spec, result.θ, y)` did not reproduce `result.loglik`.
+- `profile_em_ssm` uses the initial state of the spec. Previously it capped the diagonal
+  of `P1` at 1e4.
+- `profile_em_ssm` needs a value in `fixed` for every other parameter that EM cannot
+  update, for example `fixed = (λ2 = 0.03,)` for Svensson loadings with `λ_param = :λ1`.
+- When some free cells of `T` (or `Z`) differ between rows and `Q` (or `H`) is not
+  diagonal, the M-step weights the rows by the inverse covariance. Diagonal `T` with a
+  full `Q`, the `dns_model` default, now gives the exact M-step.
+- The `Z` and `H` updates sum over the observed periods only, which removes a bias when
+  whole periods are missing.
+- `em_estimate!` throws an `ArgumentError` for periods with some but not all series
+  missing, as `fit!(EM(), …)` already did.

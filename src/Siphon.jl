@@ -47,6 +47,7 @@ include("predict.jl")
 
 # In-place filter/smoother for large models (depends on DSL types)
 include("inplace.jl")
+include("em_spec.jl")
 
 # In-place EKF workspace (depends on inplace.jl loading first so its
 # `set_params!` / `update_params!` exist; we add EKF-typed methods on top.)
@@ -113,9 +114,6 @@ export EKFSpec, MeasurementExpr, custom_ekf
 export build_measurement, build_ekfparms, build_nonlinear_state_space
 export EKFLogDensity
 
-# EM algorithm (DSL-based) - main API is fit!(EM(), model, y)
-export EMResult, profile_em_ssm, ProfileEMResult
-
 # In-place Kalman filter/smoother (zero-allocation for large models)
 export KalmanWorkspace
 export kalman_filter!, kalman_smoother!, kalman_filter_and_smooth!
@@ -132,8 +130,10 @@ export set_initial_diffuse!
 export SimulationSmootherWorkspace, simulation_smoother, simulation_smoother!
 export refresh_factors!
 
-# In-place EM algorithm
-export EMWorkspace, compute_sufficient_stats!, em_estimate!
+# EM algorithm: fit!(EM(), model, y) and profile_em_ssm. The workspace layer
+# (EMWorkspace, em_estimate!, compute_sufficient_stats!, set_em_masks!) is
+# reached as Siphon.<name>.
+export EMResult, profile_em_ssm, ProfileEMResult
 export MLE, EM  # Estimation method markers
 
 # High-level StateSpaceModel API

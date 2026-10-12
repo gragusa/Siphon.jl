@@ -2083,10 +2083,23 @@ The EM algorithm computes sufficient statistics from smoothed states:
     S_11 = Σ_{t=2}^{n} E[α_t α_t' | Y]
     S_10 = Σ_{t=2}^{n} E[α_t α_{t-1}' | Y]
 
-For observation equation:
-    S_yy = Σ_{t=1}^{n} y_t y_t'
-    S_yα = Σ_{t=1}^{n} y_t E[α_t' | Y]
-    S_αα = Σ_{t=1}^{n} E[α_t α_t' | Y]
+For the observation equation, summed over the observed periods only:
+    S_yy = Σ_t y_t y_t'
+    S_yα = Σ_t y_t E[α_t' | Y]
+    S_αα = Σ_t E[α_t α_t' | Y]
+
+# Free-cell masks
+The masks select which cells the M-step updates; every other cell keeps its
+value. A default-constructed workspace frees every cell of `Z`, `H`, `T` and
+`Q` and keeps the initial state fixed. `set_em_masks!` sets the masks,
+and the tie groups below, from an `SSMSpec`; `fit!(EM(), ...)` calls it.
+
+- `Z_free`, `H_free`, `T_free`, `Q_free`: cells to estimate.
+- `H_diag_only`: `H` is diagonal; only its diagonal is updated.
+- `a1_free`, `P1_free`: initial-state cells to estimate.
+- `Z_ties`, `H_ties`, `T_ties`, `Q_ties`: groups of free cells that share one
+  value. Cells in a group stay equal after every M-step. `H` and `Q` groups must
+  lie on the diagonal of a diagonal block.
 """
 mutable struct EMWorkspace{T <: Real}
     # Dimensions
@@ -2101,9 +2114,9 @@ mutable struct EMWorkspace{T <: Real}
     S_10::Matrix{T}   # Σ E[α_t α_{t-1}' | Y] for t = 2:n
 
     # Sufficient statistics for observation equation
-    S_yy::Matrix{T}   # Σ y_t y_t' (p × p)
-    S_yα::Matrix{T}   # Σ y_t α_t' (p × m)
-    S_αα::Matrix{T}   # Σ E[α_t α_t' | Y] for t = 1:n (m × m)
+    S_yy::Matrix{T}   # Σ y_t y_t' over observed t (p × p)
+    S_yα::Matrix{T}   # Σ y_t α_t' over observed t (p × m)
+    S_αα::Matrix{T}   # Σ E[α_t α_t' | Y] over observed t (m × m)
 
     # Scratch space for M-step computations
     tmp_mm1::Matrix{T}  # m × m
@@ -2117,14 +2130,13 @@ mutable struct EMWorkspace{T <: Real}
     # For dynamic factor models: masks for constrained estimation
     # These indicate which parameters are free vs fixed
     Z_free::BitMatrix      # p × m: which Z elements to estimate
+    H_free::BitMatrix      # p × p: which H elements to estimate
     H_diag_only::Bool      # If true, H is diagonal
     T_free::BitMatrix      # m × m: which T elements to estimate
     Q_free::BitMatrix      # r × r: which Q elements to estimate
 
-    # Initial-state masks. Closed-form M-step updates a₁ ← E[α₁|y] and
-    # P₁ ← Var[α₁|y] from the smoother. Default-false (do nothing) preserves
-    # the prior fixed-prior behaviour; _set_em_masks_from_spec! turns these on
-    # for cells that the spec marks as ParameterRef.
+    # Initial-state masks. The M-step sets a₁ ← E[α₁|y] and P₁ ← Var[α₁|y]
+    # on the free cells.
     a1_free::BitVector     # m: which a1 entries to estimate
     P1_free::BitMatrix     # m × m: which P1 entries to estimate
 
@@ -2136,6 +2148,12 @@ mutable struct EMWorkspace{T <: Real}
     # commits only if loglik does not decrease. Mirrors MARSS `degen.test`.
     H_zero::BitVector      # p: which H diagonal entries are frozen at 0
     Q_zero::BitVector      # r: which Q diagonal entries are frozen at 0
+
+    # Groups of free cells that share one parameter.
+    Z_ties::Vector{Vector{CartesianIndex{2}}}
+    H_ties::Vector{Vector{CartesianIndex{2}}}
+    T_ties::Vector{Vector{CartesianIndex{2}}}
+    Q_ties::Vector{Vector{CartesianIndex{2}}}
 end
 
 """
@@ -2166,18 +2184,21 @@ function EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T} = Float64) where 
         zeros(T, r, m),
         # Default: all parameters free
         trues(p, m),     # Z_free
+        trues(p, p),     # H_free
         false,           # H_diag_only
         trues(m, m),     # T_free
         trues(r, r),     # Q_free
-        # Default: do not update initial state. The high-level fit!(EM)
-        # path turns these on per-cell from the SSMSpec via
-        # _set_em_masks_from_spec!.
+        # Default: initial state fixed.
         falses(m),       # a1_free
         falses(m, m),    # P1_free
         # Default: no entries frozen at zero — this is the existing behaviour.
         # The opt-in `allow_degen` path in `fit!(EM(), …)` flips these per cell.
         falses(p),       # H_zero
-        falses(r)        # Q_zero
+        falses(r),       # Q_zero
+        Vector{CartesianIndex{2}}[],  # Z_ties
+        Vector{CartesianIndex{2}}[],  # H_ties
+        Vector{CartesianIndex{2}}[],  # T_ties
+        Vector{CartesianIndex{2}}[]   # Q_ties
     )
 end
 
@@ -2195,10 +2216,13 @@ end
 # ============================================
 
 """
-    compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix)
+    compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix) -> n_valid
 
-Compute sufficient statistics from smoothed states for M-step.
-Requires `kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
+Compute the sufficient statistics of the M-step from the smoother output and
+return the number of observed periods. The observation-equation sums `S_yy`,
+`S_yα` and `S_αα` run over the observed periods only, so the `Z` and `H` updates
+stay unbiased when whole periods are missing. Requires
+`kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
 output, and throws an `ArgumentError` otherwise.
 """
 function compute_sufficient_stats!(
@@ -2208,9 +2232,11 @@ function compute_sufficient_stats!(
 ) where {T}
     # Checks that the smoother has run with the cross-lag covariances.
     crosslag_covs(kf_ws)
+    Base.require_one_based_indexing(y)
     p, m, n = em_ws.obs_dim, em_ws.state_dim, em_ws.n_times
+    size(y) == (p, n) ||
+        throw(DimensionMismatch("y must be $p × $n, got $(size(y))"))
 
-    # Reset sufficient statistics
     fill!(em_ws.S_00, zero(T))
     fill!(em_ws.S_11, zero(T))
     fill!(em_ws.S_10, zero(T))
@@ -2220,82 +2246,42 @@ function compute_sufficient_stats!(
 
     n_valid = 0
 
-    @inbounds for t in 1:n
-        α_t = view(kf_ws.αs, :, t)       # Smoothed state E[α_t | Y]
-        V_t = view(kf_ws.Vs, :, :, t)    # Smoothed covariance Var[α_t | Y]
+    for t in 1:n
+        α_t = view(kf_ws.αs, :, t)       # E[α_t | Y]
+        V_t = view(kf_ws.Vs, :, :, t)    # Var[α_t | Y]
+        observed = !kf_ws.missing_mask[t]
+        in_00 = t < n                    # S_00 sums t = 1:n-1
+        in_11 = t > 1                    # S_11 sums t = 2:n
 
-        # E[α_t α_t'|Y] = V_t + α_t α_t'. Every time step contributes once to
-        # S_αα; interior steps (1<t<n) also contribute to both S_00 and S_11.
-        # By adding to S_00 or S_11 here and later folding in the boundary
-        # t=1 or t=n contribution, we read V_t / α_t only once per t.
-        if t == 1
-            # First step contributes to S_αα (and S_00 if n>1), not to S_11.
-            if n > 1
-                @simd for j in 1:m
-                    @simd for i in 1:m
-                        moment = V_t[i, j] + α_t[i] * α_t[j]
-                        em_ws.S_αα[i, j] += moment
-                        em_ws.S_00[i, j] += moment
-                    end
-                end
-            else
-                @simd for j in 1:m
-                    @simd for i in 1:m
-                        em_ws.S_αα[i, j] += V_t[i, j] + α_t[i] * α_t[j]
-                    end
-                end
-            end
-        elseif t == n
-            # Last step contributes to S_αα and S_11, not to S_00.
-            @simd for j in 1:m
-                @simd for i in 1:m
-                    moment = V_t[i, j] + α_t[i] * α_t[j]
-                    em_ws.S_αα[i, j] += moment
-                    em_ws.S_11[i, j] += moment
-                end
-            end
-        else
-            # Interior: contributes to all three state moment sums.
-            @simd for j in 1:m
-                @simd for i in 1:m
-                    moment = V_t[i, j] + α_t[i] * α_t[j]
-                    em_ws.S_αα[i, j] += moment
-                    em_ws.S_00[i, j] += moment
-                    em_ws.S_11[i, j] += moment
-                end
-            end
+        # E[α_t α_t'|Y] = V_t + α_t α_t', read once per t.
+        for j in 1:m, i in 1:m
+
+            moment = V_t[i, j] + α_t[i] * α_t[j]
+            observed && (em_ws.S_αα[i, j] += moment)
+            in_00 && (em_ws.S_00[i, j] += moment)
+            in_11 && (em_ws.S_11[i, j] += moment)
         end
 
         # S_10: Σ_{t=2}^{n} E[α_t α_{t-1}'|Y] = Σ (Pcross_{t-1} + α_t α_{t-1}').
         if t > 1
             α_tm1 = view(kf_ws.αs, :, t - 1)
-            Pcross_tm1 = view(kf_ws.Pcross, :, :, (t - 1))
-            @simd for j in 1:m
-                @simd for i in 1:m
-                    em_ws.S_10[i, j] += Pcross_tm1[i, j] + α_t[i] * α_tm1[j]
-                end
+            Pcross_tm1 = view(kf_ws.Pcross, :, :, t - 1)
+            for j in 1:m, i in 1:m
+
+                em_ws.S_10[i, j] += Pcross_tm1[i, j] + α_t[i] * α_tm1[j]
             end
         end
 
-        # Observation-equation stats: only for non-missing obs.
-        if !kf_ws.missing_mask[t]
+        if observed
             n_valid += 1
             y_t = view(y, :, t)
+            for j in 1:p, i in 1:p
 
-            # S_yy += y_t y_t' (symmetric; upper/lower updated together).
-            @simd for j in 1:p
-                yj = y_t[j]
-                @simd for i in 1:p
-                    em_ws.S_yy[i, j] += y_t[i] * yj
-                end
+                em_ws.S_yy[i, j] += y_t[i] * y_t[j]
             end
+            for j in 1:m, i in 1:p
 
-            # S_yα += y_t α_t'
-            @simd for j in 1:m
-                αj = α_t[j]
-                @simd for i in 1:p
-                    em_ws.S_yα[i, j] += y_t[i] * αj
-                end
+                em_ws.S_yα[i, j] += y_t[i] * α_t[j]
             end
         end
     end
@@ -2320,10 +2306,17 @@ fixed columns of row `i`,
     Z[i, J] = (S_yα[i, J] - Z[i, F] S_αα[F, J]) * inv(S_αα[J, J]).
 
 This is exact when `H` is diagonal or all rows share the same free columns.
+When cells are tied (`em_ws.Z_ties`), or `H` is not diagonal and the rows have
+different free columns, the update is the generalized least-squares solution
+with weight `H⁻¹` (see `_update_gls!`).
 """
 function update_Z!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
 
+    if _needs_gls(em_ws.Z_free, em_ws.Z_ties, kf_ws.H)
+        _update_gls!(kf_ws.Z, em_ws.Z_free, em_ws.Z_ties, kf_ws.H,
+            em_ws.S_αα, em_ws.S_yα, "Z", "H") && return nothing
+    end
     all(em_ws.Z_free) || return _update_Z_restricted!(kf_ws, em_ws)
 
     # Compute S_αα^{-1} (use only valid observations portion)
@@ -2405,6 +2398,101 @@ function _update_Z_restricted!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T})
     return nothing
 end
 
+# True when the row-wise update of a partially free coefficient matrix is not
+# the restricted maximizer: cells are tied, or the rows have different free
+# columns and the weight matrix `W` couples the rows.
+function _needs_gls(free::AbstractMatrix{Bool}, ties, W::AbstractMatrix)
+    isempty(ties) || return true
+    all(free) && return false
+    common = all(i -> view(free, i, :) == view(free, 1, :), axes(free, 1))
+    return !common && !isdiag(W)
+end
+
+# Restricted M-step for a coefficient matrix `X` (`Z` or `T`). It minimizes
+#
+#     tr(W⁻¹ (X S Xᵀ - C Xᵀ - X Cᵀ))
+#
+# over the free cells of `X`, with the cells in each tie group sharing one value
+# and every other cell held at its current value. For `Z`: W = H, S = S_αα,
+# C = S_yα. For `T`: W = R Q Rᵀ, S = S_00, C = S_10. Setting the derivative with
+# respect to each group value βₖ (cells Gₖ) to zero gives the linear system
+#
+#     Σₗ A[k, l] βₗ = Σ_{(i,j)∈Gₖ} [W⁻¹ (C - F S)][i, j],
+#     A[k, l] = Σ_{(i,j)∈Gₖ} Σ_{(a,b)∈Gₗ} W⁻¹[i, a] S[b, j],
+#
+# where F is X with its free cells set to zero. Returns false, leaving X
+# unchanged, when W is singular and no cells are tied; a singular W with tied
+# cells throws, because no exact update exists.
+function _update_gls!(X::AbstractMatrix{T}, free::AbstractMatrix{Bool}, ties,
+        W::AbstractMatrix, S::AbstractMatrix, C::AbstractMatrix,
+        xname::AbstractString, wname::AbstractString) where {T}
+    Wchol = cholesky(Symmetric(W), check = false)
+    if !issuccess(Wchol)
+        isempty(ties) && return false
+        throw(ArgumentError(
+            "EM cannot update the tied cells of $xname: $wname is singular. " *
+            "Use fit!(MLE(), ...)."))
+    end
+    Winv = inv(Wchol)
+
+    tied = Set{CartesianIndex{2}}()
+    groups = Vector{Vector{CartesianIndex{2}}}()
+    for g in ties
+        push!(groups, g)
+        union!(tied, g)
+    end
+    for I in CartesianIndices(free)
+        free[I] && !(I in tied) && push!(groups, [I])
+    end
+    K = length(groups)
+    K == 0 && return true
+
+    F = copy(X)
+    for g in groups, I in g
+
+        F[I] = zero(T)
+    end
+    G = Winv * (C - F * S)
+
+    A = zeros(T, K, K)
+    b = zeros(T, K)
+    for k in 1:K
+        for I in groups[k]
+            b[k] += G[I]
+        end
+        for l in k:K
+            a = zero(T)
+            for I in groups[k], J in groups[l]
+
+                a += Winv[I[1], J[1]] * S[J[2], I[2]]
+            end
+            A[k, l] = a
+            A[l, k] = a
+        end
+        A[k, k] += T(1e-10)
+    end
+    β = cholesky!(Symmetric(A)) \ b
+
+    for k in 1:K, I in groups[k]
+
+        X[I] = β[k]
+    end
+    return true
+end
+
+# Set every cell of each tie group to the group mean. For a diagonal covariance
+# block whose tied cells lie on the diagonal, the mean of the per-cell M-step
+# values is the restricted maximizer.
+function _average_ties!(X::AbstractMatrix, ties)
+    for g in ties
+        v = sum(I -> X[I], g) / length(g)
+        for I in g
+            X[I] = v
+        end
+    end
+    return X
+end
+
 """
     update_H!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace, n_valid::Int)
 
@@ -2414,17 +2502,14 @@ M-step update for observation covariance H. The Shumway–Stoffer formula is
           = (1/n) [S_yy - Z S_yα' - S_yα Z' + Z S_αα Z'],
 
 where `S_αα = Σ_t E[α_t α_t' | Y]` includes the smoother variance term
-`Σ_t V̂_t`. The previous implementation used the simplified two-term form
-`S_yy - Z S_yα'`, which is correct **only** when `Z` is simultaneously
-updated to its unconstrained M-step optimum `Z = S_yα S_αα^{-1}`. When `Z`
-is structurally fixed (e.g. Nelson–Siegel loadings in DNS) or only partially
-free, the simplification produces negative `H` diagonals (then floored to
-1e-10), which destroys EM monotonicity and pushes the optimizer into a
-spurious basin. Using the full four-term formula is correct in all cases
-and identical to the simplified form when Z reaches its M-step optimum.
+`Σ_t V̂_t`. The four-term form is required: the shorter `S_yy - Z S_yα'`
+holds only when `Z` sits at its unrestricted optimum `S_yα S_αα⁻¹`, and gives
+negative variances when `Z` is fixed or partially free.
 
-Honours `em_ws.H_diag_only` (skips off-diagonal updates) and
-`em_ws.H_zero` (per-cell freezes from the `allow_degen` path).
+Honours `em_ws.H_free` (cells to update), `em_ws.H_diag_only` (skips
+off-diagonal updates),
+`em_ws.H_zero` (per-cell freezes from the `allow_degen` path) and
+`em_ws.H_ties` (diagonal cells that share one variance).
 """
 function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
@@ -2440,6 +2525,7 @@ function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
     if em_ws.H_diag_only
         # Diagonal entries only: avoid the full p × p matmul for Z S_αα Z'.
         @inbounds for i in 1:p
+            em_ws.H_free[i, i] || continue
             if em_ws.H_zero[i]
                 kf_ws.H[i, i] = zero(T)   # frozen at 0 by allow_degen path
                 continue
@@ -2461,6 +2547,7 @@ function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
         # H_new = S_yy - Z S_yα' - (Z S_yα')' + (Z S_αα) Z'
         @inbounds for j in 1:p, i in 1:p
 
+            em_ws.H_free[i, j] || continue
             zsz_ij = zero(T)
             @simd for k in 1:m
                 zsz_ij += em_ws.tmp_pm[i, k] * kf_ws.Z[j, k]
@@ -2478,6 +2565,7 @@ function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
         end
         # Floor diagonals (skip frozen ones).
         @inbounds for i in 1:p
+            em_ws.H_free[i, i] || continue
             if em_ws.H_zero[i]
                 kf_ws.H[i, i] = zero(T)
                 continue
@@ -2485,6 +2573,7 @@ function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
             kf_ws.H[i, i] = max(kf_ws.H[i, i], T(1e-10))
         end
     end
+    _average_ties!(kf_ws.H, em_ws.H_ties)
 
     return nothing
 end
@@ -2501,13 +2590,19 @@ for each row `i`, with `J_i = {j : T_free[i, j]}`,
 
     T[i, J_i] = S_10[i, J_i] * inv(S_00[J_i, J_i]).
 
-If row `i` has no free cells it is left untouched. The previous implementation
-computed the unconstrained `T_new = S_10 / S_00` and then wrote back only the
-free positions; that gives a different (biased) estimate whenever the free
-pattern is not the full rectangle, e.g. for a diagonal `B` in DNS-style models.
+If row `i` has no free cells it is left untouched. The row-wise update is exact
+when `R Q Rᵀ` is diagonal or every row has the same free columns. When cells are
+tied (`em_ws.T_ties`), or `R Q Rᵀ` couples rows with different free columns,
+the update is the generalized least-squares solution with weight `(R Q Rᵀ)⁻¹`
+(see `_update_gls!`); a singular `R Q Rᵀ` keeps the row-wise update.
 """
 function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
     m = em_ws.state_dim
+
+    if _needs_gls(em_ws.T_free, em_ws.T_ties, kf_ws.RQR)
+        _update_gls!(kf_ws.Tmat, em_ws.T_free, em_ws.T_ties, kf_ws.RQR,
+            em_ws.S_00, em_ws.S_10, "T", "R Q Rᵀ") && return nothing
+    end
 
     # Detect whether all rows share the same free-column pattern. Common cases:
     # all-true (unrestricted), diagonal-only, lower-triangular, fixed sub-block.
@@ -2694,6 +2789,7 @@ function update_Q!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
             kf_ws.Q[i, i] = max(kf_ws.Q[i, i], T(1e-10))
         end
     end
+    _average_ties!(kf_ws.Q, em_ws.Q_ties)
 
     # Update RQR
     _update_RQR!(kf_ws)
@@ -2761,7 +2857,16 @@ end
 """
     EMResult{T}
 
-Result of EM estimation.
+Result of an EM run: the system matrices at the last iterate, with convergence
+information.
+
+# Fields
+- `converged::Bool`: the relative change in the log-likelihood fell below `tol`.
+- `iterations::Int`: number of E-steps run.
+- `loglik::T`: log-likelihood at the returned parameters.
+- `loglik_history::Vector{T}`: log-likelihood at each iteration.
+- `Z`, `H`, `T`, `R`, `Q`: system matrices.
+- `a1`, `P1`: initial state mean and covariance.
 """
 struct EMResult{T <: Real}
     converged::Bool
@@ -2771,7 +2876,17 @@ struct EMResult{T <: Real}
     Z::Matrix{T}
     H::Matrix{T}
     T::Matrix{T}
+    R::Matrix{T}
     Q::Matrix{T}
+    a1::Vector{T}
+    P1::Matrix{T}
+end
+
+function Base.show(io::IO, r::EMResult)
+    p, m = size(r.Z)
+    status = r.converged ? "converged" : "not converged"
+    print(io, "EMResult(p = $p, m = $m, $status after $(r.iterations) iterations, ",
+        "loglik = $(round(r.loglik; sigdigits = 8)))")
 end
 
 """
@@ -2781,7 +2896,13 @@ end
                  estimate_T::Bool=true, estimate_Q::Bool=true,
                  estimate_initial::Bool=true) -> EMResult
 
-Run EM algorithm to estimate state-space model parameters.
+Run the EM algorithm on the parameters held in `kf_ws`, updating them in place.
+The masks and tie groups in `em_ws` select the cells to estimate; see
+`EMWorkspace` and `set_em_masks!`. `fit!(EM(), model, y)` is the
+model-level entry point.
+
+Periods with some but not all observations missing are not supported and throw
+an `ArgumentError`; whole missing periods are fine.
 
 # Arguments
 - `kf_ws`: Kalman filter/smoother workspace (contains initial parameters)
@@ -2791,7 +2912,7 @@ Run EM algorithm to estimate state-space model parameters.
 # Keyword Arguments
 - `maxiter`: Maximum number of EM iterations (default: 500)
 - `tol`: Convergence tolerance for log-likelihood change (default: 1e-6)
-- `verbose`: Print progress (default: false)
+- `verbose`: Log progress with `@info` (default: false)
 - `warn`: Emit a warning when EM stops without converging (default: true)
 - `estimate_Z`: Update observation matrix Z (default: true)
 - `estimate_H`: Update observation covariance H (default: true)
@@ -2800,9 +2921,8 @@ Run EM algorithm to estimate state-space model parameters.
 - `estimate_initial`: Update `(a₁, P₁)` from the smoother whenever
   `em_ws.a1_free` / `em_ws.P1_free` mark cells as free (default: true).
   Cells with `a1_free[i] == false` (or `P1_free[i,j] == false`) stay
-  fixed at their initial value. The default-constructed `EMWorkspace`
-  has both masks all-false, so this is a no-op unless the user (or
-  `_set_em_masks_from_spec!`) opts cells in.
+  fixed at their initial value. Both masks are all-false in a
+  default-constructed `EMWorkspace`.
 
 # Returns
 - `EMResult` containing convergence info and estimated parameters
@@ -2825,6 +2945,7 @@ function em_estimate!(
         warn::Bool = true
 ) where {T}
     y = _nan_obs(y)
+    _require_no_partial_periods(y, "em_estimate!", "Use fit!(MLE(), ...), which handles them.")
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
     converged = false
@@ -2847,18 +2968,16 @@ function em_estimate!(
             rel_change = ll_change / (abs(ll_prev) + T(1e-10))
 
             if verbose && (i % 10 == 0 || i <= 5)
-                println("EM iter $i: loglik = $ll, change = $ll_change, rel = $rel_change")
+                @info "EM iteration $i" loglik=ll change=ll_change rel_change
             end
 
             if rel_change < tol
                 converged = true
-                if verbose
-                    println("EM converged at iteration $i")
-                end
+                verbose && @info "EM converged at iteration $i" loglik = ll
                 break
             end
         elseif verbose
-            println("EM iter $i: loglik = $ll")
+            @info "EM iteration $i" loglik = ll
         end
 
         ll_prev = ll
@@ -2915,7 +3034,10 @@ function em_estimate!(
         copy(kf_ws.Z),
         copy(kf_ws.H),
         copy(kf_ws.Tmat),
-        copy(kf_ws.Q)
+        copy(kf_ws.R),
+        copy(kf_ws.Q),
+        copy(kf_ws.a1),
+        copy(kf_ws.P1)
     )
 end
 
@@ -3014,114 +3136,6 @@ function _try_degenerate!(
     end
 
     return n_frozen
-end
-
-# ============================================
-# Dynamic Factor Model Helper Functions
-# ============================================
-
-"""
-    setup_dfm_workspaces(p::Int, k::Int, s::Int, n::Int; T::Type=Float64)
-
-Create KalmanWorkspace and EMWorkspace for a dynamic factor model.
-
-# Arguments
-- `p`: Number of observable series
-- `k`: Number of latent factors
-- `s`: Number of factor VAR lags
-- `n`: Number of time periods
-
-# Returns
-Tuple `(kf_ws, em_ws)` of KalmanWorkspace and EMWorkspace.
-
-# DFM State Space Form
-The state αₜ = [fₜ', fₜ₋₁', ..., fₜ₋ₛ₊₁']' has dimension m = k × s.
-Observation: yₜ = Λ fₜ + εₜ = [Λ, 0, ..., 0] αₜ + εₜ
-Transition: αₜ₊₁ = T αₜ + R ηₜ where T is companion form and R = [Iₖ; 0; ...].
-"""
-function setup_dfm_workspaces(
-        p::Int,
-        k::Int,
-        s::Int,
-        n::Int;
-        T::Type{TT} = Float64
-) where {TT <: Real}
-    m = k * s    # State dimension
-    r = k        # Shock dimension (innovations only on current factors)
-
-    # Create Kalman workspace
-    kf_ws = KalmanWorkspace{TT}(p, m, r, n)
-
-    # Zero out all parameter matrices (constructor uses undef)
-    fill!(kf_ws.Z, zero(TT))
-    fill!(kf_ws.H, zero(TT))
-    fill!(kf_ws.Tmat, zero(TT))
-    fill!(kf_ws.R, zero(TT))
-    fill!(kf_ws.Q, zero(TT))
-    fill!(kf_ws.a1, zero(TT))
-    fill!(kf_ws.P1, zero(TT))
-
-    # Initialize Z: [Λ, 0, ..., 0] where Λ is p × k
-    # Loadings go in first k columns, initialized by caller with PCA
-
-    # Initialize H: diagonal idiosyncratic variances (set by caller)
-    # For now, set default small diagonal to avoid singularity
-    for i in 1:p
-        kf_ws.H[i, i] = one(TT)
-    end
-
-    # Initialize T: companion form for VAR(s)
-    # Top k rows: [Φ₁, Φ₂, ..., Φₛ] (set by caller)
-    # Below: [I, 0, ..., 0; 0, I, ..., 0; ...]
-    # Set identity blocks for companion form
-    for lag in 1:(s - 1)
-        row_start = lag * k + 1
-        col_start = (lag - 1) * k + 1
-        for i in 1:k
-            kf_ws.Tmat[row_start + i - 1, col_start + i - 1] = one(TT)
-        end
-    end
-
-    # Initialize R: [Iₖ; 0; ...]
-    for i in 1:k
-        kf_ws.R[i, i] = one(TT)
-    end
-
-    # Initialize Q: factor innovation covariance (k × k)
-    for i in 1:k
-        kf_ws.Q[i, i] = one(TT)
-    end
-    _update_RQR!(kf_ws)
-
-    # Initialize P1: diffuse
-    for i in 1:m
-        kf_ws.P1[i, i] = TT(1e7)
-    end
-
-    # Create EM workspace
-    em_ws = EMWorkspace(kf_ws)
-
-    return (kf_ws, em_ws)
-end
-
-"""
-    extract_loadings(result::EMResult, k::Int) -> Matrix
-
-Extract factor loadings matrix Λ (p × k) from EM result.
-The loadings are the first k columns of the Z matrix.
-"""
-function extract_loadings(result::EMResult, k::Int)
-    return result.Z[:, 1:k]
-end
-
-"""
-    extract_factors(kf_ws::KalmanWorkspace, k::Int) -> Matrix
-
-Extract smoothed factors (k × n) from Kalman workspace.
-The factors are the first k rows of the smoothed state vector αₜ.
-"""
-function extract_factors(kf_ws::KalmanWorkspace, k::Int)
-    return kf_ws.αs[1:k, :]
 end
 
 # ============================================
@@ -3870,827 +3884,6 @@ function fit!(
 end
 
 # ============================================
-# StateSpaceModel fit!(EM(), ...)
-# ============================================
-
-"""
-    fit!(::EM, model::StateSpaceModel, y::AbstractMatrix; kwargs...)
-
-Fit state-space model using EM algorithm.
-
-Runs on the model's in-place KalmanWorkspace for every model size; the
-`static` keyword of `fit!(MLE(), ...)` has no counterpart here.
-
-# Arguments
-- `EM()`: Estimation method selector
-- `model`: StateSpaceModel to fit (mutated in-place)
-- `y`: Observations (p × n matrix), missing values as NaN
-
-# Keyword Arguments
-- `maxiter::Int=500`: Maximum EM iterations
-- `tol::Real=1e-6`: Convergence tolerance (relative change in log-likelihood)
-- `verbose::Bool=false`: Print progress
-- `warn::Bool=true`: Warn when EM stops without converging, either at `maxiter` or
-  because the filter failed at the current parameters
-
-# Returns
-The fitted `model` (same object, mutated)
-
-# Note
-EM estimation requires that free parameters are marked in the SSMSpec.
-For general state-space models, EM typically updates H and Q (covariances).
-
-# Example
-```julia
-spec = local_level(var_obs=:free, var_level=:free)
-model = StateSpaceModel(spec, 100)
-fit!(EM(), model, randn(1, 100); maxiter=200, verbose=true)
-```
-"""
-function fit!(
-        ::EM,
-        model::StateSpaceModel{T},
-        y::AbstractMatrix;
-        maxiter::Int = 500,
-        tol::Real = 1e-6,
-        verbose::Bool = false,
-        warn::Bool = true,
-        allow_degen::Bool = false,
-        degen_lim::Real = 1e-4,
-        min_degen_iter::Int = 50
-) where {T}
-    y = _nan_obs(y)
-    _check_model_obs(model, "fit!(EM(), ...)", y)
-    _require_no_partial_periods(y, "fit!(EM(), ...)",
-        "Use fit!(MLE(), ...), which handles them.")
-    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
-        "fit!(EM(), ...) does not support exact diffuse initialisation (diffuse = :exact). " *
-        "Use fit!(MLE(), ...), or approximate diffuse initialisation (diffuse = true)."))
-
-    # All models route through the in-place EM path. Benchmarks show the
-    # in-place workspace beats the pure/static EM by 1.6–2.6× even on the
-    # smallest models (m=p=1) because each EM iteration's filter+smoother
-    # avoids fresh result-array allocation. The static specialization in
-    # filter_ad.jl remains the right tool for one-shot loglik / MLE, where
-    # there is no n × iters multiplier to wash out the savings.
-    _ssm_fit_em_inplace!(
-        model, y;
-        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
-        allow_degen = allow_degen, degen_lim = degen_lim,
-        min_degen_iter = min_degen_iter
-    )
-
-    model.fitted = true
-    model.smoother_computed = false
-
-    return model
-end
-
-"""In-place EM on the model's KalmanWorkspace."""
-function _ssm_fit_em_inplace!(
-        model::StateSpaceModel{T},
-        y::AbstractMatrix;
-        maxiter::Int,
-        tol::Real,
-        verbose::Bool,
-        warn::Bool = true,
-        allow_degen::Bool = false,
-        degen_lim::Real = 1e-4,
-        min_degen_iter::Int = 50
-) where {T}
-
-    # Get pre-allocated workspaces
-    ws = model.workspaces_ref[]::StateSpaceModelWorkspaces{T}
-    kf_ws = ws.kf_ws
-    em_ws = ws.em_ws
-
-    # Initialize parameters from spec
-    theta_init = [prm.init for prm in model.spec.params]
-    names = Tuple(prm.name for prm in model.spec.params)
-    theta_nt = NamedTuple{names}(Tuple(theta_init))
-
-    # Set initial parameters in workspace
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    a1_init, P1_init = Siphon.build_initial_state(model.spec, theta_nt)
-    _set_workspace_params!(kf_ws, kfparms, a1_init, P1_init)
-
-    # Translate the spec's structural fixed/free pattern into the EM workspace
-    # masks. Without this, the M-step would overwrite fixed elements (e.g. the
-    # Z=1, T=1 of local_level) with their unconstrained estimates.
-    _set_em_masks_from_spec!(em_ws, model.spec)
-
-    # Run EM using existing em_estimate!
-    em_result = em_estimate!(
-        kf_ws, em_ws, y;
-        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
-        allow_degen = allow_degen, degen_lim = degen_lim,
-        min_degen_iter = min_degen_iter
-    )
-
-    # Extract fitted parameters from workspace back to spec format
-    # For general SSM, we extract from Z, H, T, R, Q matrices
-    _ssm_extract_params_from_workspace!(model, kf_ws)
-
-    # Copy filter results from workspace
-    _ssm_copy_from_workspace!(model, kf_ws)
-
-    # Update model state
-    model.loglik = kf_ws.loglik
-    model.converged = em_result.converged
-    model.iterations = em_result.iterations
-
-    return nothing
-end
-
-"""
-    _set_em_masks_from_spec!(em_ws, spec)
-
-Populate the EM workspace's `Z_free` / `T_free` / `Q_free` BitMatrices and
-`H_diag_only` flag from the SSMSpec's structural fixed/free pattern.
-
-A matrix element is treated as free iff its `SSMMatrixSpec` entry is a
-`ParameterRef`. Elements with `FixedValue` (or absent) are fixed and the
-EM M-step will leave them untouched.
-
-For models whose `Z`, `T`, `H`, or `Q` are driven by a `MatrixExpr` (e.g. DNS
-loadings), the corresponding `SSMMatrixSpec` is a placeholder with no
-elements, so the mask stays all-false and the M-step skips that block — the
-right behaviour, since closed-form M-step updates do not exist for those.
-
-`H_diag_only` is true unless some off-diagonal `H[i,j]` is a free parameter.
-"""
-function _set_em_masks_from_spec!(em_ws::EMWorkspace, spec::SSMSpec)
-    fill!(em_ws.Z_free, false)
-    fill!(em_ws.T_free, false)
-    fill!(em_ws.Q_free, false)
-    fill!(em_ws.a1_free, false)
-    fill!(em_ws.P1_free, false)
-
-    for ((i, j), elem) in spec.Z.elements
-        if elem isa ParameterRef
-            em_ws.Z_free[i, j] = true
-        end
-    end
-    for ((i, j), elem) in spec.T.elements
-        if elem isa ParameterRef
-            em_ws.T_free[i, j] = true
-        end
-    end
-    for ((i, j), elem) in spec.Q.elements
-        if elem isa ParameterRef
-            em_ws.Q_free[i, j] = true
-        end
-    end
-
-    # a1: spec.a1 is a Vector{MatrixElement}; ParameterRef means estimate it.
-    for (i, elem) in enumerate(spec.a1)
-        if elem isa ParameterRef
-            em_ws.a1_free[i] = true
-        end
-    end
-    for ((i, j), elem) in spec.P1.elements
-        if elem isa ParameterRef
-            em_ws.P1_free[i, j] = true
-        end
-    end
-
-    H_diag_only = true
-    for ((i, j), elem) in spec.H.elements
-        if i != j && elem isa ParameterRef
-            H_diag_only = false
-            break
-        end
-    end
-    em_ws.H_diag_only = H_diag_only
-
-    return em_ws
-end
-
-"""Set workspace parameters from KFParms."""
-function _set_workspace_params!(kf_ws::KalmanWorkspace{T}, kfparms, a1, P1) where {T}
-    copyto!(kf_ws.Z, kfparms.Z)
-    copyto!(kf_ws.H, kfparms.H)
-    copyto!(kf_ws.Tmat, kfparms.T)
-    copyto!(kf_ws.R, kfparms.R)
-    copyto!(kf_ws.Q, kfparms.Q)
-    copyto!(kf_ws.a1, a1)
-    copyto!(kf_ws.P1, P1)
-    _update_RQR!(kf_ws)
-    return nothing
-end
-
-"""Extract fitted parameters from workspace matrices back to model.theta_values."""
-function _ssm_extract_params_from_workspace!(
-        model::StateSpaceModel{T},
-        kf_ws::KalmanWorkspace{T}
-) where {T}
-    # This requires mapping SSMSpec parameter locations back to matrix elements
-    # For each parameter in spec.params, find its location in Z, H, T, R, Q
-    # and extract the current value from the workspace
-
-    spec = model.spec
-
-    for (i, prm) in enumerate(spec.params)
-        # Search in each matrix spec for this parameter
-        val = _find_param_value(prm.name, spec, kf_ws)
-        model.theta_values[i] = val
-    end
-    model.theta_fitted = true
-    return nothing
-end
-
-"""Find parameter value by searching matrix specs."""
-function _find_param_value(name::Symbol, spec::SSMSpec, kf_ws::KalmanWorkspace{T}) where {T}
-    # Check Z
-    for ((row, col), elem) in spec.Z.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.Z[row, col]
-        end
-    end
-    # Check H
-    for ((row, col), elem) in spec.H.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.H[row, col]
-        end
-    end
-    # Check T
-    for ((row, col), elem) in spec.T.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.Tmat[row, col]
-        end
-    end
-    # Check R
-    for ((row, col), elem) in spec.R.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.R[row, col]
-        end
-    end
-    # Check Q
-    for ((row, col), elem) in spec.Q.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.Q[row, col]
-        end
-    end
-    # Check a1 (initial-state mean)
-    for (i, elem) in enumerate(spec.a1)
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.a1[i]
-        end
-    end
-    # Check P1 (initial-state covariance)
-    for ((row, col), elem) in spec.P1.elements
-        if elem isa ParameterRef && elem.name == name
-            return kf_ws.P1[row, col]
-        end
-    end
-
-    # If not found in matrices, return current value (shouldn't happen for valid specs)
-    @warn "Parameter $name not found in matrix specs, using initial value"
-    idx = findfirst(p -> p.name == name, spec.params)
-    return idx !== nothing ? spec.params[idx].init : zero(T)
-end
-
-# ============================================
-# Static EM Helper Functions
-# ============================================
-
-"""
-    StaticEMSuffStats{T}
-
-Sufficient statistics for static EM algorithm computed from smoothed states.
-Allocated fresh each iteration (acceptable for small static models).
-
-# Fields
-- `S_yy`: p×p sum of y_t * y_t' (observation outer products)
-- `S_ya`: p×m sum of y_t * α̂_t' (observation-state cross products)
-- `S_aa`: m×m sum of (α̂_t α̂_t' + V̂_t) for all t (state second moments)
-- `S_aa_prev`: m×m sum of (α̂_{t-1} α̂_{t-1}' + V̂_{t-1}) for t=2:n (lagged state moments)
-- `S_10`: m×m sum of (α̂_t α̂_{t-1}' + P_{t,t-1|n}) for t=2:n (cross-lag moments)
-- `S_11`: m×m sum of (α̂_t α̂_t' + V̂_t) for t=2:n (state moments excluding t=1)
-- `n_obs`: number of non-missing observations
-"""
-struct StaticEMSuffStats{T <: Real}
-    S_yy::Matrix{T}
-    S_ya::Matrix{T}
-    S_aa::Matrix{T}
-    S_aa_prev::Matrix{T}
-    S_10::Matrix{T}
-    S_11::Matrix{T}
-    n_obs::Int
-end
-
-"""
-    _compute_static_sufficient_stats(y, alpha, V, P_crosslag, missing_mask)
-
-Compute sufficient statistics from Kalman smoother output for the M-step.
-
-Uses smoothed states α̂_t = E[α_t | y_{1:n}], smoothed covariances V̂_t = Var[α_t | y_{1:n}],
-and cross-lag covariances P_{t,t-1|n} = Cov[α_t, α_{t-1} | y_{1:n}].
-
-# Arguments
-- `y`: Observations (p × n)
-- `alpha`: Smoothed states (m × n)
-- `V`: Smoothed covariances (m × m × n)
-- `P_crosslag`: Cross-lag covariances (m × m × (n-1)), where P_crosslag[:,:,t] = Cov[α_{t+1}, α_t | Y]
-- `missing_mask`: BitVector indicating missing observations
-
-# Returns
-`StaticEMSuffStats` containing all sufficient statistics needed for M-step.
-
-# Notes
-The formulas follow Shumway & Stoffer (2017), Chapter 6.
-Missing observations are excluded from observation-related statistics (S_yy, S_ya)
-but all time points contribute to state statistics (S_aa, S_10, etc.).
-"""
-function _compute_static_sufficient_stats(
-        y::AbstractMatrix,
-        alpha::AbstractMatrix,
-        V::AbstractArray,
-        P_crosslag::AbstractArray,
-        missing_mask::BitVector
-)
-    T = promote_type(eltype(y), eltype(alpha))
-    p, n = size(y)
-    m = size(alpha, 1)
-
-    # Initialize sufficient statistics matrices
-    S_yy = zeros(T, p, p)
-    S_ya = zeros(T, p, m)
-    S_aa = zeros(T, m, m)
-    S_aa_prev = zeros(T, m, m)
-    S_10 = zeros(T, m, m)
-    S_11 = zeros(T, m, m)
-    n_obs = 0
-
-    @inbounds for t in 1:n
-        alpha_t = view(alpha, :, t)
-        V_t = view(V, :, :, t)
-
-        # Observation-related statistics: only for non-missing observations
-        if !missing_mask[t]
-            n_obs += 1
-            y_t = view(y, :, t)
-
-            # S_yy += y_t * y_t'
-            for j in 1:p, i in 1:p
-
-                S_yy[i, j] += y_t[i] * y_t[j]
-            end
-
-            # S_ya += y_t * α̂_t'
-            for j in 1:m, i in 1:p
-
-                S_ya[i, j] += y_t[i] * alpha_t[j]
-            end
-        end
-
-        # State statistics: all time points (for S_aa)
-        # S_aa += E[α_t α_t' | Y] = V̂_t + α̂_t α̂_t'
-        for j in 1:m, i in 1:m
-
-            S_aa[i, j] += V_t[i, j] + alpha_t[i] * alpha_t[j]
-        end
-
-        # Cross-lag and lagged statistics: for t >= 2
-        if t >= 2
-            alpha_tm1 = view(alpha, :, t-1)
-            V_tm1 = view(V, :, :, (t - 1))
-            # P_crosslag[:,:,t-1] contains Cov[α_t, α_{t-1} | Y]
-            P_cross = view(P_crosslag, :, :, (t - 1))
-
-            # S_aa_prev += E[α_{t-1} α_{t-1}' | Y] for t=2:n
-            for j in 1:m, i in 1:m
-
-                S_aa_prev[i, j] += V_tm1[i, j] + alpha_tm1[i] * alpha_tm1[j]
-            end
-
-            # S_10 += E[α_t α_{t-1}' | Y] = P_{t,t-1|n} + α̂_t α̂_{t-1}'
-            for j in 1:m, i in 1:m
-
-                S_10[i, j] += P_cross[i, j] + alpha_t[i] * alpha_tm1[j]
-            end
-
-            # S_11 += E[α_t α_t' | Y] for t=2:n (needed for Q update)
-            for j in 1:m, i in 1:m
-
-                S_11[i, j] += V_t[i, j] + alpha_t[i] * alpha_t[j]
-            end
-        end
-    end
-
-    return StaticEMSuffStats(S_yy, S_ya, S_aa, S_aa_prev, S_10, S_11, n_obs)
-end
-
-"""
-    _mstep_static_matrices(Z, T_mat, R, stats, n; regularize=1e-10)
-
-Compute unconstrained M-step updates for all system matrices.
-
-# Arguments
-- `Z`: Current observation matrix (p × m)
-- `T_mat`: Current transition matrix (m × m)
-- `R`: Selection matrix (m × r)
-- `stats`: `StaticEMSuffStats` from E-step
-- `n`: Total number of time periods
-
-# Keyword Arguments
-- `regularize`: Small value added to diagonal for numerical stability (default: 1e-10)
-
-# Returns
-Tuple `(Z_new, T_new, H_new, Q_new)` with updated matrices.
-
-# M-Step Formulas (Shumway & Stoffer, 2017)
-
-The closed-form M-step updates are:
-
-- Z_new = S_ya * S_aa^{-1}
-- T_new = S_10 * S_aa_prev^{-1}
-- H_new = (1/n_obs) * (S_yy - Z * S_ya')
-- Q_new = (1/(n-1)) * R^† * (S_11 - T*S_10' - S_10*T' + T*S_aa_prev*T') * R^†'
-
-where R^† is the Moore-Penrose pseudoinverse of R.
-
-# Numerical Stability
-
-- S_aa and S_aa_prev are regularized by adding `regularize * I` before inversion.
-  This is a standard numerical safeguard for near-singular matrices.
-- H_new is computed using current Z (not Z_new) to maintain EM monotonicity.
-- Both H_new and Q_new are symmetrized after computation.
-"""
-function _mstep_static_matrices(
-        Z::AbstractMatrix,
-        T_mat::AbstractMatrix,
-        R::AbstractMatrix,
-        stats::StaticEMSuffStats{T},
-        n::Int;
-        regularize::Real = 1e-10
-) where {T}
-    p = size(Z, 1)
-    m = size(T_mat, 1)
-    r = size(R, 2)
-    n_obs = stats.n_obs
-
-    # Regularize S_aa for numerical stability
-    # NOTE: Adding small diagonal improves conditioning for near-singular cases.
-    # Value of 1e-10 is chosen as typical machine-epsilon-scale safeguard.
-    S_aa_reg = Matrix(stats.S_aa)
-    for i in 1:m
-        S_aa_reg[i, i] += T(regularize)
-    end
-
-    # Regularize S_aa_prev similarly
-    S_aa_prev_reg = Matrix(stats.S_aa_prev)
-    for i in 1:m
-        S_aa_prev_reg[i, i] += T(regularize)
-    end
-
-    # Z_new = S_ya * S_aa^{-1}
-    Z_new = stats.S_ya / S_aa_reg
-    # Check for NaN/Inf (can happen with degenerate data)
-    if any(!isfinite, Z_new)
-        @warn "Z_new contains NaN/Inf, keeping current Z"
-        Z_new = Matrix(Z)
-    end
-
-    # T_new = S_10 * S_aa_prev^{-1}
-    T_new = stats.S_10 / S_aa_prev_reg
-    # Check for NaN/Inf (can happen with degenerate data)
-    if any(!isfinite, T_new)
-        @warn "T_new contains NaN/Inf, keeping current T"
-        T_new = Matrix(T_mat)
-    end
-
-    # H_new = (1/n_obs) * (S_yy - Z * S_ya')
-    # NOTE: We use current Z (not Z_new) to maintain EM monotonicity per Shumway & Stoffer.
-    # The formula H = (1/n)(S_yy - Z*S_ya') is guaranteed PSD when using current Z.
-    H_new = (stats.S_yy - Z * stats.S_ya') / n_obs
-    # Ensure symmetry (numerical safeguard)
-    H_new = (H_new + H_new') / 2
-    # Check for NaN/Inf (can happen with degenerate data or all-missing variables)
-    if any(!isfinite, H_new)
-        @warn "H_new contains NaN/Inf, using fallback identity scaling"
-        H_new = Matrix{T}(I(p) * T(0.01))
-    end
-    # Ensure positive diagonal (numerical safeguard for tiny eigenvalues)
-    for i in 1:p
-        H_new[i, i] = max(H_new[i, i], T(1e-10))
-    end
-
-    # Q_new computation:
-    # Q_new = (1/(n-1)) * R^† * Σ_η * R^†'
-    # where Σ_η = S_11 - T*S_10' - S_10*T' + T*S_aa_prev*T'
-    #
-    # NOTE: This formula is PSD by construction when derived from conditional expectations.
-    # The R^† projection handles cases where R is not square.
-
-    # Compute Σ_η = S_11 - T*S_10' - S_10*T' + T*S_aa_prev*T'
-    Sigma_eta = Matrix(stats.S_11)
-    TS_10t = T_mat * stats.S_10'
-    T_S_aa_prev_Tt = T_mat * stats.S_aa_prev * T_mat'
-
-    for j in 1:m, i in 1:m
-
-        Sigma_eta[i, j] = Sigma_eta[i, j] - TS_10t[i, j] - TS_10t[j, i] +
-                          T_S_aa_prev_Tt[i, j]
-    end
-
-    # Scale by 1/(n-1)
-    scale = one(T) / (n - 1)
-    Sigma_eta .*= scale
-
-    # Apply R projection: Q = R^† * Σ_η * R^†'
-    if r == m && R ≈ I(m)
-        # R = I case: Q = Σ_η directly
-        Q_new = Sigma_eta
-    else
-        # General case: Q = R^† * Σ_η * R^†'
-        R_pinv = pinv(Matrix(R))
-        Q_new = R_pinv * Sigma_eta * R_pinv'
-    end
-
-    # Ensure symmetry
-    Q_new = (Q_new + Q_new') / 2
-
-    # Check for NaN/Inf before eigendecomposition (can happen with degenerate data)
-    if any(!isfinite, Q_new)
-        # Fall back to identity-scaled matrix if Q_new is degenerate
-        @warn "Q_new contains NaN/Inf, using fallback identity scaling"
-        Q_new = Matrix{T}(I(r) * T(0.01))
-    else
-        # Ensure positive semi-definiteness via eigenvalue projection
-        # NOTE: In theory, Q_new should be PSD. If numerical errors cause small negative
-        # eigenvalues, we project to nearest PSD matrix by zeroing negative eigenvalues.
-        eig = eigen(Symmetric(Q_new))
-        if any(eig.values .< 0)
-            # Project to PSD: set negative eigenvalues to zero
-            # This is the standard projection to the PSD cone.
-            eig_vals_proj = max.(eig.values, T(0))
-            Q_new = eig.vectors * Diagonal(eig_vals_proj) * eig.vectors'
-            Q_new = (Q_new + Q_new') / 2
-        end
-    end
-
-    # Ensure positive diagonal (numerical safeguard)
-    for i in 1:r
-        Q_new[i, i] = max(Q_new[i, i], T(1e-10))
-    end
-
-    return (Z_new, T_new, H_new, Q_new)
-end
-
-"""
-    _extract_params_from_matrices_static(spec, Z_new, T_new, H_new, Q_new)
-
-Extract parameter values from M-step updated matrices based on SSMSpec structure.
-
-Maps the updated system matrices back to the parameters defined in `spec.params`
-by finding which matrix elements correspond to each parameter.
-
-# Arguments
-- `spec`: SSMSpec containing parameter definitions and matrix structures
-- `Z_new`, `T_new`, `H_new`, `Q_new`: Updated matrices from M-step
-
-# Returns
-Dict{Symbol, Float64} mapping parameter names to their updated values.
-
-# Notes
-- For parameters referenced via `ParameterRef` in matrix specs, extracts directly.
-- For `CovMatrixExpr` (H or Q with D*Corr*D parameterization), extracts σ from sqrt(diag).
-- Parameters not found in any matrix spec retain their current values.
-"""
-function _extract_params_from_matrices_static(
-        spec::SSMSpec,
-        Z_new::AbstractMatrix,
-        T_new::AbstractMatrix,
-        H_new::AbstractMatrix,
-        Q_new::AbstractMatrix
-)
-    params = Dict{Symbol, Float64}()
-
-    # Extract from Z matrix spec
-    _extract_from_matrix_spec_static!(params, spec.Z, Z_new)
-
-    # Extract from T matrix spec
-    _extract_from_matrix_spec_static!(params, spec.T, T_new)
-
-    # Extract from H matrix spec (or CovMatrixExpr)
-    if haskey(spec.matrix_exprs, :H)
-        _extract_from_cov_expr_static!(params, spec.matrix_exprs[:H], H_new)
-    else
-        _extract_from_matrix_spec_static!(params, spec.H, H_new)
-    end
-
-    # Extract from Q matrix spec (or CovMatrixExpr)
-    if haskey(spec.matrix_exprs, :Q)
-        _extract_from_cov_expr_static!(params, spec.matrix_exprs[:Q], Q_new)
-    else
-        _extract_from_matrix_spec_static!(params, spec.Q, Q_new)
-    end
-
-    # R is typically fixed in state-space models (selection matrix).
-    # If R has free parameters, they are not updated by standard EM.
-    # Skip R extraction entirely - it remains at its initial values.
-
-    return params
-end
-
-"""
-    _extract_from_matrix_spec_static!(params, mat_spec, mat_new)
-
-Extract parameters from a simple matrix specification.
-
-For each `(row, col) => ParameterRef(name)` in `mat_spec.elements`,
-sets `params[name] = mat_new[row, col]`.
-"""
-function _extract_from_matrix_spec_static!(
-        params::Dict{Symbol, Float64},
-        mat_spec::SSMMatrixSpec,
-        mat_new::AbstractMatrix
-)
-    for ((row, col), elem) in mat_spec.elements
-        if elem isa ParameterRef
-            params[elem.name] = Float64(mat_new[row, col])
-        end
-    end
-end
-
-"""
-    _extract_from_cov_expr_static!(params, expr, Sigma_new)
-
-Extract parameters from a CovMatrixExpr (D*Corr*D decomposition).
-
-Given the updated covariance matrix Σ_new, extracts:
-- Standard deviation parameters: σ_i = sqrt(Σ_new[i,i])
-- Correlation parameters: set to 0 (unconstrained EM doesn't update correlations cleanly)
-
-# Notes
-The inverse transform from Σ to correlation parameters is non-trivial and not
-implemented here. Correlation parameters are left unchanged (effectively 0 for
-initial uncorrelated case). This is a limitation of the current implementation.
-"""
-function _extract_from_cov_expr_static!(
-        params::Dict{Symbol, Float64},
-        expr::CovMatrixExpr,
-        Sigma_new::AbstractMatrix
-)
-    n = expr.n
-
-    # Extract standard deviations from diagonal
-    for (i, name) in enumerate(expr.σ_param_names)
-        # σ_i = sqrt(Σ[i,i])
-        params[name] = sqrt(max(Float64(Sigma_new[i, i]), 1e-10))
-    end
-
-    # Correlation parameters: leave at 0 (identity correlation)
-    # NOTE: Proper inverse of corr_cholesky_factor transform is complex.
-    # For unconstrained EM, we assume diagonal covariances or leave correlations unchanged.
-    for name in expr.corr_param_names
-        if !haskey(params, name)
-            params[name] = 0.0
-        end
-    end
-end
-
-# ============================================
-# Static EM Main Function
-# ============================================
-
-"""
-    _ssm_fit_em_static!(model, y; maxiter, tol, verbose)
-
-Static/pure EM backend for small state-space models.
-
-This implements the EM algorithm using pure Kalman filter and smoother (without
-pre-allocated workspaces), suitable for models where max(n_states, n_obs) ≤ 13.
-The pure implementation uses StaticArrays internally for better performance on small models.
-
-# Algorithm
-
-1. **E-step**: Run Kalman filter and smoother with cross-covariances
-2. **M-step**: Compute closed-form updates for Z, T, H, Q matrices
-3. **Parameter extraction**: Map updated matrices back to SSMSpec parameters
-4. **Convergence check**: Based on relative change in log-likelihood
-
-# Limitations
-
-**IMPORTANT**: This implements UNCONSTRAINED EM. Parameters with finite bounds in
-SSMSpec are NOT respected during optimization—the algorithm assumes unconstrained
-closed-form updates. A warning is issued if any updated parameter violates its bounds.
-Proper constrained EM (via reparameterization or barrier methods) is planned for
-future implementation.
-
-# Arguments
-- `model`: StateSpaceModel to fit
-- `y`: Observations (p × n matrix)
-- `maxiter`: Maximum EM iterations
-- `tol`: Convergence tolerance for relative log-likelihood change
-- `verbose`: Print iteration progress
-"""
-function _ssm_fit_em_static!(
-        model::StateSpaceModel{T},
-        y::AbstractMatrix;
-        maxiter::Int,
-        tol::Real,
-        verbose::Bool
-) where {T}
-    spec = model.spec
-    n = size(y, 2)
-
-    # Initialize from spec
-    theta_curr = T[prm.init for prm in spec.params]
-    names = Tuple(prm.name for prm in spec.params)
-
-    loglik_prev = T(-Inf)
-    converged = false
-    iter = 0
-
-    for iter_i in 1:maxiter
-        iter = iter_i
-        theta_nt = NamedTuple{names}(Tuple(theta_curr))
-
-        # Build state-space model from current parameters
-        ss = Siphon.build_linear_state_space(spec, theta_nt, y; static = :auto)
-
-        # E-step: Run Kalman filter
-        filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
-        loglik_curr = filt.loglik
-
-        # Check convergence based on relative log-likelihood change
-        rel_change = abs(loglik_curr - loglik_prev) / (abs(loglik_prev) + T(1e-10))
-        if rel_change < tol && iter_i > 1
-            converged = true
-            verbose && println(
-                "EM converged at iteration $iter_i, loglik=$(round(loglik_curr, digits=4))",
-            )
-            break
-        end
-        loglik_prev = loglik_curr
-
-        # E-step: Run smoother with cross-covariances for M-step
-        smooth = _kalman_smoother(
-            ss.p.Z,
-            ss.p.T,
-            filt.at,
-            filt.Pt,
-            filt.vt,
-            filt.Ft;
-            crosscov = true
-        )
-
-        # Compute sufficient statistics from smoother output
-        stats = _compute_static_sufficient_stats(
-            y,
-            smooth.αs,
-            smooth.Vs,
-            smooth.Pcross,
-            filt.missing_mask
-        )
-
-        # M-step: Compute unconstrained matrix updates
-        Z_new, T_new,
-        H_new,
-        Q_new = _mstep_static_matrices(
-            Matrix(ss.p.Z), Matrix(ss.p.T), Matrix(ss.p.R), stats, n)
-
-        # Extract parameters from updated matrices
-        params_dict = _extract_params_from_matrices_static(spec, Z_new, T_new, H_new, Q_new)
-
-        # Update parameter vector (unconstrained - warn if bounds violated)
-        for (i, prm) in enumerate(spec.params)
-            if haskey(params_dict, prm.name)
-                val = T(params_dict[prm.name])
-                # Check bounds and warn (but don't clamp - unconstrained EM)
-                if val < prm.lower || val > prm.upper
-                    @warn "Parameter $(prm.name) = $(round(val, digits=6)) violates bounds " *
-                          "[$(prm.lower), $(prm.upper)]. Unconstrained EM does not enforce bounds."
-                end
-                theta_curr[i] = val
-            end
-            # Parameters not in params_dict keep their current value
-        end
-
-        verbose &&
-            iter_i % 10 == 0 &&
-            println("EM iteration $iter_i: loglik=$(round(loglik_curr, digits=4))")
-    end
-
-    # Store final parameters
-    theta_nt = NamedTuple{names}(Tuple(theta_curr))
-    _ssm_store_theta!(model, theta_nt)
-
-    # Run final filter to populate filter results
-    ss = Siphon.build_linear_state_space(spec, theta_nt, y; static = :auto)
-    filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
-    _ssm_store_filter_results!(model, filt)
-
-    model.loglik = filt.loglik
-    model.converged = converged
-    model.iterations = iter
-
-    return nothing
-end
-
-# ============================================
 # StateSpaceModel Forecasting
 # ============================================
 
@@ -5246,18 +4439,16 @@ function _em_dfm!(
             rel_change = ll_change / (abs(ll_prev) + T(1e-10))
 
             if verbose && (i % 10 == 0 || i <= 5)
-                println("EM iter $i: loglik = $ll, rel_change = $rel_change")
+                @info "EM iteration $i" loglik = ll rel_change
             end
 
             if rel_change < tol
                 converged = true
-                if verbose
-                    println("EM converged at iteration $i")
-                end
+                verbose && @info "EM converged at iteration $i" loglik = ll
                 break
             end
         elseif verbose
-            println("EM iter $i: loglik = $ll")
+            @info "EM iteration $i" loglik = ll
         end
 
         ll_prev = ll

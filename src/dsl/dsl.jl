@@ -66,7 +66,6 @@ include("matrix_helpers.jl")
 include("expressions.jl")
 include("bayesian.jl")
 include("optimization.jl")
-include("em.jl")
 # EKF DSL: builds on builder.jl/codegen.jl/optimization.jl
 include("ekf_spec.jl")
 include("ekf_codegen.jl")
@@ -104,9 +103,6 @@ export FlatPrior, NormalPrior, NormalPriorVec, InverseGammaPrior, CompositePrior
 
 # Optimization (Optimization.jl integration)
 export optimize_ssm, optimize_ssm_with_stderr
-
-# EM algorithm - main API is fit!(EM(), model, y)
-export EMResult, profile_em_ssm, ProfileEMResult
 
 # EKF DSL surface
 export EKFSpec, MeasurementExpr, custom_ekf

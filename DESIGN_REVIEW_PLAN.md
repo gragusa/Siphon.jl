@@ -667,12 +667,22 @@ Other author answers, verbatim:
     - `KeyError :λ2` for Svensson.
   - **Cleanup.** Delete the dead static-EM block (`inplace.jl:3786-4324`) and the dead DFM helpers (`setup_dfm_workspaces`, `extract_loadings`, `extract_factors`). Delete the DSL test-only EMs, or move them to test utilities.
   - **Result content.** `EMResult` should include R, a1 and P1 when they are estimated. Remove `println` progress in favour of `@info` or a callback.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-004, CHUNK-012
 - **Cluster**: estimation
 - **Notes**:
-  - From CHUNK-006: port the diagonal-T restriction specified by `test/em_diagonal_T_tests.jl` onto the canonical EM masks, include that file in `runtests.jl`, and flip the `T_diagonal` and `profile_em_ssm` pins in `test/known_bugs_tests.jl`.
+  - **Layout:** `src/dsl/em.jl` deleted. New `src/em_spec.jl` (after inplace.jl) holds the spec layer (`_em_layout`, `set_em_masks!`, `_em_theta`, `_em_fit_spec!`), `fit!(EM(), ::StateSpaceModel)` and `profile_em_ssm`/`ProfileEMResult`. The generic workspace EM stays in inplace.jl.
+  - **One `EMResult{T}`** (inplace.jl): converged, iterations, loglik, loglik_history, Z, H, T, R, Q, a1, P1 (R, a1, P1 always included); has `show`. `ProfileEMResult.em_result::EMResult`.
+  - **Public status:** `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!` unexported; `set_em_masks!` (renamed from `_set_em_masks_from_spec!`) added. **CHUNK-031 must declare these four `public`.** Default masks: documented on `EMWorkspace` (everything in Z/H/T/Q free, initial state fixed), which is what `set_em_masks!` produces for an all-free spec.
+  - **New M-step capabilities:** `H_free` mask (update_H! overwrote fixed H cells before); tie groups `Z_ties/H_ties/T_ties/Q_ties` (H/Q ties averaged, exact for diagonal blocks); exact restricted GLS M-step `_update_gls!` for Z/T when ties exist or rows have different free columns under a non-diagonal H / RQRᵀ (falls back to row-wise when the weight is singular and nothing is tied; tied + singular throws). `CovMatrixExpr` H/Q → full block free, parameters recovered with the new `DSL.cov_expr_params` (inverse of the corr-Cholesky transform).
+  - **Fail-fast:** `fit!(EM())` throws naming parameters EM cannot update (MatrixExpr, R, Expr cells, shared across matrices, shared by a1/P1 cells, tied H/Q diagonal with free off-diagonals). `profile_em_ssm` requires `λ_param` to be such a parameter and every other one in `fixed = (…)` (fixes the Svensson `KeyError :λ2`). `em_estimate!` rejects partially observed periods.
+  - **B9 fixed:** θ reproduces loglik (rtol 1e-6 tested) for diag/ar1/full T × diag/scalar H × full/diag Q; H no longer forced full; P1 from spec (no 1e4 cap); R from spec; no duplicate-field crash. `profile_em_ssm` kw `tol_ll` → `tol` (relative, as fit!). One aggregated non-convergence `@warn` across the grid (`warn` kw).
+  - **Open-Questions item fixed:** `S_yy`/`S_yα`/`S_αα` now summed over observed periods only (test: EM on Nile with 20 missing periods matches MLE).
+  - **println → @info** in `em_estimate!`, `_em_dfm!` and `profile_em_ssm`. MLE `fit!` and the DFM `fit!` header still `println` (Open Questions).
+  - **Deleted:** static-EM block, `setup_dfm_workspaces`/`extract_loadings`/`extract_factors`, DSL `_em_local_level`, `em_ssm_diagonal`, `_em_general_ssm_full_cov`, `_mstep_full_cov`, `project_psd` and helpers.
+  - **Tests:** `test/em_helpers.jl` (`em_matrices`, a thin wrapper over `em_estimate!`) replaces the DSL EMs in em_tests, em_general_tests, em_generalized_tests, em_diagonal_T_tests (now included in runtests) and dns_marss_validation_tests. Known-bug pins moved to dns_marss_validation_tests / em_diagonal_T_tests; `known_bugs_tests.jl` is now an empty testset. em_general_tests H[2,2] tolerance 5% → 10%: canonical EM ends at a higher loglik than the MARSS reference (−828.259 vs −828.495).
+  - **Docs/examples:** conversion guide "EM estimation" section; `api/optimization.md` (both copies) point at `Siphon.profile_em_ssm`/`ProfileEMResult`/`EMResult`; `examples/dns_estimation.jl` ported to `em_estimate!` (parse-checked only, not run); CLAUDE.md tree updated.
 
 ### CHUNK-020: integrate-dfm
 - **Kind**: `implement`
@@ -903,16 +913,15 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-016 (dispatch-based-variant-selection) → next: CHUNK-017
 - 2026-10-12 CHUNK-017 (unify-forecast-output) → next: CHUNK-018
 - 2026-10-12 CHUNK-018 (unify-static-backend-controls) → next: CHUNK-019
+- 2026-10-12 CHUNK-019 (consolidate-em) → next: CHUNK-020
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - `docs/src/index.md:55` calls `local_level(var_obs_init=225.0, var_level_init=100.0)`; those keywords don't exist (the template takes `var_obs=(init=…,)`). Fix in CHUNK-032.
 - CHUNK-022 (DSL conventions) must keep `SSMParameter.default_init` or an equivalent "init was defaulted" signal, and should decide whether `FreeParam` without an `init` gets it too. Today `FreeParam` defaults `init = 0.0`, which sits on the bound for a variance.
-- The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, plus 67 pre-existing "Log-likelihood decreased" warnings from the DSL EMs (CHUNK-019 deletes them). Pass `warn = false` in the capped tests if a quiet suite is wanted.
-- The `_ssm_fit_em_static!` in `src/inplace.jl` has no callers. Delete it in CHUNK-019 or CHUNK-030.
+- The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
-- `compute_sufficient_stats!` sums `S_αα` over all periods but `S_yα`/`S_yy` only over observed ones. So `update_Z!` and `update_H!` are biased whenever whole periods are missing, in the general EM and the white-noise DFM. The AR-error DFM path uses its own valid-period moments. Fix in CHUNK-019 (consolidate EM).
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
 - `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
 - Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
@@ -921,3 +930,6 @@ Other author answers, verbatim:
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
 - The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
+- `fit!(MLE(), …; verbose = true)` and the `DynamicFactorModel` `fit!` header still print with `println`; switch to `@info` in CHUNK-020 (DFM) or CHUNK-030.
+- `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.
+- EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.

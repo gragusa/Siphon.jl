@@ -192,6 +192,20 @@ Profile likelihood: optimize λ while using EM for other parameters.
 This is useful when λ enters non-linearly but other parameters have
 closed-form EM updates.
 """
+# EM with Z held fixed, on Siphon's workspace layer: `em_estimate!` updates
+# T, H and Q in place. A diagonal H estimates only the variances.
+function em_fixed_Z(Z, T, R, H, Q, y, a1, P1; H_diagonal = false, maxiter = 500,
+        tol = 1e-8)
+    kf_ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, size(y, 2))
+    em_ws = Siphon.EMWorkspace(kf_ws)
+    fill!(em_ws.Z_free, false)
+    if H_diagonal
+        em_ws.H_free .= Matrix(I, size(H)) .== 1
+        em_ws.H_diag_only = true
+    end
+    return Siphon.em_estimate!(kf_ws, em_ws, y; maxiter, tol, warn = false)
+end
+
 function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
     Z = dns_loadings(λ_val, maturities)
     p_obs, n = size(y)
@@ -212,23 +226,8 @@ function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
     Q_free = trues(m, m)
 
     # Run EM with full covariance
-    result = Siphon.DSL._em_general_ssm_full_cov(
-        Z,
-        T_init,
-        R,
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free,
-        Q_free = Q_free,
-        maxiter = em_iters,
-        tol_ll = 1e-6,
-        verbose = false
-    )
+    result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+        H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
     return -result.loglik, result
 end
@@ -480,23 +479,8 @@ if isfile(data_path)
         H_free = trues(p_obs, p_obs)
         Q_free = trues(m, m)
 
-        result = Siphon.DSL._em_general_ssm_full_cov(
-            Z,
-            T_init,
-            R,
-            H_init,
-            Q_init,
-            y,
-            a1,
-            P1;
-            Z_free = Z_free,
-            T_free = T_free,
-            H_free = H_free,
-            Q_free = Q_free,
-            maxiter = em_iters,
-            tol_ll = 1e-6,
-            verbose = false
-        )
+        result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+            H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
         return -result.loglik, result
     end
@@ -682,23 +666,8 @@ if isfile(data_path)
             H_free = Diagonal(trues(p_obs))
             Q_free = trues(m, m)
 
-            result = Siphon.DSL._em_general_ssm_full_cov(
-                Z,
-                T_init,
-                R,
-                H_init,
-                Q_init,
-                y,
-                a1,
-                P1;
-                Z_free = Z_free,
-                T_free = T_free,
-                H_free = H_free,
-                Q_free = Q_free,
-                maxiter = em_iters,
-                tol_ll = 1e-5,
-                verbose = false
-            )
+            result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+                H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
             if result.loglik > best_ll
                 best_ll = result.loglik

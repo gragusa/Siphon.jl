@@ -179,6 +179,28 @@ function build_from_expr(
     return (Σ + Σ') / 2
 end
 
+"""
+    cov_expr_params(expr::CovMatrixExpr, Σ::AbstractMatrix) -> (σ, corr)
+
+Standard deviations `σ` and unconstrained correlation parameters `corr` for
+which `build_from_expr(expr, θ)` returns `Σ`. Throws an `ArgumentError` unless
+`Σ` is positive definite.
+"""
+function cov_expr_params(expr::CovMatrixExpr, Σ::AbstractMatrix)
+    n = expr.n
+    size(Σ) == (n, n) ||
+        throw(DimensionMismatch("Σ must be $n × $n, got $(size(Σ))"))
+    σ = sqrt.(diag(Σ))
+    all(>(0), σ) ||
+        throw(ArgumentError("Σ must have a positive diagonal, got $(diag(Σ))"))
+    n == 1 && return σ, eltype(σ)[]
+    D⁻¹ = Diagonal(inv.(σ))
+    chol = cholesky(Symmetric(D⁻¹ * Σ * D⁻¹), check = false)
+    issuccess(chol) || throw(ArgumentError("Σ must be positive definite"))
+    corr = TransformVariables.inverse(corr_cholesky_factor(n), UpperTriangular(chol.U))
+    return σ, corr
+end
+
 # ============================================
 # Matrix Building - Core Functions
 # ============================================

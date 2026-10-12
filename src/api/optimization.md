@@ -98,8 +98,9 @@ Siphon.DSL.optimize_ssm_with_stderr
 For Dynamic Nelson-Siegel models with nonlinear λ parameter:
 
 ```@docs
-Siphon.DSL.profile_em_ssm
-Siphon.DSL.ProfileEMResult
+Siphon.profile_em_ssm
+Siphon.ProfileEMResult
+Siphon.EMResult
 ```
 
 ## Initial State Conventions and MARSS Compatibility

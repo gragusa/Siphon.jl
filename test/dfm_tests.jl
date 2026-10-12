@@ -163,7 +163,7 @@ end
     p, m, n = 3, 4, 50
     kf = KalmanWorkspace(randn(rng, p, m), Matrix(1.0I, p, p), Matrix(0.5I, m, m),
         Matrix(1.0I, m, m), Matrix(1.0I, m, m), zeros(m), Matrix(1.0I, m, m), n)
-    em = EMWorkspace(kf)
+    em = Siphon.EMWorkspace(kf)
     A = randn(rng, m, 2m)
     em.S_αα .= A * A'
     em.S_yα .= randn(rng, p, m)
