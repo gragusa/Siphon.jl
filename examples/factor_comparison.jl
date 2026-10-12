@@ -132,8 +132,7 @@ function extract_kfs(
         T;
         loading_lags = 0,
         factor_lags = factor_lags,
-        error_lags = 0,
-        identification = :named_factor
+        error_lags = 0
     )
 
     # Fit with EM algorithm

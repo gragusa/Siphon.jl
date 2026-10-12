@@ -484,7 +484,7 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = n
 end
 
 """
-    dynamic_factor(n_obs, n_factors; factor_lags=1, obs_lags=0, correlated_errors=false,
+    dynamic_factor(n_obs, n_factors; factor_lags=1, loading_lags=0, correlated_errors=false,
                    loadings_init=0.5, ar_init=0.5, var_obs_init=nothing,
                    var_factor_init=nothing, diffuse=true)
 
@@ -492,25 +492,25 @@ Create specification for a dynamic factor model with VAR factor dynamics and
 optional lagged factor loadings.
 
 Model:
-    yₜ = Λ₀ fₜ + Λ₁ fₜ₋₁ + ... + Λₛ fₜ₋ₛ + εₜ,  εₜ ~ N(0, H)
-    fₜ = Φ₁ fₜ₋₁ + Φ₂ fₜ₋₂ + ... + Φₚ fₜ₋ₚ + ηₜ,  ηₜ ~ N(0, Q)
+    yₜ = Λ₀ fₜ + Λ₁ fₜ₋₁ + ... + Λₚ fₜ₋ₚ + εₜ,  εₜ ~ N(0, H)
+    fₜ = Φ₁ fₜ₋₁ + Φ₂ fₜ₋₂ + ... + Φq fₜ₋q + ηₜ,  ηₜ ~ N(0, Q)
 
 where:
 - yₜ is n_obs × 1 vector of observations
 - fₜ is n_factors × 1 vector of latent factors
-- Λₗ is n_obs × n_factors factor loadings matrix for lag l (l = 0, ..., s)
+- Λₗ is n_obs × n_factors factor loadings matrix for lag l (l = 0, ..., p)
 - Φₗ is n_factors × n_factors AR coefficient matrix for lag l (diagonal)
 - H is observation error covariance (diagonal or full if correlated_errors=true)
 - Q is factor innovation covariance (diagonal)
-- s = obs_lags, p = factor_lags
+- p = loading_lags, q = factor_lags (the notation of `DynamicFactorModel`)
 
 The model is cast in companion form with state vector:
-    αₜ = [fₜ', fₜ₋₁', ..., fₜ₋ₘ₊₁']'  where m = max(p, s+1)
+    αₜ = [fₜ', fₜ₋₁', ..., fₜ₋ₛ₊₁']'  where s = max(q, p+1)
 
 # Identification
 
 For identification, the first n_factors rows of Λ₀ (contemporaneous loadings)
-are set to an identity matrix:
+form a lower-triangular block with unit diagonal:
 - λ₀_{i,i} = 1 for i ≤ n_factors
 - λ₀_{i,j} = 0 for i < j ≤ n_factors
 
@@ -519,9 +519,9 @@ All other loadings (including lagged) are free parameters.
 # Arguments
 - `n_obs::Int`: Number of observable variables
 - `n_factors::Int`: Number of latent factors (must be < n_obs)
-- `factor_lags::Int=1`: Number of lags in factor VAR dynamics (p)
-- `obs_lags::Int=0`: Number of lagged factors that load onto observations (s).
-                     If s > 0, observations depend on fₜ, fₜ₋₁, ..., fₜ₋ₛ.
+- `factor_lags::Int=1`: Number of lags in factor VAR dynamics (q)
+- `loading_lags::Int=0`: Number of lagged factors that load onto observations (p).
+                         If p > 0, observations depend on fₜ, fₜ₋₁, ..., fₜ₋ₚ.
 - `correlated_errors::Bool=false`: If true, H is a full covariance matrix (inexact DFM).
                                    If false, H is diagonal (exact DFM).
 - `loadings_init::Real=0.5`: Initial value for free factor loadings
@@ -535,18 +535,18 @@ All other loadings (including lagged) are free parameters.
 
 # State Space Representation
 
-State dimension is `n_factors * max(factor_lags, obs_lags + 1)`.
+State dimension is `n_factors * max(factor_lags, loading_lags + 1)`.
 
-State vector: αₜ = [fₜ', fₜ₋₁', ..., fₜ₋ₘ₊₁']'
+State vector: αₜ = [fₜ', fₜ₋₁', ..., fₜ₋ₛ₊₁']'
 
 Transition matrix (companion form):
-    T = [Φ₁  Φ₂  ... Φₚ  0  ... 0]   (padded with zeros if m > p)
+    T = [Φ₁  Φ₂  ... Φq  0  ... 0]   (padded with zeros if s > q)
         [I   0   ... 0   0  ... 0]
         [0   I   ... 0   0  ... 0]
         [⋮   ⋮   ⋱   ⋮   ⋮  ⋱   ⋮]
         [0   0   ... I   0  ... 0]
 
-Observation matrix: Z = [Λ₀  Λ₁  ...  Λₛ  0  ...  0]
+Observation matrix: Z = [Λ₀  Λ₁  ...  Λₚ  0  ...  0]
 
 # Example
 ```julia
@@ -558,21 +558,21 @@ spec = dynamic_factor(4, 1; factor_lags=2)
 # yₜ = Λ₀ fₜ + εₜ
 # fₜ = φ₁ fₜ₋₁ + φ₂ fₜ₋₂ + ηₜ
 
-# 1-factor model with lagged loadings (s=1)
-spec = dynamic_factor(4, 1; factor_lags=2, obs_lags=1)
+# 1-factor model with lagged loadings (p=1)
+spec = dynamic_factor(4, 1; factor_lags=2, loading_lags=1)
 # yₜ = Λ₀ fₜ + Λ₁ fₜ₋₁ + εₜ
 # fₜ = φ₁ fₜ₋₁ + φ₂ fₜ₋₂ + ηₜ
 # Parameters: λ0_i_j (contemporaneous), λ1_i_j (lag 1 loadings)
 
-# 2-factor model with obs_lags=2, factor_lags=1
-spec = dynamic_factor(5, 2; factor_lags=1, obs_lags=2)
+# 2-factor model with loading_lags=2, factor_lags=1
+spec = dynamic_factor(5, 2; factor_lags=1, loading_lags=2)
 # yₜ = Λ₀ fₜ + Λ₁ fₜ₋₁ + Λ₂ fₜ₋₂ + εₜ
 # State: [f₁ₜ, f₂ₜ, f₁ₜ₋₁, f₂ₜ₋₁, f₁ₜ₋₂, f₂ₜ₋₂]
 ```
 
 # Parameters Created
 - `λ0_i_j`: Contemporaneous loadings (i > j for identification in first k rows)
-- `λl_i_j`: Loadings for lag l (l = 1, ..., obs_lags), all free
+- `λl_i_j`: Loadings for lag l (l = 1, ..., loading_lags), all free
 - `φ_i_l`: AR coefficient for factor i at lag l (l = 1, ..., factor_lags)
 - `var_obs_i`: Observation error variances (if correlated_errors=false)
 - `H_σ_i`, `H_corr_i`: Covariance parameters (if correlated_errors=true, σ for D*Corr*D)
@@ -582,7 +582,7 @@ function dynamic_factor(
         n_obs::Int,
         n_factors::Int;
         factor_lags::Int = 1,
-        obs_lags::Int = 0,
+        loading_lags::Int = 0,
         correlated_errors::Bool = false,
         loadings_init::Real = 0.5,
         ar_init::Real = 0.5,
@@ -595,11 +595,11 @@ function dynamic_factor(
         throw(ArgumentError("n_factors must be < n_obs for identification"))
     n_factors >= 1 || throw(ArgumentError("n_factors must be >= 1"))
     factor_lags >= 1 || throw(ArgumentError("factor_lags must be >= 1"))
-    obs_lags >= 0 || throw(ArgumentError("obs_lags must be >= 0"))
+    loading_lags >= 0 || throw(ArgumentError("loading_lags must be >= 0"))
 
-    # State dimension = n_factors * max(factor_lags, obs_lags + 1)
+    # State dimension = n_factors * max(factor_lags, loading_lags + 1)
     # We need enough lags in the state to support both factor dynamics and observation loadings
-    n_state_lags = max(factor_lags, obs_lags + 1)
+    n_state_lags = max(factor_lags, loading_lags + 1)
     n_states = n_factors * n_state_lags
     # Number of shocks = n_factors (only current factors have innovations)
     n_shocks = n_factors
@@ -640,8 +640,8 @@ function dynamic_factor(
         end
     end
 
-    # Lagged loadings (Λ₁, Λ₂, ..., Λₛ) - all free parameters
-    for lag in 1:obs_lags
+    # Lagged loadings (Λ₁, Λ₂, ..., Λₚ) - all free parameters
+    for lag in 1:loading_lags
         col_offset = lag * n_factors
         for i in 1:n_obs
             for j in 1:n_factors
@@ -659,7 +659,7 @@ function dynamic_factor(
             end
         end
     end
-    # Remaining columns (beyond obs_lags) are zero - use default
+    # Remaining columns (beyond loading_lags) are zero - use default
 
     # ==========================================
     # H matrix (observation errors): n_obs × n_obs

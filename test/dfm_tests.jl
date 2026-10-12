@@ -46,8 +46,7 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
 
     @testset "EM recovers heterogeneous idiosyncratic variances" begin
         y, f = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ²)
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2))
+        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 1000)
 
         σ²_hat = idiosyncratic_variances(model)
@@ -63,8 +62,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         # factor_lags = 2 puts fₜ₋₁ in the state with its loadings fixed at 0,
         # so the loadings update must be the restricted M-step.
         y, f = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², φ = (0.5, 0.3))
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); factor_lags = 2)
+        model = DynamicFactorModel(
+            size(y, 1), 1, size(y, 2); factor_lags = 2, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 300, tol = 1e-12)
         @test _monotone(model.loglik_history)
         @test all(iszero, model.kf_ws.Z[:, 2])
@@ -74,8 +73,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
 
     @testset "EM with AR(1) errors recovers loadings, δ and σ²" begin
         y, f = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 2000)
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        model = DynamicFactorModel(
+            size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 1000)
         @test isconverged(model)
         @test _monotone(model.loglik_history)
@@ -105,8 +104,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
                        sqrt.(DFM_σ²) .* randn(rng, N)
         end
         y = DFM_λ * f' .+ λ1 * circshift(f, 1)' .+ e
-        Random.seed!(3)
-        model = DynamicFactorModel(N, 1, n; error_lags = 2, loading_lags = 1)
+        model = DynamicFactorModel(
+            N, 1, n; error_lags = 2, loading_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 2000)
         @test _monotone(model.loglik_history)
         @test ar_coefficients(model) ≈ [0.5, 0.2] atol = 0.05
@@ -119,8 +118,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
     @testset "AR errors with a missing period" begin
         y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 400)
         y[:, 100:102] .= NaN
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        model = DynamicFactorModel(
+            size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 300)
         @test _monotone(model.loglik_history)
         @test isfinite(loglikelihood(model))
@@ -129,8 +128,8 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
 
     @testset "forecast with AR errors" begin
         y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 300)
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        model = DynamicFactorModel(
+            size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 300)
         kf, n = model.kf_ws, size(y, 2)
         δ = ar_coefficients(model)[1]
@@ -149,11 +148,83 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         @test forecast_states(fc)[:, 1] ≈ a1
 
         y[:, end] .= NaN
-        Random.seed!(3)
-        model = DynamicFactorModel(size(y, 1), 1, size(y, 2); error_lags = 1)
+        model = DynamicFactorModel(
+            size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 5)
         @test_throws ArgumentError forecast(model, 1)
     end
+
+    @testset "rng keyword" begin
+        Z0(rng) = copy(DynamicFactorModel(6, 2, 50; rng).kf_ws.Z)
+        @test Z0(Xoshiro(5)) == Z0(Xoshiro(5))
+        @test Z0(Xoshiro(5)) != Z0(Xoshiro(6))
+    end
+
+    @testset "shared accessors" begin
+        y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², n = 200)
+        N, n = size(y)
+        model = DynamicFactorModel(N, 1, n; factor_lags = 2, rng = Xoshiro(3))
+
+        for f in (filtered_states, smoothed_states, factors, factors_cov, filtered_factors,
+            filtered_factors_cov, prediction_errors, system_matrices, initial_state,
+            parameters, loadings, var_coefficients, factor_innovation_cov,
+            ar_coefficients, idiosyncratic_variances)
+            @test_throws "fit!(EM(), model, y)" f(model)
+        end
+        @test_throws "fit!(EM(), model, y)" forecast(model, 1)
+
+        fit!(EM(), model, y; maxiter = 50, warn = false)
+        @test model isa AbstractStateSpaceModel
+
+        # The factors are the first k states.
+        @test factors(model) == smoothed_states(model)[1:1, :]
+        @test filtered_factors(model) == filtered_states(model)[1:1, :]
+        @test factors_cov(model) == smoothed_states_cov(model)[1:1, 1:1, :]
+        @test filtered_factors_cov(model) == filtered_states_cov(model)[1:1, 1:1, :]
+        @test size(filtered_states(model)) == (2, n)
+        @test size(crosslag_covs(model)) == (2, 2, n - 1)
+        @test size(prediction_errors(model)) == (N, n)
+        @test Siphon.observed_mask(model) == trues(N, n)
+
+        # The system matrices hold the natural parameters and reproduce the loglik.
+        p = system_matrices(model)
+        @test state_cov(model) == factor_innovation_cov(model)
+        @test obs_matrix(model)[:, 1] == loadings(model)[1][:, 1]
+        @test transition_matrix(model)[1, :] == [var_coefficients(model)[1][1, 1],
+            var_coefficients(model)[2][1, 1]]
+        @test diag(obs_cov(model)) == idiosyncratic_variances(model)
+        filt = kalman_filter(p, y, initial_state(model), initial_state_cov(model))
+        @test loglikelihood(filt) ≈ loglikelihood(model)
+        @test filtered_states(filt) ≈ filtered_states(model)
+
+        θ = parameters(model)
+        @test keys(θ) == (:loadings, :var_coefficients, :factor_innovation_cov,
+            :ar_coefficients, :idiosyncratic_variances)
+        @test θ.loadings == loadings(model)
+        @test θ.factor_innovation_cov == factor_innovation_cov(model)
+
+        # White-noise errors have no AR coefficients.
+        @test ar_coefficients(model) == Float64[]
+
+        # Parameter accessors return copies.
+        loadings(model)[1] .= 0
+        var_coefficients(model)[1] .= 0
+        factor_innovation_cov(model) .= 0
+        idiosyncratic_variances(model) .= 0
+        system_matrices(model).Z .= 0
+        @test loadings(model) == θ.loadings
+        @test var_coefficients(model) == θ.var_coefficients
+        @test factor_innovation_cov(model) == θ.factor_innovation_cov
+        @test idiosyncratic_variances(model) == θ.idiosyncratic_variances
+        @test obs_matrix(model) == p.Z
+    end
+end
+
+@testset "dynamic_factor template keywords" begin
+    spec = dynamic_factor(5, 2; factor_lags = 3, loading_lags = 1)
+    @test spec.n_states == 6
+    @test :λ1_1_1 in param_names(spec)
+    @test_throws MethodError dynamic_factor(5, 2; obs_lags = 1)
 end
 
 @testset "update_Z! restricted M-step" begin

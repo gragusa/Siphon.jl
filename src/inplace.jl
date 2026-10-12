@@ -4000,7 +4000,7 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
 end
 
 """
-    _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}=Float64)
+    _setup_dfm(spec::DynamicFactorModelSpec, n_times::Int, ::Type{T}, rng::AbstractRNG)
 
 Create workspaces for full dynamic factor model estimation.
 
@@ -4012,7 +4012,8 @@ Returns (kf_ws, em_ws, dfm_ws) where:
 function _setup_dfm(
         spec::DynamicFactorModelSpec,
         n_times::Int,
-        ::Type{T} = Float64
+        ::Type{T},
+        rng::AbstractRNG
 ) where {T}
     N = spec.n_obs
     k = spec.n_factors
@@ -4105,7 +4106,7 @@ function _setup_dfm(
     Λ = [zeros(T, N, k) for _ in 0:p]
     for j in 1:k, i in 1:N
 
-        Λ[1][i, j] = randn(T) * T(0.1)
+        Λ[1][i, j] = randn(rng, T) * T(0.1)
     end
 
     Φ = [zeros(T, k, k) for _ in 1:q]
@@ -4560,7 +4561,7 @@ end
 """
     DynamicFactorModel(n_obs::Int, n_factors::Int, n_times::Int;
                        loading_lags::Int=0, factor_lags::Int=1, error_lags::Int=0,
-                       T::Type{<:Real}=Float64)
+                       T::Type{<:Real}=Float64, rng::AbstractRNG=Random.default_rng())
 
 Construct a dynamic factor model with pre-allocated workspaces.
 
@@ -4574,6 +4575,8 @@ Construct a dynamic factor model with pre-allocated workspaces.
 - `factor_lags`: Lags in factor VAR Ψ(L) (default: 1)
 - `error_lags`: Lags in AR errors δ(L), r=0 means white noise (default: 0)
 - `T`: Element type for matrices (default: Float64)
+- `rng`: Random number generator for the starting values of the contemporaneous
+  loadings (default: `Random.default_rng()`)
 
 # Returns
 - `DynamicFactorModel{T}` ready for fitting with `fit!(EM(), model, data)`
@@ -4591,7 +4594,8 @@ function DynamicFactorModel(
         loading_lags::Int = 0,
         factor_lags::Int = 1,
         error_lags::Int = 0,
-        T::Type{<:Real} = Float64
+        T::Type{<:Real} = Float64,
+        rng::AbstractRNG = Random.default_rng()
 )
     n_obs >= 1 || throw(ArgumentError("n_obs must be at least 1, got $n_obs"))
     n_factors >= 1 || throw(ArgumentError("n_factors must be at least 1, got $n_factors"))
@@ -4601,7 +4605,7 @@ function DynamicFactorModel(
         val >= 0 || throw(ArgumentError("$name must be non-negative, got $val"))
     end
     spec = DynamicFactorModelSpec(n_obs, n_factors, loading_lags, factor_lags, error_lags)
-    kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T)
+    kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T, rng)
 
     return DynamicFactorModel{T}(
         spec,
@@ -4623,6 +4627,38 @@ end
 _fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 
 # ============================================
+# Filter and Smoother Accessors
+# ============================================
+
+# The workspace holds the filter and smoother output of the last EM pass at the
+# fitted parameters. With AR errors that output is for the quasi-differenced data.
+function _fitted_workspace(model::DynamicFactorModel)
+    _require_fitted(model)
+    return model.kf_ws
+end
+
+for f in (:predicted_states, :predicted_states_cov, :filtered_states, :filtered_states_cov,
+    :smoothed_states, :smoothed_states_cov, :crosslag_covs, :prediction_errors,
+    :prediction_errors_cov, :kalman_gains, :missing_mask, :observed_mask,
+    :initial_state, :initial_state_cov)
+    @eval $f(model::DynamicFactorModel) = $f(_fitted_workspace(model))
+end
+
+"""
+    system_matrices(model::DynamicFactorModel) -> KFParms
+
+Return a copy of the state-space matrices at the fitted parameters. The state is
+`αₜ = [fₜ; …; fₜ₋ₛ₊₁]`, `Q` is the factor innovation covariance and `H` the
+diagonal of idiosyncratic variances. With AR errors (`error_lags > 0`) the
+observation equation is that of the quasi-differenced data
+`Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ`, and `Z` holds the composite loadings `λ(L)(1 - δ(L)L)`.
+"""
+function system_matrices(model::DynamicFactorModel)
+    p = system_matrices(_fitted_workspace(model))
+    return KFParms(copy(p.Z), copy(p.H), copy(p.T), copy(p.R), copy(p.Q))
+end
+
+# ============================================
 # Factor Accessors
 # ============================================
 
@@ -4632,9 +4668,8 @@ _fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 Extract smoothed factors (k × n) from fitted model.
 """
 function factors(model::DynamicFactorModel)
-    _require_fitted(model)
     k = model.spec.n_factors
-    return smoothed_states(model.kf_ws)[1:k, :]
+    return smoothed_states(model)[1:k, :]
 end
 
 """
@@ -4643,9 +4678,8 @@ end
 Extract smoothed factor covariances (k × k × n) from fitted model.
 """
 function factors_cov(model::DynamicFactorModel)
-    _require_fitted(model)
     k = model.spec.n_factors
-    return smoothed_states_cov(model.kf_ws)[1:k, 1:k, :]
+    return smoothed_states_cov(model)[1:k, 1:k, :]
 end
 
 """
@@ -4654,9 +4688,8 @@ end
 Extract filtered factors (k × n) from fitted model.
 """
 function filtered_factors(model::DynamicFactorModel)
-    _require_fitted(model)
     k = model.spec.n_factors
-    return filtered_states(model.kf_ws)[1:k, :]
+    return filtered_states(model)[1:k, :]
 end
 
 """
@@ -4665,9 +4698,8 @@ end
 Extract filtered factor covariances (k × k × n) from fitted model.
 """
 function filtered_factors_cov(model::DynamicFactorModel)
-    _require_fitted(model)
     k = model.spec.n_factors
-    return filtered_states_cov(model.kf_ws)[1:k, 1:k, :]
+    return filtered_states_cov(model)[1:k, 1:k, :]
 end
 
 # ============================================
@@ -4675,58 +4707,72 @@ end
 # ============================================
 
 """
+    parameters(model::DynamicFactorModel) -> NamedTuple
+
+Return copies of the fitted parameters as
+`(; loadings, var_coefficients, factor_innovation_cov, ar_coefficients,
+idiosyncratic_variances)`, each equal to the accessor of the same name.
+"""
+function parameters(model::DynamicFactorModel)
+    return (;
+        loadings = loadings(model),
+        var_coefficients = var_coefficients(model),
+        factor_innovation_cov = factor_innovation_cov(model),
+        ar_coefficients = ar_coefficients(model),
+        idiosyncratic_variances = idiosyncratic_variances(model)
+    )
+end
+
+"""
     loadings(model::DynamicFactorModel)
 
-Return factor loadings [Λ₀, Λ₁, ..., Λₚ] from fitted model.
+Return a copy of the factor loadings `[Λ₀, Λ₁, ..., Λₚ]` (each N × k) from a fitted model.
 """
 function loadings(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.dfm_ws.Λ
+    _require_fitted(model)
+    return map(copy, model.dfm_ws.Λ)
 end
 
 """
     var_coefficients(model::DynamicFactorModel)
 
-Return factor VAR coefficients [Φ₁, ..., Φq] from fitted model.
+Return a copy of the factor VAR coefficients `[Φ₁, ..., Φq]` (each k × k) from a fitted model.
 """
 function var_coefficients(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.dfm_ws.Φ
+    _require_fitted(model)
+    return map(copy, model.dfm_ws.Φ)
 end
 
 """
-    innovation_cov(model::DynamicFactorModel)
+    factor_innovation_cov(model::DynamicFactorModel)
 
-Return factor innovation covariance Σ_η (k × k) from fitted model.
+Return a copy of the factor innovation covariance Σ_η (k × k) from a fitted model.
+It equals `state_cov(model)`.
 """
-function innovation_cov(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.dfm_ws.Σ_η
+function factor_innovation_cov(model::DynamicFactorModel)
+    _require_fitted(model)
+    return copy(model.dfm_ws.Σ_η)
 end
 
 """
     ar_coefficients(model::DynamicFactorModel)
 
-Return AR error coefficients [δ₁, ..., δᵣ] from fitted model.
+Return the AR coefficients `[δ₁, ..., δᵣ]` of the idiosyncratic errors from a
+fitted model. The vector is empty when `error_lags = 0`.
 """
 function ar_coefficients(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.dfm_ws.δ
+    _require_fitted(model)
+    return model.dfm_ws.δ[1:(model.spec.error_lags)]
 end
 
 """
     idiosyncratic_variances(model::DynamicFactorModel)
 
-Return idiosyncratic innovation variances σ²_v (length N) from fitted model.
+Return a copy of the idiosyncratic innovation variances σ²_v (length N) from a fitted model.
 """
 function idiosyncratic_variances(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.dfm_ws.σ²_v
+    _require_fitted(model)
+    return copy(model.dfm_ws.σ²_v)
 end
 
 # ============================================
@@ -4789,15 +4835,8 @@ function fit!(
     )
     _require_no_partial_periods(y, "fit!(EM(), ::DynamicFactorModel, ...)")
 
-    if verbose
-        println("Fitting DynamicFactorModel via EM:")
-        println("  Observables (N): ", spec.n_obs)
-        println("  Factors (k): ", spec.n_factors)
-        println("  Loading lags (p): ", spec.loading_lags)
-        println("  Factor VAR lags (q): ", spec.factor_lags)
-        println("  Error AR lags (r): ", spec.error_lags)
-        println("  State dimension: ", model.dfm_ws.state_dim)
-    end
+    verbose &&
+        @info "Fitting DynamicFactorModel via EM" n_obs=spec.n_obs n_factors=spec.n_factors loading_lags=spec.loading_lags factor_lags=spec.factor_lags error_lags=spec.error_lags state_dim=model.dfm_ws.state_dim
 
     # Run EM algorithm
     result = _em_dfm!(
@@ -4851,8 +4890,7 @@ lower, upper = forecast_interval(fc, 0.95)
 ```
 """
 function forecast(model::DynamicFactorModel{T}, h::Integer) where {T}
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
 
     model.spec.error_lags > 0 && return _forecast_dfm_ar(model, h)
 

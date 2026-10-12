@@ -376,3 +376,29 @@ Changed behavior:
   whole periods are missing.
 - `em_estimate!` throws an `ArgumentError` for periods with some but not all series
   missing, as `fit!(EM(), …)` already did.
+
+## Dynamic factor models
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `innovation_cov(model)` | `factor_innovation_cov(model)`, or `state_cov(model)` |
+| `DynamicFactorModelSpec` (exported) | `Siphon.DynamicFactorModelSpec`; read it as `model.spec` |
+| `dynamic_factor(n, k; obs_lags = p)` | `dynamic_factor(n, k; loading_lags = p)`, the keyword of `DynamicFactorModel` |
+| `DynamicFactorModel(…; identification = …)` (documented, never implemented) | no replacement; see "Identification" in the dynamic factor tutorial |
+| `fit!(EM(), ::DynamicFactorModel, y; verbose = true)` printed a header with `println` | logs with `@info` |
+
+Changed behavior:
+
+- `DynamicFactorModel` has the accessors of the other models: `filtered_states`,
+  `smoothed_states`, `predicted_states` and their `_cov` versions, `crosslag_covs`,
+  `prediction_errors`, `prediction_errors_cov`, `kalman_gains`, `missing_mask`,
+  `observed_mask`, `system_matrices` (and `obs_matrix` … `state_cov`), `initial_state`,
+  `initial_state_cov` and `parameters`. `factors_cov`, `filtered_factors` and
+  `filtered_factors_cov` are exported.
+- `loadings`, `var_coefficients`, `factor_innovation_cov`, `ar_coefficients` and
+  `idiosyncratic_variances` return copies. Previously some returned the model's own
+  arrays, so mutating the result changed the model.
+- `ar_coefficients` returns an empty vector when `error_lags = 0`. Previously it returned
+  `[0.0]`.
+- `DynamicFactorModel(…; rng)` takes the random number generator for the starting
+  loadings. Previously it always drew from the global RNG.

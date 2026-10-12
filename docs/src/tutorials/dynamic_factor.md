@@ -2,9 +2,18 @@
 
 This tutorial covers dynamic factor models (DFMs) in Siphon.jl. DFMs are widely used in macroeconomics, finance, and other fields to extract common latent factors from a large panel of observed time series.
 
-Siphon.jl provides two approaches:
-1. **DSL approach** (`dynamic_factor` template): Flexible specification with MLE estimation
-2. **High-level API** (`DynamicFactorModel`): Specialized type with EM estimation for large panels
+Siphon.jl provides two approaches. Both use `loading_lags` for the lags of the
+loadings and `factor_lags` for the lags of the factor VAR.
+
+1. **`dynamic_factor` template**: an `SSMSpec` for `StateSpaceModel`, fit by MLE
+   (`fit!(MLE(), …)`, `optimize_ssm`) or by `fit!(EM(), …)`. Use it for small
+   panels, or when you need to add restrictions, priors or correlated
+   observation errors. It identifies the factors through restrictions on
+   ``\Lambda_0`` (see below).
+2. **`DynamicFactorModel`**: a dedicated type with its own EM algorithm. Use it
+   for large panels and for autoregressive idiosyncratic errors
+   (`error_lags > 0`), which the template does not support. It imposes no
+   identifying restrictions.
 
 ## Model Overview
 
@@ -56,9 +65,23 @@ f = factors(model)              # k × n smoothed factors
 Λ = loadings(model)             # Factor loadings [Λ₀, Λ₁, ...]
 Φ = var_coefficients(model)     # VAR coefficients [Φ₁, ..., Φ_q]
 δ = ar_coefficients(model)      # AR error coefficients
-Σ_η = innovation_cov(model)     # Factor innovation covariance
+Σ_η = factor_innovation_cov(model)     # Factor innovation covariance
 σ²_v = idiosyncratic_variances(model)  # Idiosyncratic variances
+θ = parameters(model)           # All of the above as a NamedTuple
 ```
+
+The parameter accessors return copies. `DynamicFactorModel` also has the
+accessors shared by all models: `filtered_states`, `smoothed_states` and their
+`_cov` versions refer to the full state ``[f_t; f_{t-1}; \ldots]``, and
+`system_matrices(model)` returns the state-space matrices at the fitted
+parameters, so `state_cov(model)` equals `factor_innovation_cov(model)`.
+`filtered_factors`, `factors_cov` and `filtered_factors_cov` give the factor
+block of the state. With AR errors the filter runs on the quasi-differenced data
+(below), so `prediction_errors` and `obs_matrix` refer to that data.
+
+The starting values of the contemporaneous loadings are random. Pass
+`rng = Xoshiro(1)` (or any `AbstractRNG`) to the constructor for reproducible
+fits.
 
 ### Model Configurations
 
@@ -107,156 +130,54 @@ println("Number of states: ", spec.n_states)
 result = optimize_ssm(spec, y)
 ```
 
-### Identification and Normalization
+### Identification
 
-#### Why Identification is Needed
-
-Factor models have a fundamental **rotation indeterminacy**: for any orthogonal matrix ``P``, replacing ``f_t`` with ``P f_t`` and ``\Lambda`` with ``\Lambda P'`` yields the same observed distribution:
+Factor models have a **rotation indeterminacy**: for any invertible ``k \times k``
+matrix ``P``, replacing ``f_t`` with ``P f_t`` and ``\Lambda`` with
+``\Lambda P^{-1}`` (and the VAR and innovation covariance accordingly) gives the
+same distribution of the observables:
 
 ```math
-X_t = \Lambda f_t + e_t = (\Lambda P')(P f_t) + e_t = \hat{\Lambda} \hat{f}_t + e_t
+X_t = \Lambda f_t + e_t = (\Lambda P^{-1})(P f_t) + e_t.
 ```
 
-This means factors are only identified **up to rotation** without additional constraints. The likelihood is identical for infinitely many rotations of the factors.
+Pinning down the factors requires ``k^2`` restrictions.
 
-To uniquely identify ``k`` factors, we need exactly ``k^2`` restrictions. These can be placed on:
-1. **Factor loadings** ``\Lambda`` (constrain certain elements)
-2. **Factor covariance** ``\Sigma_\eta`` (constrain the innovation covariance)
-
-Siphon.jl provides two identification schemes that achieve ``k^2`` restrictions through different combinations.
-
-#### Identification Schemes
-
-##### Named Factor (`:named_factor`, default)
-
-The **named factor** identification (Stock & Watson 2011) constrains the first ``k`` rows of ``\Lambda_0`` to form an identity block:
+**`dynamic_factor` template.** The first ``k`` rows of ``\Lambda_0`` form a
+lower-triangular block with unit diagonal (``k(k+1)/2`` restrictions):
 
 ```math
 \Lambda_0 = \begin{bmatrix}
 1 & 0 & \cdots & 0 \\
 \lambda_{2,1} & 1 & \cdots & 0 \\
-\lambda_{3,1} & \lambda_{3,2} & \ddots & \vdots \\
-\vdots & \vdots & \ddots & 1 \\
-\lambda_{k+1,1} & \lambda_{k+1,2} & \cdots & \lambda_{k+1,k} \\
-\vdots & \vdots & & \vdots
-\end{bmatrix}
-```
-
-Constraints:
-- **Diagonal**: ``\lambda_{i,i} = 1`` for ``i = 1, \ldots, k`` (``k`` restrictions)
-- **Upper triangle**: ``\lambda_{i,j} = 0`` for ``i < j \leq k`` (``k(k-1)/2`` restrictions)
-- **Total from loadings**: ``k + k(k-1)/2 = k(k+1)/2`` restrictions
-
-The factor innovation covariance ``\Sigma_\eta`` is **freely estimated**, providing no additional restrictions.
-
-**Interpretation**: The first ``k`` observables directly "name" the factors. Observable 1 has unit loading on factor 1 and zero loading on factors 2 through ``k``. Observable 2 has unit loading on factor 2 and zero loading on factors 3 through ``k``, etc.
-
-!!! note
-    With `:named_factor`, you get exactly ``k(k+1)/2`` restrictions from the loadings. The remaining ``k(k-1)/2`` restrictions needed for full identification come implicitly from the model structure (the identity block pins down the scale and ordering of factors).
-
-##### Lower Triangular (`:lower_triangular`)
-
-The **lower triangular** identification (Harvey 1989) uses a different combination:
-
-**Loading constraints**:
-```math
-\Lambda_0 = \begin{bmatrix}
-\lambda_{1,1} & 0 & \cdots & 0 \\
-\lambda_{2,1} & \lambda_{2,2} & \cdots & 0 \\
 \vdots & \vdots & \ddots & \vdots \\
-\lambda_{k,1} & \lambda_{k,2} & \cdots & \lambda_{k,k} \\
+\lambda_{k,1} & \lambda_{k,2} & \cdots & 1 \\
 \lambda_{k+1,1} & \lambda_{k+1,2} & \cdots & \lambda_{k+1,k} \\
 \vdots & \vdots & & \vdots
 \end{bmatrix}
 ```
 
-- Upper triangle of ``\Lambda_0`` is zero: ``k(k-1)/2`` restrictions
-- **Diagonal is FREE** (unlike `:named_factor`)
+The template also makes ``\Sigma_\eta`` and the VAR matrices diagonal, which
+supplies the remaining restrictions. The first ``k`` observables "name" the
+factors: observable 1 loads only on factor 1 with unit loading, observable 2
+loads on factors 1 and 2 with unit loading on factor 2, and so on. Order the
+series accordingly.
 
-**Covariance constraint**:
-```math
-\Sigma_\eta = I_k \quad \text{(fixed to identity)}
-```
-
-This provides ``k(k+1)/2`` restrictions (the ``k`` diagonal elements and ``k(k-1)/2`` off-diagonal elements are all fixed).
-
-**Total restrictions**: ``k(k-1)/2 + k(k+1)/2 = k^2`` ✓
-
-**Interpretation**: Factors have unit innovation variance and are uncorrelated in innovations. The loadings diagonal captures the "scale" of each factor's influence.
-
-#### Choosing an Identification Scheme
-
-| Aspect | `:named_factor` | `:lower_triangular` |
-|--------|-----------------|---------------------|
-| ``\Lambda_0`` diagonal | Fixed at 1 | **Free** |
-| ``\Lambda_0`` upper triangle | Fixed at 0 | Fixed at 0 |
-| ``\Sigma_\eta`` (factor innovation cov) | **Free** | Fixed at ``I_k`` |
-| Interpretation | First ``k`` obs directly observe factors | Factors have unit innovation variance |
-| Reference | Stock & Watson (2011) | Harvey (1989) |
-
-**When to use each**:
-
-- **`:named_factor`** (default): Good when you want interpretable factors tied to specific observables. Natural when certain series are known to load primarily on one factor.
-
-- **`:lower_triangular`**: Good when you want the factor innovation covariance to absorb all scale information. Useful when comparing across datasets with different observables.
-
-```julia
-# Use named factor identification (default)
-model = DynamicFactorModel(100, 6, 200; identification=:named_factor)
-
-# Use lower triangular identification
-model = DynamicFactorModel(100, 6, 200; identification=:lower_triangular)
-
-# No identification (for forecasting only - factors not uniquely identified)
-model = DynamicFactorModel(100, 6, 200; identification=:none)
-```
-
-#### How Constraints Are Enforced
-
-Siphon.jl enforces identification constraints through two mechanisms:
-
-1. **`Z_free` BitMatrix**: Tracks which loading elements can be updated during EM iterations
-   - Elements where `Z_free[i,j] = false` are never modified
-   - Set at initialization via `_apply_identification!`
-
-2. **`Q_free` BitMatrix**: Controls which factor covariance elements are estimated
-   - For `:lower_triangular`, factor covariance block is fixed to identity
-   - For `:named_factor`, factor covariance is freely estimated
-
-During each M-step, `update_Z!` only modifies loadings where `Z_free[i,j] = true`:
-
-```julia
-# Simplified view of constraint enforcement
-for i in 1:N, j in 1:k
-    if Z_free[i, j]
-        Z[i, j] = new_value  # Update only free elements
-    end
-    # Fixed elements (diagonal=1, upper=0 for :named_factor) unchanged
-end
-```
-
-#### Factor Extraction
-
-After fitting, extracted factors are **already normalized** according to the chosen identification scheme:
-
-```julia
-model = DynamicFactorModel(N, k, n; identification=:named_factor)
-fit!(EM(), model, y)
-
-# Factors are normalized - no post-processing needed
-f = factors(model)  # k × n smoothed factors E[fₜ | y₁:ₙ]
-```
-
-- With `:named_factor`: Factors have the scale implied by unit loadings on the first ``k`` observables
-- With `:lower_triangular`: Factors have the scale implied by unit innovation variance
-
-**No additional normalization or rotation is required** after extraction. The constraints are maintained throughout estimation, so the extracted factors are directly interpretable under the chosen scheme.
+**`DynamicFactorModel`.** The loadings, VAR coefficients and ``\Sigma_\eta`` are
+all unrestricted, so the factors are identified only up to an invertible linear
+transformation. The factor space and everything computed from it (fitted values,
+forecasts of the observables, the log-likelihood) are identified; the individual
+factors are not. To compare the extracted factors with other estimates (PCA,
+or the true factors in a simulation), use rotation-invariant measures such as
+canonical correlations or the ``R^2`` of regressing one set of factors on the
+other, or align them first with a Procrustes rotation. `examples/factor_comparison.jl`
+shows all three.
 
 ### Multiple Lags
 
 ```julia
 # 5 observables, 2 factors, VAR(3) factor dynamics, 1 lag in loadings
-spec = dynamic_factor(5, 2; factor_lags=3, obs_lags=1)
+spec = dynamic_factor(5, 2; factor_lags=3, loading_lags=1)
 
 println("States: ", spec.n_states)  # 6 = 2 factors × max(3, 1+1)
 ```
@@ -395,7 +316,8 @@ DynamicFactorModel(n_obs, n_factors, n_times;
     loading_lags = 0,   # Lags in λ(L), 0 = static loadings
     factor_lags = 1,    # Lags in factor VAR
     error_lags = 0,     # Lags in AR errors, 0 = white noise
-    T = Float64         # Element type
+    T = Float64,        # Element type
+    rng = Random.default_rng()  # RNG for the starting loadings
 )
 ```
 
@@ -404,12 +326,12 @@ DynamicFactorModel(n_obs, n_factors, n_times;
 ```julia
 dynamic_factor(n_obs, n_factors;
     factor_lags = 1,           # AR lags in factor dynamics
-    obs_lags = 0,              # Lagged factor loadings
+    loading_lags = 0,          # Lagged factor loadings
     correlated_errors = false, # Full H matrix if true
     loadings_init = 0.5,       # Initial loading values
     ar_init = 0.5,             # Initial AR coefficient
-    σ_obs_init = 1.0,          # Initial obs error std dev
-    σ_factor_init = 1.0,       # Initial factor std dev
+    var_obs_init = nothing,    # Initial obs error variances (nothing: data-scaled)
+    var_factor_init = nothing, # Initial factor innovation variances
     diffuse = true             # Diffuse initialization
 )
 ```

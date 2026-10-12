@@ -141,9 +141,11 @@ export StateSpaceModel, fit!
 export isfitted
 
 # Dynamic Factor Model
-export DynamicFactorModel, DynamicFactorModelSpec
-export factors, loadings, var_coefficients
-export isconverged, niterations, innovation_cov, ar_coefficients, idiosyncratic_variances
+export DynamicFactorModel
+export factors, factors_cov, filtered_factors, filtered_factors_cov
+export loadings, var_coefficients
+export isconverged, niterations, factor_innovation_cov, ar_coefficients,
+       idiosyncratic_variances
 
 # Plotting recipes (RecipesBase)
 export ObservablePlot

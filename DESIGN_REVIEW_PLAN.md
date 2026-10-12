@@ -81,6 +81,12 @@ Other author answers, verbatim:
   - The new names need placing by CHUNK-021, CHUNK-031 and CHUNK-032.
   - `main` raised the compat bound to `julia = "1.12"`.
 
+- **CHUNK-020** (2026-10-12, author's answers to the implementer's recommendations):
+  - `DynamicFactorModelSpec`: **unexport, keep public** (readable as `model.spec`; CHUNK-031 declares it `public`).
+  - `dynamic_factor` template: **align keywords and document**. `obs_lags` → `loading_lags`; the docs say when to use the template (small N, MLE, custom restrictions) and when to use `DynamicFactorModel` (large N, EM, AR errors).
+  - `identification=`: **remove from the docs**. Describe what the EM identifies instead (factors up to rotation). Implementing the option can be a separate chunk later.
+  - `innovation_cov(dfm)` → **`factor_innovation_cov`**; `state_cov(dfm)` also works through `system_matrices`.
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -695,12 +701,21 @@ Other author answers, verbatim:
   - exposes `DynamicFactorModelSpec` through a public constructor, or stops exporting it.
 
   Reconcile it with the `dynamic_factor` template: align the keywords, or document how the two relate. Either implement the `identification=` option the tutorial documents (`docs/src/tutorials/dynamic_factor.md:185-240`; `examples/factor_comparison.jl:136`) or remove it from the docs.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-002, CHUNK-011, CHUNK-019
 - **Cluster**: estimation
 - **Notes**:
   - From CHUNK-011: the commented-out `identification=` tests were deleted from `test/em_tests.jl`. They are in git history before that commit (`git show 746f82d:test/em_tests.jl`, lines 905–1072) if the option is implemented.
+  - **Decisions:** recorded under Decisions (CHUNK-020).
+  - **Shared accessors:** `predicted_/filtered_/smoothed_states(_cov)`, `crosslag_covs`, `prediction_errors(_cov)`, `kalman_gains`, `missing_mask`, `observed_mask`, `initial_state(_cov)` forward to `kf_ws` through `_fitted_workspace(model)`, which calls `_require_fitted`. They return workspace buffers, as `StateSpaceModel`'s accessors return the model's own arrays. `system_matrices(dfm)` returns a copied `KFParms` (Q = Σ_η; Z is the composite `λ(L)(1 − δ(L)L)` with AR errors). `parameters(dfm)` is a NamedTuple `(loadings, var_coefficients, factor_innovation_cov, ar_coefficients, idiosyncratic_variances)`.
+  - **Copies:** all parameter accessors copy. `ar_coefficients` is `δ[1:r]`, so it is empty for r = 0. The ad hoc "not fitted" messages are replaced by `_require_fitted`, including in `forecast`.
+  - **rng:** `DynamicFactorModel(…; rng = Random.default_rng())`, passed to `_setup_dfm(spec, n, T, rng)` (no defaults on the internal function now). The dfm_tests now pass `rng = Xoshiro(3)` instead of `Random.seed!(3)`, which gives the same stream, so the thresholds are unchanged.
+  - **Exports:** `DynamicFactorModelSpec` unexported (**CHUNK-031: declare it `public`**); `innovation_cov` → `factor_innovation_cov`; `factors_cov`, `filtered_factors`, `filtered_factors_cov` exported.
+  - **Template:** `dynamic_factor(…; obs_lags)` → `loading_lags`. The docstring now uses the DFM notation (p loadings, q VAR) and correctly says the Λ₀ block is lower triangular with unit diagonal; it had said "identity".
+  - **Docs:** the identification section of the DFM tutorial is rewritten (what the template imposes; the DFM is identified up to an invertible transformation; compare factors with rotation-invariant measures). The intro says when to use each approach, and the template keyword listing is fixed (`var_*_init`). There is a new conversion-guide section "Dynamic factor models". `examples/factor_comparison.jl` drops `identification =`, and `dfm_*_estimation.jl` use `factor_innovation_cov` (not run). The `include("src/inplace.jl")` lines in the tutorial remain (CHUNK-032).
+  - **Tests:** dfm_tests has new testsets "rng keyword", "shared accessors" (unfitted throws, factor blocks, system matrices reproduce the loglik, parameters, copies, empty δ) and "dynamic_factor template keywords". 90/90 pass. Ambiguities: 0.
+
 
 ### CHUNK-021: restructure-dsl-layering-and-exports
 - **Kind**: `implement`
@@ -849,6 +864,7 @@ Other author answers, verbatim:
 - **Depends on**: CHUNK-030
 - **Cluster**: release
 - **Notes**:
+  - From CHUNK-020: declare `DynamicFactorModelSpec` `public` (unexported). From CHUNK-019: `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!`, `set_em_masks!`.
 
 ### CHUNK-032: sync-docs
 - **Kind**: `implement`
@@ -914,6 +930,7 @@ Other author answers, verbatim:
 - 2026-10-12 CHUNK-017 (unify-forecast-output) → next: CHUNK-018
 - 2026-10-12 CHUNK-018 (unify-static-backend-controls) → next: CHUNK-019
 - 2026-10-12 CHUNK-019 (consolidate-em) → next: CHUNK-020
+- 2026-10-12 CHUNK-020 (integrate-dfm) → next: CHUNK-021
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -930,6 +947,7 @@ Other author answers, verbatim:
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
 - The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
-- `fit!(MLE(), …; verbose = true)` and the `DynamicFactorModel` `fit!` header still print with `println`; switch to `@info` in CHUNK-020 (DFM) or CHUNK-030.
+- `fit!(MLE(), …; verbose = true)` still prints with `println`; switch to `@info` in CHUNK-030. (The DFM header uses `@info` since CHUNK-020.)
 - `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
+- Implementing the `identification =` option of `DynamicFactorModel` (named-factor / lower-triangular Λ₀ restrictions in the DFM M-step) was dropped from the docs in CHUNK-020; it can become a separate feature chunk. The deleted tests are at `git show 746f82d:test/em_tests.jl`, lines 905–1072.
