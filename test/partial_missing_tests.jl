@@ -594,5 +594,6 @@ end
     H = [1.0 0.3 0.0; 0.3000001 1.0 0.2; 0.0 0.2 1.0]   # asymmetric by 1e-7
     parms = KFParms(Z, H, 0.9 * Matrix(1.0I, m, m), Matrix(1.0I, m, m), Matrix(0.5I, m, m))
     y = randn(rng, p, n)
-    @test kalman_loglik(parms, y, zeros(m), P1) ≈ kalman_filter(parms, y, zeros(m), P1).loglik rtol = 1e-12
+    @test kalman_loglik(parms, y, zeros(m), P1) ≈
+          kalman_filter(parms, y, zeros(m), P1).loglik rtol = 1e-12
 end

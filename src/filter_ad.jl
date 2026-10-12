@@ -142,13 +142,16 @@ function _require_no_partial_periods(y::AbstractMatrix, caller::AbstractString,
     observed = findall(!isnan, view(y, :, t))
     throw(ArgumentError(
         "$caller does not support partially observed periods, but in period $t only " *
-        "rows $observed of $(size(y, 1)) are observed." * (isempty(hint) ? "" : " " * hint)))
+        "rows $observed of $(size(y, 1)) are observed." *
+        (isempty(hint) ? "" : " " * hint)))
 end
 
 # Static-array system matrices converted to ordinary arrays, for the per-element
 # missing-data filters.
-_dynamic_kfparms(p::KFParms) = KFParms(Matrix(p.Z), Matrix(p.H), Matrix(p.T),
-    Matrix(p.R), Matrix(p.Q))
+function _dynamic_kfparms(p::KFParms)
+    KFParms(Matrix(p.Z), Matrix(p.H), Matrix(p.T),
+        Matrix(p.R), Matrix(p.Q))
+end
 
 """
     _observed_rows!(rows, y_t) -> Int
