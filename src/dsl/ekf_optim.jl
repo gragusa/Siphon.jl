@@ -1,9 +1,8 @@
 """
     ekf_optim.jl
 
-`EKFLogDensity` (LogDensityProblems-compatible) and `optimize_ekf`
-(Optimization.jl-backed MLE) for `EKFSpec`. Mirrors `SSMLogDensity` /
-`optimize_ssm`.
+`EKFLogDensity` (LogDensityProblems-compatible) and the `optimize_ssm` method
+(Optimization.jl-backed MLE) for `EKFSpec`. Mirrors `SSMLogDensity`.
 """
 
 # ============================================================================
@@ -40,7 +39,8 @@ function logdensity(ld::EKFLogDensity, θ_u::AbstractVector)
 end
 
 function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
-    return ekf_loglik(spec, θ, y; use_static = use_static)
+    ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
+    return kalman_loglik(ss.p, y, ss.a1, ss.P1)
 end
 
 # Optional LogDensityProblems integration
@@ -52,16 +52,17 @@ function LogDensityProblems.capabilities(::Type{<:EKFLogDensity})
 end
 
 # ============================================================================
-# optimize_ekf
+# optimize_ssm for EKFSpec
 # ============================================================================
 
 """
-    optimize_ekf(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
+    optimize_ssm(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
                  ad_backend=Optimization.AutoForwardDiff(),
                  use_static=true, prob_kwargs=NamedTuple(), warn=true, kwargs...)
 
-Maximum-likelihood estimation for an `EKFSpec`. Works in unconstrained
-parameter space via `TransformVariables`. Mirrors `optimize_ssm`.
+Maximum-likelihood estimation for an `EKFSpec`, with the same keywords and return
+value as for an `SSMSpec`. Works in unconstrained parameter space via
+`TransformVariables`.
 
 # AD-backend choice
 The default `AutoForwardDiff()` requires that the entire likelihood path is
@@ -76,7 +77,7 @@ gradient; the *state* Jacobian is controlled by `spec.jacobian_mode`.
 A NamedTuple with `θ` (constrained), `loglik`, `result`, and `converged`. A warning is
 emitted when the optimiser does not report convergence, unless `warn = false`.
 """
-function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
+function optimize_ssm(spec::EKFSpec, y::AbstractMatrix;
         method = Optim.LBFGS(),
         θ0::Union{Nothing, AbstractVector, NamedTuple} = nothing,
         ad_backend = Optimization.AutoForwardDiff(),

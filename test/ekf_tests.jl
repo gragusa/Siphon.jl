@@ -1,12 +1,12 @@
 # EKF extension tests.
 #
 # Coverage (matches Plan §15):
-#   - Linear-equivalence: under a LinearMeasurement, ekf_loglik / ekf_filter /
-#     EKFWorkspace + ekf_filter! must match kalman_loglik / kalman_filter exactly.
+#   - Linear-equivalence: under a LinearMeasurement, kalman_loglik / kalman_filter /
+#     EKFWorkspace + kalman_filter! must match kalman_loglik / kalman_filter exactly.
 #   - Missing-data handling.
 #   - AD vs analytic Jacobian agreement on a smooth nonlinear measurement.
 #   - Workspace allocation smoke-test (zero in-loop allocations after warm-up).
-#   - Parameter-AD: ForwardDiff through ekf_loglik wrt system parameters.
+#   - Parameter-AD: ForwardDiff through kalman_loglik wrt system parameters.
 
 using Siphon
 using Test
@@ -117,10 +117,10 @@ end
 
     for mode in (AnalyticJacobian(), ADJacobian())
         ekf_p = EKFParms(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
-        @test ekf_loglik(ekf_p, s.y, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+        @test kalman_loglik(ekf_p, s.y, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
 
         res_kf = kalman_filter(kfp, s.y, s.a1, s.P1)
-        res_ekf = ekf_filter(ekf_p, s.y, s.a1, s.P1)
+        res_ekf = kalman_filter(ekf_p, s.y, s.a1, s.P1)
         @test res_ekf.loglik ≈ res_kf.loglik rtol = 1e-12
         @test maximum(abs, res_ekf.at .- res_kf.at) < 1e-12
         @test maximum(abs, res_ekf.att .- res_kf.att) < 1e-12
@@ -144,7 +144,7 @@ end
     for mode in (AnalyticJacobian(), ADJacobian())
         ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat,
             s.R, s.Q, s.a1, s.P1, s.n)
-        ll_ws = ekf_filter!(ws, s.y)
+        ll_ws = kalman_filter!(ws, s.y)
         @test ll_ws ≈ ll_kf rtol = 1e-10
         @test maximum(abs, ws.at .- res_kf.at) < 1e-10
         @test maximum(abs, ws.att .- res_kf.att) < 1e-10
@@ -166,12 +166,12 @@ end
     ekf_p_an = EKFParms(
         EKFTestLinearMeasurement(s.Z), AnalyticJacobian(), s.H, s.Tmat, s.R, s.Q)
     ekf_p_ad = EKFParms(EKFTestLinearMeasurement(s.Z), ADJacobian(), s.H, s.Tmat, s.R, s.Q)
-    @test ekf_loglik(ekf_p_an, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
-    @test ekf_loglik(ekf_p_ad, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+    @test kalman_loglik(ekf_p_an, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+    @test kalman_loglik(ekf_p_ad, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
 
     ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), AnalyticJacobian(),
         s.H, s.Tmat, s.R, s.Q, s.a1, s.P1, s.n)
-    ll_ws = ekf_filter!(ws, y_miss)
+    ll_ws = kalman_filter!(ws, y_miss)
     @test ll_ws ≈ ll_kf rtol = 1e-10
     @test ws.missing_mask[5]
     @test ws.missing_mask[17]
@@ -213,26 +213,26 @@ end
     ekf_an = EKFParms(soft, AnalyticJacobian(), H, Tmat, R, Q)
     ekf_ad = EKFParms(soft, ADJacobian(), H, Tmat, R, Q)
 
-    ll_an = ekf_loglik(ekf_an, y, β0, P0)
-    ll_ad = ekf_loglik(ekf_ad, y, β0, P0)
+    ll_an = kalman_loglik(ekf_an, y, β0, P0)
+    ll_ad = kalman_loglik(ekf_ad, y, β0, P0)
     @test ll_an ≈ ll_ad rtol = 1e-12
 
-    res_an = ekf_filter(ekf_an, y, β0, P0)
-    res_ad = ekf_filter(ekf_ad, y, β0, P0)
+    res_an = kalman_filter(ekf_an, y, β0, P0)
+    res_ad = kalman_filter(ekf_ad, y, β0, P0)
     @test maximum(abs, res_an.Zt .- res_ad.Zt) < 1e-12
     @test maximum(abs, res_an.att .- res_ad.att) < 1e-10
 
     # In-place agrees with functional, both modes
     ws_an = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
     ws_ad = EKFWorkspace(soft, ADJacobian(), H, Tmat, R, Q, β0, P0, n)
-    @test ekf_filter!(ws_an, y) ≈ ll_an rtol = 1e-10
-    @test ekf_filter!(ws_ad, y) ≈ ll_ad rtol = 1e-10
+    @test kalman_filter!(ws_an, y) ≈ ll_an rtol = 1e-10
+    @test kalman_filter!(ws_ad, y) ≈ ll_ad rtol = 1e-10
     @test maximum(abs, ws_an.att .- res_an.att) < 1e-10
     @test maximum(abs, ws_ad.att .- res_ad.att) < 1e-10
 end
 
 @testset "EKF — workspace allocation budget" begin
-    # In-place ekf_filter! should allocate effectively zero memory inside the
+    # In-place kalman_filter! should allocate effectively zero memory inside the
     # time loop after a warm-up call, in both AnalyticJacobian and ADJacobian
     # modes. We use a generously chunky panel and require a small fixed budget.
     Random.seed!(7)
@@ -262,13 +262,13 @@ end
     # below the n × p × m × sizeof(Float64) "fully allocating" baseline so any
     # genuine in-loop allocation regression is still caught.
     ws_an = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter!(ws_an, y)  # warm-up
-    allocs_an = @allocated ekf_filter!(ws_an, y)
+    kalman_filter!(ws_an, y)  # warm-up
+    allocs_an = @allocated kalman_filter!(ws_an, y)
     @test allocs_an < 256
 
     ws_ad = EKFWorkspace(soft, ADJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter!(ws_ad, y)  # warm-up
-    allocs_ad = @allocated ekf_filter!(ws_ad, y)
+    kalman_filter!(ws_ad, y)  # warm-up
+    allocs_ad = @allocated kalman_filter!(ws_ad, y)
     # 48 bytes/step would be ~9.6 KB at n=200. A "naive" all-allocating impl
     # would allocate at least p*sizeof(Vector{Dual{Tag,Float64,3}}) per step
     # ≈ 200 × (16 + 8 × (1 + 3) × 8) = ~57 KB or more. Bound at 16 KB.
@@ -285,7 +285,7 @@ end
     for mode in (AnalyticJacobian(), ADJacobian())
         ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat,
             s.R, s.Q, s.a1, s.P1, s.n)
-        ekf_filter_and_smooth!(ws, s.y; crosscov = true)
+        kalman_filter_and_smooth!(ws, s.y; crosscov = true)
         @test maximum(abs, ws.αs .- ws_kf.αs) < 1e-10
         @test maximum(abs, ws.Vs .- ws_kf.Vs) < 1e-10
         @test maximum(abs, ws.Pcross .- ws_kf.Pcross) < 1e-10
@@ -304,7 +304,7 @@ end
 
     ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), AnalyticJacobian(),
         s.H, s.Tmat, s.R, s.Q, s.a1, s.P1, s.n)
-    ekf_filter_and_smooth!(ws, y_miss; crosscov = true)
+    kalman_filter_and_smooth!(ws, y_miss; crosscov = true)
     @test maximum(abs, ws.αs .- ws_kf.αs) < 1e-10
     @test maximum(abs, ws.Vs .- ws_kf.Vs) < 1e-10
     @test maximum(abs, ws.Pcross .- ws_kf.Pcross) < 1e-10
@@ -338,7 +338,7 @@ end
     end
 
     ws = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter_and_smooth!(ws, y; crosscov = true)
+    kalman_filter_and_smooth!(ws, y; crosscov = true)
 
     # PSD smoothed covariances
     @test all(eigmin(Symmetric(ws.Vs[:, :, t])) > -1e-10 for t in 1:n)
@@ -378,11 +378,11 @@ end
     y = randn(p, n)
 
     ws = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter_and_smooth!(ws, y)
-    allocs = @allocated ekf_filter_and_smooth!(ws, y)
+    kalman_filter_and_smooth!(ws, y)
+    allocs = @allocated kalman_filter_and_smooth!(ws, y)
     # filter+smoother adds the smoother's lag-1 cross-cov path which uses
     # Cholesky on Pt_t — at the moment we accept a small fixed budget; the
-    # bulk of the allocation budget is the same as `ekf_filter!`.
+    # bulk of the allocation budget is the same as `kalman_filter!`.
     @test allocs < 256
 end
 
@@ -415,14 +415,14 @@ end
     @test diag(p_built.T) ≈ fill(0.5, s.m)
     @test diag(p_built.Q) ≈ fill(0.01, s.m)
 
-    # ekf_loglik(spec, θ, y) matches manual EKFParms construction
+    # ssm_loglik(spec, θ, y) matches manual EKFParms construction
     a1, P1 = Siphon.build_initial_state(spec, θ_nt)
-    ll_spec = Siphon.ekf_loglik(spec, θ_nt, s.y)
-    ll_manual = Siphon.ekf_loglik(p_built, s.y, a1, P1)
+    ll_spec = ssm_loglik(spec, θ_nt, s.y)
+    ll_manual = Siphon.kalman_loglik(p_built, s.y, a1, P1)
     @test ll_spec ≈ ll_manual rtol = 1e-12
 end
 
-@testset "EKF DSL — optimize_ekf vs optimize_ssm on a linear model" begin
+@testset "EKF DSL — optimize_ssm on EKFSpec vs SSMSpec for a linear model" begin
     s = _ekf_test_linear_setup()
 
     spec_ssm = custom_ssm(
@@ -446,7 +446,7 @@ end
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
     )
-    res_ekf = optimize_ekf(spec_ekf, s.y; show_trace = false)
+    res_ekf = optimize_ssm(spec_ekf, s.y; show_trace = false)
 
     @test res_ssm.converged
     @test res_ekf.converged
@@ -546,7 +546,7 @@ end
         P1 = 1.0 .* Matrix(I, m_state, m_state)
     )
 
-    res = optimize_ekf(spec, y; maxiters = 400)
+    res = optimize_ssm(spec, y; maxiters = 400)
     @test res.converged
 
     # Loose finite-sample tolerances — this is a smoke test that the optimizer
@@ -559,14 +559,14 @@ end
     @test res.θ.ψ_3 ≈ Ψ_true[3, 3] atol = 0.15
 end
 
-@testset "EKF — parameter AD through ekf_loglik" begin
+@testset "EKF — parameter AD through kalman_loglik" begin
     s = _ekf_test_linear_setup()
 
     function neg_ll(σ)
         H_local = σ^2 .* Matrix(I, s.p, s.p)
         ekf_p = EKFParms(EKFTestLinearMeasurement(s.Z), ADJacobian(),
             H_local, s.Tmat, s.R, s.Q)
-        return -ekf_loglik(ekf_p, s.y, s.a1, s.P1)
+        return -kalman_loglik(ekf_p, s.y, s.a1, s.P1)
     end
 
     σ0 = 0.5

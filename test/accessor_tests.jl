@@ -95,9 +95,9 @@ end
     y = randn(rng, 2, 25)
     meas = EKFTestLinearMeasurement(Z)
 
-    res = ekf_filter(EKFParms(meas, H, Tm, R, Q), y, a1, P1)
+    res = kalman_filter(EKFParms(meas, H, Tm, R, Q), y, a1, P1)
     ws = EKFWorkspace(meas, ADJacobian(), H, Tm, R, Q, a1, P1, size(y, 2))
-    ekf_filter!(ws, y)
+    kalman_filter!(ws, y)
     lin = kalman_filter(KFParms(Z, H, Tm, R, Q), y, a1, P1)
 
     @test res isa AbstractFilterResult

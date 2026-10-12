@@ -44,8 +44,8 @@ using StaticArrays
 
     # The scalar path takes a vector.
     yv = vec(y[1, :])
-    @test kalman_loglik_scalar(1.0, 1.0, 0.9, 1.0, 0.5, 0.0, 1.0, nan_to_missing(yv)) ==
-          kalman_loglik_scalar(1.0, 1.0, 0.9, 1.0, 0.5, 0.0, 1.0, yv)
+    ps = KFParms(1.0, 1.0, 0.9, 1.0, 0.5)
+    @test kalman_loglik(ps, nan_to_missing(yv), 0.0, 1.0) == kalman_loglik(ps, yv, 0.0, 1.0)
 end
 
 @testset "missing entries in the model and estimation layer" begin
@@ -151,15 +151,15 @@ Siphon.measurement_jacobian!(Z, m::MissingTestLinearMeasurement, a, t) = (copyto
     p = EKFParms(MissingTestLinearMeasurement(Z), Matrix(1.0I, 2, 2), 0.5 * Z, Z, Z)
     a1, P1 = zeros(2), Matrix(1.0I, 2, 2)
 
-    r = ekf_filter(p, ym, a1, P1)
-    @test ekf_loglik(p, ym, a1, P1) == ekf_loglik(p, y, a1, P1) == loglikelihood(r)
+    r = kalman_filter(p, ym, a1, P1)
+    @test kalman_loglik(p, ym, a1, P1) == kalman_loglik(p, y, a1, P1) == loglikelihood(r)
     @test Siphon.observed_mask(r) == mask
     @test Siphon.missing_mask(r) == .!mask[1, :]
     ws = EKFWorkspace(p, a1, P1, 10)
-    @test ekf_filter!(ws, ym) ≈ loglikelihood(r)
+    @test kalman_filter!(ws, ym) ≈ loglikelihood(r)
     @test Siphon.observed_mask(ws) == mask
     @test isapprox(prediction_errors(ws), prediction_errors(r); nans = true)
 
-    rs = kalman_filter_scalar(1.0, 1.0, 0.5, 1.0, 1.0, 0.0, 1.0, nan_to_missing(y[1, :]))
+    rs = kalman_filter(KFParms(1.0, 1.0, 0.5, 1.0, 1.0), nan_to_missing(y[1, :]), 0.0, 1.0)
     @test Siphon.observed_mask(rs) == mask[1:1, :]
 end

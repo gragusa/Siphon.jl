@@ -70,10 +70,12 @@ const fail_state_accessors = (predicted_states, predicted_states_cov, filtered_s
     @test_throws "stopped in period 3" prediction_errors(r2)
 
     # The scalar filter returns a failed result instead of a DomainError.
-    rsc = kalman_filter_scalar(1.0, -2.5, 1.0, 1.0, 1.0, 0.0, 0.0, vec(y))
+    psc = KFParms(1.0, -2.5, 1.0, 1.0, 1.0)
+    rsc = kalman_filter(psc, vec(y), 0.0, 0.0)
     @test loglikelihood(rsc) == -Inf
     @test_throws "stopped in period 3" filtered_states(rsc)
-    @test kalman_loglik_scalar(1.0, -2.5, 1.0, 1.0, 1.0, 0.0, 0.0, vec(y)) == -Inf
+    @test_throws "stopped in period 3" kalman_smoother(rsc)
+    @test kalman_loglik(psc, vec(y), 0.0, 0.0) == -Inf
 
     # A successful result is unaffected.
     ok = kalman_filter(KFParms(fail_Z, [1.0;;], fail_T, fail_R, fail_Q), y, fail_a1, [1.0;;])
@@ -153,28 +155,28 @@ end
     y = fail_y()
     meas = FailTestLinearMeasurement(fail_Z)
     p = EKFParms(meas, fail_H, fail_T, fail_R, fail_Q)
-    r = ekf_filter(p, y, fail_a1, fail_P1)
+    r = kalman_filter(p, y, fail_a1, fail_P1)
     @test loglikelihood(r) == -Inf
-    @test ekf_loglik(p, y, fail_a1, fail_P1) == -Inf
+    @test kalman_loglik(p, y, fail_a1, fail_P1) == -Inf
     @test_throws "stopped in period 3" filtered_states(r)
     @test_throws "stopped in period 3" predicted_observations(r)
 
     ws = EKFWorkspace(p, fail_a1, fail_P1, 10)
-    @test_throws "Call ekf_filter!(ws, y) first" filtered_states(ws)
-    @test ekf_filter!(ws, y) == -Inf
+    @test_throws "Call kalman_filter!(ws, y) first" filtered_states(ws)
+    @test kalman_filter!(ws, y) == -Inf
     @test_throws "stopped in period 3" filtered_states(ws)
-    @test_throws "stopped in period 3" ekf_smoother!(ws)
-    @test ekf_filter_and_smooth!(ws, y) == -Inf
+    @test_throws "stopped in period 3" kalman_smoother!(ws)
+    @test kalman_filter_and_smooth!(ws, y) == -Inf
 
     update_params!(ws; H = [1.0;;])
-    @test isfinite(ekf_filter!(ws, y))
-    @test_throws "Call ekf_smoother!(ws) first" smoothed_states(ws)
-    ekf_smoother!(ws)
+    @test isfinite(kalman_filter!(ws, y))
+    @test_throws "Call kalman_smoother!(ws) first" smoothed_states(ws)
+    kalman_smoother!(ws)
     @test size(smoothed_states(ws)) == (1, 10)
 
     @test_throws DimensionMismatch EKFWorkspace(meas, ADJacobian(), [1.0;;], fail_T,
         [1.0 0.0], fail_Q, fail_a1, fail_P1, 10)
-    @test_throws DimensionMismatch ekf_filter!(ws, randn(2, 10))
+    @test_throws DimensionMismatch kalman_filter!(ws, randn(2, 10))
     @test_throws DimensionMismatch set_initial!(ws, [0.0, 0.0], fail_P1)
 end
 

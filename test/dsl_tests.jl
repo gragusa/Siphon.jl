@@ -571,12 +571,12 @@ end
     ll_matrix = kalman_loglik(kfparms, y, a1, P1)
 
     # Scalar version
-    ll_scalar = kalman_loglik_scalar(1.0, 100.0, 1.0, 1.0, 50.0, 100.0, 1000.0, vec(y))
+    ll_scalar = kalman_loglik(KFParms(1.0, 100.0, 1.0, 1.0, 50.0), vec(y), 100.0, 1000.0)
 
     @test ll_matrix ≈ ll_scalar rtol=1e-10
 end
 
-@testset "kalman_loglik_scalar" begin
+@testset "kalman_loglik on a scalar KFParms" begin
     Z = 1.0
     H = 100.0
     T = 1.0
@@ -587,7 +587,7 @@ end
 
     y = randn(50) .* 10 .+ 100
 
-    ll = kalman_loglik_scalar(Z, H, T, R, Q, a1, P1, y)
+    ll = kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)
     @test isfinite(ll)
     @test ll < 0
 end
@@ -746,7 +746,7 @@ end
           crosslag_covs(kalman_smoother(filt; crosscov = true))
 end
 
-@testset "kalman_smoother_scalar" begin
+@testset "kalman_smoother on a scalar KFParms" begin
     Z = 1.0
     H = 100.0
     T = 1.0
@@ -758,17 +758,10 @@ end
     y = randn(30) .* 10 .+ 100
 
     # Run scalar filter
-    result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
+    result_scalar = kalman_filter(KFParms(Z, H, T, R, Q), y, a1, P1)
 
-    # Run scalar smoother
-    smooth_scalar = kalman_smoother_scalar(
-        Z,
-        T,
-        result_scalar.at,
-        result_scalar.Pt,
-        result_scalar.vt,
-        result_scalar.Ft
-    )
+    # Run smoother on the scalar result
+    smooth_scalar = kalman_smoother(result_scalar)
     alpha_smooth = vec(smoothed_states(smooth_scalar))
     V_smooth = vec(smoothed_states_cov(smooth_scalar))
 

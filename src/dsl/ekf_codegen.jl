@@ -96,7 +96,7 @@ end
     build_nonlinear_state_space(spec::EKFSpec, θ, y; use_static=true)
 
 Build the EKF parameter container, initial state, and observation matrix
-needed to evaluate `ekf_loglik`. Returns a NamedTuple `(p, a1, P1)`.
+needed to evaluate `kalman_loglik`. Returns a NamedTuple `(p, a1, P1)`.
 
 `use_static` is currently a no-op for the EKF path — the measurement object
 typically owns the parts that would benefit from `SMatrix` conversion (e.g.
@@ -111,21 +111,14 @@ function build_nonlinear_state_space(spec::EKFSpec, θ::NamedTuple, y::AbstractM
 end
 
 """
-    Siphon.ekf_loglik(spec::EKFSpec, θ, y; use_static=true) -> loglik
+    ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
 
-Evaluate the EKF log-likelihood for an `EKFSpec` at constrained parameters
-`θ::NamedTuple`. Equivalent to `ekf_loglik(p, y, a1, P1)` after building
+Evaluate the extended Kalman filter log-likelihood of an `EKFSpec` at constrained
+parameters `θ`. Equivalent to `kalman_loglik(p, y, a1, P1)` after building
 `(p, a1, P1)` from the spec.
-
-Adds a method to the parent-module `Siphon.ekf_loglik` so callers can use the
-same name regardless of whether they have an `EKFParms` or an `EKFSpec`.
 """
-function ekf_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix;
-        use_static::Bool = true)
-    y = _nan_obs(y)
-    ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
-    return ekf_loglik(ss.p, y, ss.a1, ss.P1)
-end
+ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix) =
+    _spec_loglik(spec, θ, _nan_obs(y), false)
 
 # ============================================================================
 # custom_ekf

@@ -504,20 +504,20 @@ end
 
     # The EKF updates one period at a time, so a partially observed period would
     # otherwise discard the rows that are present.
-    @test_throws "in period 4 only rows [1, 3] of 3 are observed" ekf_loglik(parms, y, s.a1, s.P1)
-    @test_throws "ekf_filter does not support partially observed periods" ekf_filter(
+    @test_throws "in period 4 only rows [1, 3] of 3 are observed" kalman_loglik(parms, y, s.a1, s.P1)
+    @test_throws "kalman_filter does not support partially observed periods" kalman_filter(
         parms, y, s.a1, s.P1)
 
     ws = EKFWorkspace(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q, s.a1, s.P1, s.n)
-    @test_throws "in period 4 only rows [1, 3] of 3 are observed" ekf_filter!(ws, y)
-    @test_throws "ekf_filter!" ekf_filter_and_smooth!(ws, y)
+    @test_throws "in period 4 only rows [1, 3] of 3 are observed" kalman_filter!(ws, y)
+    @test_throws "kalman_filter!" kalman_filter_and_smooth!(ws, y)
 
     # Fully observed and entirely missing periods remain valid on these paths.
     y_whole = copy(s.y)
     y_whole[:, 4] .= NaN
-    @test ekf_loglik(parms, y_whole, s.a1, s.P1) isa Real
-    @test ekf_filter!(ws, y_whole) isa Real
-    @test ekf_loglik(parms, s.y, s.a1, s.P1) isa Real
+    @test kalman_loglik(parms, y_whole, s.a1, s.P1) isa Real
+    @test kalman_filter!(ws, y_whole) isa Real
+    @test kalman_loglik(parms, s.y, s.a1, s.P1) isa Real
 end
 
 @testset "partial missing — the static path returns on a singular innovation covariance" begin

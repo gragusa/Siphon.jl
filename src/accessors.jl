@@ -6,7 +6,7 @@
     AbstractFilterResult
 
 Supertype of the values returned by the functional filters: `KalmanFilterResult`,
-`KalmanFilterResultScalar`, `DiffuseFilterResult` and `EKFFilterResult`.
+`DiffuseFilterResult` and `EKFFilterResult`.
 
 Every subtype supports the filter accessors `predicted_states`, `predicted_states_cov`,
 `filtered_states`, `filtered_states_cov`, `prediction_errors`, `prediction_errors_cov`,
@@ -28,7 +28,7 @@ Supertype of the pre-allocated workspaces of the in-place filters: `KalmanWorksp
 
 Workspaces support the same accessors as [`AbstractFilterResult`](@ref), plus the
 smoother accessors `smoothed_states`, `smoothed_states_cov` and `crosslag_covs`, which
-hold values after `kalman_smoother!` (or `ekf_smoother!`) has run.
+hold values after `kalman_smoother!` has run.
 
 The accessors return the workspace's own storage, not copies: the next run overwrites them.
 The exceptions are `prediction_errors`, `prediction_errors_cov` and `kalman_gains`, which
@@ -54,10 +54,6 @@ const _NOT_RUN = -1
 _run_status(r::AbstractFilterResult) = r.failed_at
 _run_status(ws::AbstractFilterWorkspace) = _filter_store(ws).status
 
-# The calls named in error messages.
-_filter_call(::AbstractFilterWorkspace) = "kalman_filter!(ws, y)"
-_smoother_call(::AbstractFilterWorkspace) = "kalman_smoother!(ws)"
-
 function _failure_message(status::Integer)
     return "the filter stopped in period $status because the innovation covariance " *
            "was not positive definite, so the log-likelihood is -Inf and the filter " *
@@ -69,7 +65,7 @@ function _require_output(x::_FilterOutput, f::Symbol)
     status = _run_status(x)
     status == 0 && return x
     status == _NOT_RUN && throw(ArgumentError(
-        "$f: the workspace holds no filter output. Call $(_filter_call(x)) first."))
+        "$f: the workspace holds no filter output. Call kalman_filter!(ws, y) first."))
     throw(ArgumentError("$f: $(_failure_message(status))."))
 end
 
@@ -124,7 +120,7 @@ function _require_smoothed(ws::AbstractFilterWorkspace, f::Symbol)
     _require_output(ws, f)
     _filter_store(ws).smoothed || throw(ArgumentError(
         "$f: the smoother has not run on this filter output. " *
-        "Call $(_smoother_call(ws)) first."))
+        "Call kalman_smoother!(ws) first."))
     return ws
 end
 

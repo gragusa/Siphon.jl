@@ -19,12 +19,12 @@ include("ekf_ad.jl")
 
 # Core Kalman filter/smoother exports
 export KFParms, KFParms_static
-export KalmanFilterResult, KalmanFilterResultScalar, SmootherResult, SmootherWorkspace
+export KalmanFilterResult, SmootherResult, SmootherWorkspace
 export DiffuseFilterResult  # Exact diffuse initialization
 export STATIC_THRESHOLD, to_static_if_small, select_backend
-export kalman_loglik, kalman_loglik_scalar
-export kalman_filter, kalman_filter_scalar
-export kalman_smoother, kalman_smoother_scalar, kalman_filter_and_smooth
+export kalman_loglik
+export kalman_filter
+export kalman_smoother, kalman_filter_and_smooth
 # Exact diffuse initialization (Durbin-Koopman method)
 # Note: Use 5-arg kalman_loglik/kalman_filter for diffuse (P1_inf triggers diffuse)
 export diffuse_period, diffuse_covariances, diffuse_flags
@@ -70,8 +70,7 @@ export ismissing_period, isincomplete_period, count_missing_periods, count_incom
 export AbstractEKFMeasurement, EKFParms, EKFFilterResult
 export AbstractEKFJacobianMode, ADJacobian, AnalyticJacobian, FiniteDiffJacobian
 export measurement, measurement!, measurement_jacobian, measurement_jacobian!
-export ekf_loglik, ekf_filter
-export EKFWorkspace, ekf_filter!, ekf_smoother!, ekf_filter_and_smooth!
+export EKFWorkspace
 export predicted_observations, measurement_jacobians
 
 # Re-export DSL components
@@ -109,7 +108,7 @@ export optimize_ssm, optimize_ssm_with_stderr
 # EKF DSL surface
 export EKFSpec, MeasurementExpr, custom_ekf
 export build_measurement, build_ekfparms, build_nonlinear_state_space
-export EKFLogDensity, optimize_ekf
+export EKFLogDensity
 
 # EM algorithm (DSL-based) - main API is fit!(EM(), model, y)
 export EMResult, profile_em_ssm, ProfileEMResult

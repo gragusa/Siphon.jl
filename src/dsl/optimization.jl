@@ -114,8 +114,8 @@ function optimize_ssm(
     return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end
 
-# Maximum likelihood shared by `optimize_ssm` and `optimize_ekf`. The search runs
-# in unconstrained coordinates, but the objective is the log-likelihood alone:
+# Maximum likelihood shared by the `optimize_ssm` methods for `SSMSpec` and `EKFSpec`.
+# The search runs in unconstrained coordinates, but the objective is the log-likelihood alone:
 # the log-Jacobian of the transform belongs to a density over parameters, not to
 # the likelihood, and including it would move the optimum.
 function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn::Bool = true,

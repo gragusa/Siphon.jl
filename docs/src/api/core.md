@@ -15,14 +15,12 @@ KFParms_static
 
 ```@docs
 kalman_loglik
-kalman_loglik_scalar
 ```
 
 ### Full Filter Output
 
 ```@docs
 kalman_filter
-kalman_filter_scalar
 KalmanFilterResult
 ```
 
@@ -30,7 +28,6 @@ KalmanFilterResult
 
 ```@docs
 kalman_smoother
-kalman_smoother_scalar
 kalman_filter_and_smooth
 SmootherResult
 ```

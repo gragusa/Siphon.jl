@@ -434,15 +434,36 @@ function kalman_loglik(
     return loglik + const_term
 end
 
-"""
-    kalman_loglik_scalar(Z, H, T, R, Q, a1, P1, y) -> loglik
+# A system whose matrices are all scalars: one state and one series.
+const _ScalarKFParms = KFParms{<:Real, <:Real, <:Real, <:Real, <:Real}
 
-Scalar (univariate) version of the Kalman filter log-likelihood.
+# The series of a one-series observation array, as a vector.
+_scalar_series(y::AbstractVector) = y
+function _scalar_series(y::AbstractMatrix)
+    size(y, 1) == 1 || throw(DimensionMismatch(
+        "a KFParms with scalar fields has one series, but y has $(size(y, 1)) rows"))
+    return vec(y)
+end
 
-Optimized for the common case of scalar state and observation.
-Handles missing observations marked as NaN.
 """
-function kalman_loglik_scalar(
+    kalman_loglik(p::KFParms, y, a1::Real, P1::Real) -> loglik
+
+Log-likelihood of a model with one state and one series, given as a `KFParms` whose
+fields `Z`, `H`, `T`, `R` and `Q` are numbers. `y` is a vector or a 1 × n matrix.
+This runs a scalar kernel that avoids matrix arithmetic. AD-compatible.
+
+# Example
+```julia
+p = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+kalman_loglik(p, nile, 0.0, 1e7)
+```
+"""
+function kalman_loglik(p::_ScalarKFParms, y::AbstractVecOrMat, a1::Real, P1::Real)
+    y = _scalar_series(_nan_obs(y))
+    return _kalman_loglik_scalar(p.Z, p.H, p.T, p.R, p.Q, a1, P1, y)
+end
+
+function _kalman_loglik_scalar(
         Z::Real,
         H::Real,
         Tmat::Real,
@@ -776,26 +797,20 @@ function kalman_filter(
 end
 
 """
-    kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y) -> KalmanFilterResultScalar
+    kalman_filter(p::KFParms, y, a1::Real, P1::Real) -> KalmanFilterResult
 
-Scalar version of full Kalman filter for univariate state-space models.
-Handles missing observations marked as NaN.
-
-For `n` observations, returns `n` time points:
-- `at[t]` = E[αₜ | y₁:ₜ₋₁] (predicted state)
-- `att[t]` = E[αₜ | y₁:ₜ] (filtered state)
+Filter a model with one state and one series, given as a `KFParms` whose fields are
+numbers. `y` is a vector or a 1 × n matrix. This runs a scalar kernel; the result is an
+ordinary `KalmanFilterResult` with one row (`at` is 1 × n, `Pt` is 1 × 1 × n), so every
+accessor, `kalman_smoother` and the plot recipes work on it.
 """
-function kalman_filter_scalar(
-        Z::Real,
-        H::Real,
-        Tmat::Real,
-        R::Real,
-        Q::Real,
-        a1::Real,
-        P1::Real,
-        y::AbstractVector
-)
-    y = _nan_obs(y)
+function kalman_filter(p::_ScalarKFParms, y::AbstractVecOrMat, a1::Real, P1::Real)
+    y = _scalar_series(_nan_obs(y))
+    return _kalman_filter_scalar(p, a1, P1, y)
+end
+
+function _kalman_filter_scalar(p::_ScalarKFParms, a1::Real, P1::Real, y::AbstractVector)
+    Z, H, Tmat, R, Q = p.Z, p.H, p.T, p.R, p.Q
     n = length(y)
     ET = promote_type(
         typeof(Z),
@@ -818,7 +833,14 @@ function kalman_filter_scalar(
     # Innovation storage: n entries
     vt_store = fill(ET(NaN), n)
     Ft_store = fill(ET(NaN), n)
+    Kt_store = fill(ET(NaN), n)
     missing_mask = falses(n)
+
+    # One-row arrays in the layout of KalmanFilterResult
+    result(loglik, failed_at) = KalmanFilterResult(p, loglik, reshape(at_store, 1, n),
+        reshape(Pt_store, 1, 1, n), reshape(att_store, 1, n), reshape(Ptt_store, 1, 1, n),
+        reshape(vt_store, 1, n), reshape(Ft_store, 1, 1, n), reshape(Kt_store, 1, 1, n),
+        missing_mask; failed_at = failed_at)
 
     a_pred = convert(ET, a1)
     P_pred = convert(ET, P1)
@@ -835,8 +857,7 @@ function kalman_filter_scalar(
 
         if _has_missing(y_t)
             missing_mask[t] = true
-            vt_store[t] = ET(NaN)
-            Ft_store[t] = Z * P_pred * Z + H
+            Kt_store[t] = zero(ET)
 
             # For missing: filtered = predicted
             att_store[t] = a_pred
@@ -852,8 +873,7 @@ function kalman_filter_scalar(
             v = y_t - Z * a_pred
             F = Z * P_pred * Z + H
             if F <= zero(ET)
-                return KalmanFilterResultScalar{ET}(ET(-Inf), at_store, Pt_store,
-                    att_store, Ptt_store, vt_store, Ft_store, missing_mask, t)
+                return result(ET(-Inf), t)
             end
             Finv = one(ET) / F
 
@@ -861,6 +881,7 @@ function kalman_filter_scalar(
 
             vt_store[t] = v
             Ft_store[t] = F
+            Kt_store[t] = Tmat * P_pred * Z * Finv
 
             # Filtered state
             a_filt = a_pred + P_pred * Z * Finv * v
@@ -877,16 +898,7 @@ function kalman_filter_scalar(
 
     const_term = -n_obs * log(ET(2π)) / 2
 
-    return KalmanFilterResultScalar{ET}(
-        loglik + const_term,
-        at_store,
-        Pt_store,
-        att_store,
-        Ptt_store,
-        vt_store,
-        Ft_store,
-        missing_mask
-    )
+    return result(loglik + const_term, 0)
 end
 
 # ============================================
@@ -1045,9 +1057,11 @@ function _univariate_diffuse_step(a, Pstar, Pinf, Zr, Hr, v, tol)
 end
 
 """
-    kalman_loglik_diffuse(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> loglik
+    kalman_loglik(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> loglik
 
 Compute log-likelihood using exact diffuse initialization (Durbin-Koopman method).
+Passing the diffuse part `P1_inf` is what selects it; the 4-argument
+`kalman_loglik(p, y, a1, P1)` is the ordinary filter.
 
 The initial state covariance is P1 = P1_star + κ * P1_inf where κ → ∞.
 The filter runs in two phases:
@@ -1084,10 +1098,10 @@ a1 = [0.0]
 P1_star = [0.0;;]  # No finite uncertainty initially
 P1_inf = [1.0;;]   # Full diffuse on the level
 
-ll = kalman_loglik_diffuse(p, y, a1, P1_star, P1_inf)
+ll = kalman_loglik(p, y, a1, P1_star, P1_inf)
 ```
 """
-function kalman_loglik_diffuse(
+function kalman_loglik(
         p::KFParms,
         y::AbstractMatrix,
         a1::AbstractVector,
@@ -1291,9 +1305,11 @@ function _store_innovations!(vt, Ft, Kt, t, v, F, K)
 end
 
 """
-    kalman_filter_diffuse(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> DiffuseFilterResult
+    kalman_filter(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> DiffuseFilterResult
 
-Run full Kalman filter with exact diffuse initialization.
+Run full Kalman filter with exact diffuse initialization. Passing the diffuse part
+`P1_inf` is what selects it; the 4-argument `kalman_filter(p, y, a1, P1)` is the
+ordinary filter.
 
 Returns filtered and predicted states along with all intermediate quantities,
 including the diffuse covariances (Pinf, Pstar) during the diffuse period.
@@ -1320,10 +1336,11 @@ observed rows than diffuse directions they load on) is processed one row at a ti
 factor.
 
 # See Also
-- `kalman_loglik_diffuse`: Log-likelihood only (faster if states not needed)
-- `kalman_filter`: Standard filter without diffuse initialization
+- `kalman_loglik(p, y, a1, P1_star, P1_inf)`: log-likelihood only (faster if states
+  are not needed)
+- `diffuse_period`, `diffuse_flags`, `diffuse_covariances`: the diffuse-period output
 """
-function kalman_filter_diffuse(
+function kalman_filter(
         p::KFParms,
         y::AbstractMatrix,
         a1::AbstractVector,
@@ -1603,100 +1620,4 @@ function kalman_filter_diffuse(
         observed_mask,
         failed_at
     )
-end
-
-# ============================================
-# Unified API: 5-arg signatures trigger exact diffuse
-# ============================================
-
-"""
-    kalman_loglik(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> loglik
-
-Compute log-likelihood using exact diffuse initialization (Durbin-Koopman method).
-
-This is the unified API: passing 5 positional arguments (with P1_inf as the 5th)
-triggers exact diffuse initialization. For standard (non-diffuse) filtering,
-use the 4-arg version `kalman_loglik(p, y, a1, P1)`.
-
-The initial state covariance is P1 = P1_star + κ * P1_inf where κ → ∞.
-Only observations after the diffuse period contribute to the log-likelihood.
-
-# Arguments
-- `p::KFParms`: State space parameters (Z, H, T, R, Q)
-- `y::AbstractMatrix`: Observations (p × n matrix)
-- `a1::AbstractVector`: Initial state mean
-- `P1_star::AbstractMatrix`: Finite part of initial covariance
-- `P1_inf::AbstractMatrix`: Diffuse part of initial covariance (typically I or diagonal)
-- `tol::Real=1e-8`: Tolerance for detecting end of diffuse period
-
-# Example
-```julia
-# Local level model with exact diffuse initialization
-p = KFParms([1.0;;], [σ²_obs;;], [1.0;;], [1.0;;], [σ²_state;;])
-y = randn(1, 100)
-a1 = [0.0]
-P1_star = [0.0;;]  # No finite uncertainty initially
-P1_inf = [1.0;;]   # Full diffuse on the level
-
-ll = kalman_loglik(p, y, a1, P1_star, P1_inf)
-```
-
-See also: [`kalman_filter`](@ref) (5-arg version for full filter output)
-"""
-function kalman_loglik(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1_star::AbstractMatrix,
-        P1_inf::AbstractMatrix;
-        tol::Real = 1e-8
-)
-    y = _nan_obs(y)
-    return kalman_loglik_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
-end
-
-"""
-    kalman_filter(p::KFParms, y, a1, P1_star, P1_inf; tol=1e-8) -> DiffuseFilterResult
-
-Run full Kalman filter with exact diffuse initialization.
-
-This is the unified API: passing 5 positional arguments (with P1_inf as the 5th)
-triggers exact diffuse initialization. For standard (non-diffuse) filtering,
-use the 4-arg version `kalman_filter(p, y, a1, P1)`.
-
-Returns a `DiffuseFilterResult` containing all filter outputs plus diffuse-specific
-quantities (Pinf, Pstar during diffuse period, diffuse flags).
-
-# Arguments
-- `p::KFParms`: State space parameters (Z, H, T, R, Q)
-- `y::AbstractMatrix`: Observations (p × n matrix)
-- `a1::AbstractVector`: Initial state mean
-- `P1_star::AbstractMatrix`: Finite part of initial covariance
-- `P1_inf::AbstractMatrix`: Diffuse part of initial covariance
-- `tol::Real=1e-8`: Tolerance for detecting end of diffuse period
-
-# Example
-```julia
-p = KFParms([1.0;;], [100.0;;], [1.0;;], [1.0;;], [10.0;;])
-y = randn(1, 50)
-a1 = [0.0]
-P1_star = [0.0;;]
-P1_inf = [1.0;;]
-
-result = kalman_filter(p, y, a1, P1_star, P1_inf)
-d = diffuse_period(result)  # Number of diffuse observations
-```
-
-See also: [`kalman_loglik`](@ref) (5-arg version for log-likelihood only)
-"""
-function kalman_filter(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1_star::AbstractMatrix,
-        P1_inf::AbstractMatrix;
-        tol::Real = 1e-8
-)
-    y = _nan_obs(y)
-    return kalman_filter_diffuse(p, y, a1, P1_star, P1_inf; tol = tol)
 end

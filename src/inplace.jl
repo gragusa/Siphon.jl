@@ -950,7 +950,7 @@ end
 # ============================================
 
 """
-    kalman_filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool=false) -> loglik
+    kalman_filter_and_smooth!(ws, y::AbstractMatrix; crosscov::Bool=false) -> loglik
 
 Run filter and smoother in one call.
 
@@ -963,10 +963,11 @@ Run filter and smoother in one call.
 - `loglik`: Log-likelihood. When the filter fails it is `-Inf` and the smoother is
   skipped.
 """
-function kalman_filter_and_smooth!(ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = false)
+function kalman_filter_and_smooth!(ws::AbstractFilterWorkspace, y::AbstractMatrix;
+        crosscov::Bool = false)
     y = _nan_obs(y)
     loglik = kalman_filter!(ws, y)
-    ws.status == 0 && kalman_smoother!(ws; crosscov = crosscov)
+    _run_status(ws) == 0 && kalman_smoother!(ws; crosscov = crosscov)
     return loglik
 end
 
@@ -1013,13 +1014,12 @@ Extends `KalmanWorkspace` with additional storage for the diffuse period:
 ws = DiffuseKalmanWorkspace{Float64}(p, m, r, n)
 set_params!(ws, Z, H, T, R, Q)
 set_initial_diffuse!(ws, a1, P1_star, P1_inf)
-kalman_filter_diffuse!(ws, y)
+kalman_filter!(ws, y)
 ```
 
 # See Also
 - `KalmanWorkspace`: Standard filter workspace
-- `kalman_filter_diffuse!`: In-place diffuse filter
-- `kalman_filter_diffuse`: Pure functional version
+- `kalman_filter(p, y, a1, P1_star, P1_inf)`: Pure functional version
 """
 mutable struct DiffuseKalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Embed standard workspace (for shared functionality)
@@ -1225,9 +1225,11 @@ Uses tmp as scratch space.
 end
 
 """
-    kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix) -> loglik
+    kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix) -> loglik
 
-Run Kalman filter with exact diffuse initialization in-place.
+Run Kalman filter with exact diffuse initialization in-place. The workspace type
+selects it: a `DiffuseKalmanWorkspace` holds the diffuse part `P1_inf` of the initial
+covariance, while a `KalmanWorkspace` runs the ordinary filter.
 
 # Arguments
 - `ws`: Pre-allocated diffuse workspace (must call `set_initial_diffuse!` first)
@@ -1253,12 +1255,12 @@ observed rows than diffuse directions they load on) is processed one row at a ti
 (Koopman & Durbin 2000). A non-diagonal `H` is decorrelated first with its unit LDL
 factor.
 """
-function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
+function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
     y = _nan_obs(y)
     base = ws.base
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
-    _check_obs(base, "kalman_filter_diffuse!", y)
+    _check_obs(base, "kalman_filter!", y)
 
     # Reset state
     base.loglik = zero(T)
@@ -1580,23 +1582,6 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
     base.status = 0
 
     return base.loglik
-end
-
-# Unified API: kalman_filter! dispatches on workspace type
-"""
-    kalman_filter!(ws::DiffuseKalmanWorkspace, y) -> loglik
-
-Run in-place Kalman filter with exact diffuse initialization.
-
-This is the unified API: the workspace type determines whether to use
-standard or exact diffuse initialization. Use `DiffuseKalmanWorkspace`
-for exact diffuse, `KalmanWorkspace` for standard initialization.
-
-See also: [`kalman_filter!`](@ref) (standard version with KalmanWorkspace)
-"""
-function kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix)
-    y = _nan_obs(y)
-    kalman_filter_diffuse!(ws, y)
 end
 
 # ============================================

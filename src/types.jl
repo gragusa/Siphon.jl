@@ -206,6 +206,9 @@ observed rows are `findall(view(observed_mask, :, t))`. The accessors
 `prediction_errors`, `prediction_errors_cov` and `kalman_gains` return them in series
 positions instead.
 
+A model with one state and one series may be given as a `KFParms` of numbers. Its result
+has the same layout with `m = p = 1`, and `p` keeps the numbers.
+
 # Accessor Methods
 The accessors of [`AbstractFilterResult`](@ref):
 - `system_matrices(r)` → `p` (KFParms)
@@ -282,50 +285,6 @@ observed_mask(r::KalmanFilterResult) = _require_output(r, :observed_mask).observ
 Return the indices of the rows observed in period `t`, in increasing order.
 """
 observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
-
-# ============================================
-# KalmanFilterResultScalar - Scalar version
-# ============================================
-
-"""
-    KalmanFilterResultScalar{T<:Real}
-
-Scalar (univariate state) version of KalmanFilterResult.
-
-Same naming conventions as KalmanFilterResult but with vectors instead of matrices
-for state quantities.
-"""
-struct KalmanFilterResultScalar{T <: Real} <: AbstractFilterResult
-    loglik::T
-    at::Vector{T}          # n: predicted states
-    Pt::Vector{T}          # n: predicted variances
-    att::Vector{T}         # n: filtered states
-    Ptt::Vector{T}         # n: filtered variances
-    vt::Vector{T}          # n: innovations
-    Ft::Vector{T}          # n: innovation variances
-    missing_mask::BitVector
-    failed_at::Int         # 0, or the period in which the filter stopped
-end
-
-function KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft,
-        missing_mask::BitVector) where {T}
-    return KalmanFilterResultScalar{T}(loglik, at, Pt, att, Ptt, vt, Ft, missing_mask, 0)
-end
-
-observed_mask(r::KalmanFilterResultScalar) =
-    .!transpose(_require_output(r, :observed_mask).missing_mask)
-
-# One series: the innovations are already in place.
-prediction_errors(r::KalmanFilterResultScalar) = copy(_output(r, :prediction_errors).vt)
-prediction_errors_cov(r::KalmanFilterResultScalar) = copy(_output(r, :prediction_errors_cov).Ft)
-
-# The scalar result stores neither the system nor the gains.
-system_matrices(::KalmanFilterResultScalar) = throw(ArgumentError(
-    "KalmanFilterResultScalar does not store the system matrices"))
-kalman_gains(::KalmanFilterResultScalar) = throw(ArgumentError(
-    "KalmanFilterResultScalar does not store the Kalman gains"))
-initial_state(r::KalmanFilterResultScalar) = r.at[1]
-initial_state_cov(r::KalmanFilterResultScalar) = r.Pt[1]
 
 # ============================================
 # SmootherWorkspace - Pre-allocated smoother storage
@@ -435,8 +394,8 @@ gain with `a_{t|t} = a_t + G v_t`.
 After the diffuse period (t > d), standard Kalman filter recursion is used.
 
 # See Also
-- `kalman_filter_diffuse`: Compute diffuse filter
-- `kalman_loglik_diffuse`: Compute log-likelihood with diffuse initialization
+- `kalman_filter(p, y, a1, P1_star, P1_inf)`: Compute diffuse filter
+- `kalman_loglik(p, y, a1, P1_star, P1_inf)`: Compute log-likelihood with diffuse initialization
 - `KalmanFilterResult`: Standard filter result without diffuse initialization
 """
 struct DiffuseFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult

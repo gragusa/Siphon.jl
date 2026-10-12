@@ -158,9 +158,12 @@ end
     @test ll_mle ≈ -632.5456 rtol=1e-4
 end
 
-@testset "kalman_loglik_scalar" begin
-    ll = kalman_loglik_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, Float64.(nile[!, 1]))
+@testset "kalman_loglik on a scalar KFParms" begin
+    p_scalar = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+    ll = kalman_loglik(p_scalar, Float64.(nile[!, 1]), 0.0, 1e7)
+    # A 1 × n matrix works too
+    @test kalman_loglik(p_scalar, y, 0.0, 1e7) == ll
+    @test_throws DimensionMismatch kalman_loglik(p_scalar, [y; y], 0.0, 1e7)
 
     @test isfinite(ll)
     @test ll < 0
@@ -274,23 +277,25 @@ end
     @test smoothed_states(smooth) == smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile))
 end
 
-@testset "kalman_smoother_scalar" begin
+@testset "kalman_filter and kalman_smoother on a scalar KFParms" begin
     nile_vec = Float64.(nile[!, 1])
-    result_scalar = kalman_filter_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, nile_vec)
+    p_scalar = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+    result_scalar = kalman_filter(p_scalar, nile_vec, 0.0, 1e7)
 
-    # Check struct type
-    @test result_scalar isa Siphon.KalmanFilterResultScalar
+    # The scalar kernel returns the common result type
+    @test result_scalar isa KalmanFilterResult
+    p_mat = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
+    result_mat = kalman_filter(p_mat, y, a1_nile, P1_nile)
+    @test loglikelihood(result_scalar) ≈ loglikelihood(result_mat) rtol = 1e-10
+    @test filtered_states_cov(result_scalar) ≈ filtered_states_cov(result_mat) rtol = 1e-10
+    @test kalman_gains(result_scalar) ≈ kalman_gains(result_mat) rtol = 1e-10
+    @test Siphon.missing_mask(result_scalar) == Siphon.missing_mask(result_mat)
+    @test obs_matrix(result_scalar) == 1.0
 
-    smooth_scalar = kalman_smoother_scalar(
-        1.0,
-        1.0,
-        result_scalar.at,
-        result_scalar.Pt,
-        result_scalar.vt,
-        result_scalar.Ft
-    )
+    smooth_scalar = kalman_smoother(result_scalar)
     @test smooth_scalar isa SmootherResult
+    @test crosslag_covs(kalman_smoother(result_scalar; crosscov = true)) ≈
+          crosslag_covs(kalman_smoother(result_mat; crosscov = true))
 
     n = length(nile_vec)
     @test size(smoothed_states(smooth_scalar)) == (1, n)
@@ -340,6 +345,9 @@ include("accessor_tests.jl")
 
 # One smoother result type and the result/workspace conversions
 include("smoother_interface_tests.jl")
+
+# Filter variants selected by argument types
+include("variant_dispatch_tests.jl")
 
 # Failure model: -Inf objectives, guarded accessors, shape errors, warnings
 include("failure_tests.jl")

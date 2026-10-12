@@ -80,10 +80,10 @@ definite, and every path reports this the same way:
 
 | Situation | Siphon 0.1 | Now |
 |:----------|:-----------|:----|
-| `kalman_filter!(ws, y)`, `ekf_filter!(ws, y)` or `kalman_filter_diffuse!` on such a period | threw `PosDefException` | returns `-Inf`; the workspace accessors then throw |
+| `kalman_filter!(ws, y)` on such a period, for any workspace (Kalman, diffuse or EKF) | threw `PosDefException` | returns `-Inf`; the workspace accessors then throw |
 | `kalman_filter(p, y, a1, P1)` and the other functional filters | returned `-Inf` plus arrays holding uninitialised memory | return a result with `loglikelihood(r) == -Inf`; its state and innovation accessors throw, and the arrays past the failure hold `NaN` |
-| `kalman_filter_scalar` and the static one-observable filter | threw `DomainError` | return a failed result, as above |
-| `kalman_filter_and_smooth!` (formerly `filter_and_smooth!`), `ekf_filter_and_smooth!` | threw | return `-Inf` and skip the smoother |
+| the scalar filter and the static one-observable filter | threw `DomainError` | return a failed result, as above |
+| `kalman_filter_and_smooth!` (formerly `filter_and_smooth!` and `ekf_filter_and_smooth!`) | threw | return `-Inf` and skip the smoother |
 | `kalman_smoother`, `predict`, `forecast`, `forecast_paths` on a failed filter | ran on garbage | throw `ArgumentError` |
 | EM (`fit!(EM(), …)`, `em_estimate!`) whose filter fails | threw `PosDefException` | stops, returns `converged = false` and warns |
 
@@ -93,7 +93,7 @@ Accessors refuse to return storage that holds no output:
 
 | Call | Siphon 0.1 | Now |
 |:-----|:-----------|:----|
-| a filter accessor on a workspace before its first run | returned uninitialised memory | throws `ArgumentError` naming `kalman_filter!(ws, y)` (`ekf_filter!(ws, y)` for the EKF) |
+| a filter accessor on a workspace before its first run | returned uninitialised memory | throws `ArgumentError` naming `kalman_filter!(ws, y)` |
 | `smoothed_states`, `smoothed_states_cov` on a workspace before `kalman_smoother!` | returned stale or uninitialised memory | throws `ArgumentError`; a new filter run also invalidates the smoother output |
 | `crosslag_covs(ws)` after `kalman_smoother!(ws; crosscov = false)` | returned stale memory | throws `ArgumentError` |
 | `kalman_smoother!(ws)` before the filter has run | ran on uninitialised memory | throws `ArgumentError` |
@@ -106,7 +106,7 @@ Shape errors are `DimensionMismatch`:
 
 | Call | Siphon 0.1 | Now |
 |:-----|:-----------|:----|
-| `kalman_filter!`, `ekf_filter!`, `kalman_filter_diffuse!` with `y` of the wrong size | `AssertionError` | `DimensionMismatch` |
+| `kalman_filter!` on any workspace with `y` of the wrong size | `AssertionError` | `DimensionMismatch` |
 | `kalman_filter!(model, y)`, `kalman_loglik(model, y)`, `fit!(…, model, y)` with `y` of the wrong size | `AssertionError` | `DimensionMismatch` |
 | `EKFWorkspace(...)` with inconsistent matrices | `AssertionError` | `DimensionMismatch` |
 | `KFParms(Z, H, T, R, Q)` with inconsistent matrices | accepted | `DimensionMismatch` |
@@ -206,3 +206,49 @@ New conversions:
 - `SmootherResult(model)` copies the smoothed states of a fitted `StateSpaceModel`.
 - `kalman_smoother` on an exact diffuse result (`DiffuseFilterResult`) throws an
   `ArgumentError`. Before, it was a `MethodError`.
+
+## Choosing a filter variant
+
+The filter variant follows from the arguments. The specialised names are gone.
+
+### Extended Kalman filter
+
+An `EKFParms`, `EKFWorkspace` or `EKFSpec` selects the extended Kalman filter in the
+generic functions:
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `ekf_loglik(p::EKFParms, y, a1, P1)` | `kalman_loglik(p, y, a1, P1)` |
+| `ekf_filter(p::EKFParms, y, a1, P1)` | `kalman_filter(p, y, a1, P1)` (still an `EKFFilterResult`) |
+| `ekf_filter!(ws::EKFWorkspace, y)` | `kalman_filter!(ws, y)` |
+| `ekf_smoother!(ws)` | `kalman_smoother!(ws)` |
+| `ekf_filter_and_smooth!(ws, y)` | `kalman_filter_and_smooth!(ws, y)` |
+| `Siphon.ekf_loglik(spec::EKFSpec, θ, y)` | `ssm_loglik(spec, θ, y)` |
+| `optimize_ekf(spec::EKFSpec, y; …)` | `optimize_ssm(spec, y; …)`, same keywords and return value |
+
+Error messages on an unrun EKF workspace now name `kalman_filter!(ws, y)` and
+`kalman_smoother!(ws)`.
+
+### Models with one state and one series
+
+A `KFParms` whose fields are numbers selects the scalar kernel. It returns an ordinary
+`KalmanFilterResult` with one-row arrays, so the accessors, `kalman_smoother` and the
+plot recipes work on it:
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `kalman_loglik_scalar(Z, H, T, R, Q, a1, P1, y)` | `kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)` |
+| `kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)` returned a `KalmanFilterResultScalar` of vectors | `kalman_filter(KFParms(Z, H, T, R, Q), y, a1, P1)` returns a `KalmanFilterResult` (`at` is 1 × n, `Pt` 1 × 1 × n) that also stores the system and the gains |
+| `kalman_smoother_scalar(Z, T, at, Pt, vt, Ft)` | `kalman_smoother(kalman_filter(KFParms(Z, H, T, R, Q), y, a1, P1))` |
+
+`y` may be a vector or a 1 × n matrix; `a1` and `P1` are numbers. `KalmanFilterResultScalar`
+is gone.
+
+### Exact diffuse initialisation
+
+Supplying the diffuse part `P1_inf` of the initial covariance selects exact diffuse
+initialisation, as before: the 5-argument `kalman_loglik(p, y, a1, P1_star, P1_inf)` and
+`kalman_filter(p, y, a1, P1_star, P1_inf)`, or a `DiffuseKalmanWorkspace` built with
+`P1_inf`. In the DSL it is `diffuse = :exact`. The in-place diffuse filter is now only
+`kalman_filter!(ws::DiffuseKalmanWorkspace, y)`; the unexported
+`Siphon.kalman_filter_diffuse!` is gone.

@@ -68,8 +68,8 @@ fixed data (e.g. factor loadings, lower bounds, maturity grids) and define one
 or both of:
 
   - `measurement(model, a, t)::AbstractVector` — pure functional map (used by
-    AD and the functional `ekf_loglik`).
-  - `measurement!(out, model, a, t)` — mutating map (used by `ekf_filter!`).
+    AD and the functional `kalman_loglik`).
+  - `measurement!(out, model, a, t)` — mutating map (used by `kalman_filter!`).
 
 The Jacobian `∂h/∂a` may be supplied as
 
@@ -86,7 +86,7 @@ abstract type AbstractEKFMeasurement end
     measurement(model::AbstractEKFMeasurement, a, t) -> AbstractVector
 
 Pure functional measurement map. Must be defined for the AD-Jacobian path and
-for the functional `ekf_loglik`.
+for the functional `kalman_loglik`.
 """
 function measurement end
 
@@ -94,7 +94,7 @@ function measurement end
     measurement!(out, model::AbstractEKFMeasurement, a, t)
 
 Mutating measurement map writing `h(a, t)` into `out`. Required for the
-in-place `ekf_filter!` path.
+in-place `kalman_filter!` path.
 """
 function measurement! end
 
@@ -109,7 +109,7 @@ function measurement_jacobian end
     measurement_jacobian!(Z, model::AbstractEKFMeasurement, a, t)
 
 Mutating analytic Jacobian writing `∂h/∂a` into `Z`. Required for the in-place
-`ekf_filter!` path under `AnalyticJacobian()`.
+`kalman_filter!` path under `AnalyticJacobian()`.
 """
 function measurement_jacobian! end
 

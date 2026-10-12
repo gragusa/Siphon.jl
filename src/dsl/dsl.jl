@@ -30,7 +30,7 @@ t = build_transformation(spec)
 # θ_nt is (σ_obs = ..., σ_level = ...) with positive values
 
 # Compute log-likelihood with NamedTuple
-ll = kalman_loglik(spec, θ_nt, y)
+ll = ssm_loglik(spec, θ_nt, y)
 
 # Or use optimization (handles constraints automatically)
 result = optimize_ssm(spec, y)
@@ -57,9 +57,6 @@ using ..Siphon: _nan_obs
 # EKF surface used by the DSL extension
 using ..Siphon: AbstractEKFMeasurement, AbstractEKFJacobianMode, ADJacobian,
                 AnalyticJacobian, EKFParms
-# Import (not just `using`) so that a DSL-side definition of `ekf_loglik`
-# extends Siphon's existing function rather than shadowing it.
-import ..Siphon: ekf_loglik
 
 include("types.jl")
 include("codegen.jl")
@@ -114,6 +111,6 @@ export EMResult, profile_em_ssm, ProfileEMResult
 # EKF DSL surface
 export EKFSpec, MeasurementExpr, custom_ekf
 export build_measurement, build_ekfparms, build_nonlinear_state_space
-export EKFLogDensity, optimize_ekf
+export EKFLogDensity
 
 end # module DSL

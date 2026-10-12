@@ -59,6 +59,12 @@ Other author answers, verbatim:
   - **Free/fixed: `FreeParam`/Real only.** A Real means fixed; `FreeParam(name; init, lower, upper)` means free. Field order is aligned with `SSMParameter`. Drop `@P` and `const P`.
   - **Parameterisation:** variances for scalar and diagonal blocks; full covariances via standard deviations plus correlations, with names that say so (`*_var`, `*_sd`, `*_corr`).
   - **Priors:** add `AbstractPrior`, and accept Distributions.jl distributions through a weak-dependency extension. Keep `FlatPrior`; use one keyed style.
+- **CHUNK-016** (2026-10-08): diffuse initialisation is **selected by supplying `P1_inf`**, everywhere:
+  - functional: the 5-argument `kalman_loglik`/`kalman_filter(p, y, a1, P1_star, P1_inf)`;
+  - in-place: `DiffuseKalmanWorkspace(…, a1, P1_star, P1_inf, n)` with `kalman_filter!(ws, y)`;
+  - DSL: `diffuse = :exact` as a model property.
+
+  Rejected: initial-state objects and a `P1_inf` keyword.
 
 ## Chunks
 
@@ -549,11 +555,34 @@ Other author answers, verbatim:
   - **Diffuse initialisation.** Today it is selected by argument count in the functional API (the 5-argument overloads also change the return type), by workspace type in the in-place API, and by a spec field in the DSL. Use one mechanism, for example a `DiffuseInit`/initial-state object passed in place of `(a1, P1)`.
   - **Scalar models.** Apply the CHUNK-004 decision: a scalar `KFParms` dispatches to the scalar kernel, and the `_scalar` names are removed.
   - **Diffuse filter export.** Export `kalman_filter_diffuse!`, or fold it into `kalman_filter!`. Its docstrings currently point users to it as `Siphon.kalman_filter_diffuse!`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-002, CHUNK-004, CHUNK-015
 - **Cluster**: api-unification
 - **Notes**:
+  - **EKF:**
+    - Functions are now methods of the generic names: `kalman_loglik`/`kalman_filter(::EKFParms, …)`, `kalman_filter!`/`kalman_smoother!(::EKFWorkspace)`.
+    - `kalman_filter_and_smooth!` is one method on `AbstractFilterWorkspace` (in `inplace.jl`).
+    - Spec level: `ekf_loglik(spec::EKFSpec, …)` → `ssm_loglik(::EKFSpec, θ, y)`; `_spec_loglik(::EKFSpec)` builds the system directly. `optimize_ekf` → `optimize_ssm(::EKFSpec, y; …)`; it was not an `ekf_*` name, but the same decision applies. The DSL `import ..Siphon: ekf_loglik` is gone.
+    - `_filter_call`/`_smoother_call` were inlined, since every workspace now names the same calls.
+    - Kept: `EKFLogDensity` vs `SSMLogDensity` (CHUNK-023 touches the EKF density), `EKFSpec`, `custom_ekf`, `build_ekfparms`.
+  - **Scalar:**
+    - `const _ScalarKFParms = KFParms{<:Real,…}`. `kalman_loglik`/`kalman_filter(p::_ScalarKFParms, y::AbstractVecOrMat, a1::Real, P1::Real)`, where `y` is a vector or a 1 × n matrix (`DimensionMismatch` otherwise).
+    - The kernels are internal `_kalman_loglik_scalar`/`_kalman_filter_scalar`. The filter returns a `KalmanFilterResult` with 1-row arrays and now also the gains `Kt`, which are zero in missing periods. `Ft` is NaN in missing periods; it used to be `ZPZ' + H`.
+    - `kalman_smoother(result)` handles scalar systems via `_as_matrix`. The scalar smoother kernel was deleted; the matrix kernel runs on 1 × 1 matrices and supports `crosscov`.
+    - `kalman_smoother(p, y, a1, P1)` and `kalman_filter_and_smooth` take untyped `y`/`a1`/`P1`, so they work for scalar systems.
+    - `KalmanFilterResultScalar` and the three `_scalar` exports are removed.
+  - **Diffuse (decision recorded in Decisions):**
+    - The functional kernels were renamed into the 5-argument `kalman_loglik`/`kalman_filter` methods, whose old wrapper section is gone.
+    - The in-place `kalman_filter_diffuse!` body is now `kalman_filter!(::DiffuseKalmanWorkspace, y)`. No `kalman_filter_diffuse*` names remain.
+  - **Mistake fixed in-session:** cutting the scalar result out of `types.jl` also dropped `SmootherWorkspace` (Aqua undefined export); it was restored unchanged (CHUNK-030 removes it).
+  - **Docs:**
+    - Conversion guide: "Choosing a filter variant" (EKF, scalar, diffuse tables), and the failure-section rows were reworded.
+    - `api/core.md` (both copies) drops the `_scalar` entries. `api/ekf.md` points to the generic entries in prose rather than `@docs`, to avoid duplicate-docstring errors (see Open Questions).
+    - `tutorials/ekf.md` was migrated; `dsl.jl`'s example uses `ssm_loglik`. The docs build was not run.
+  - **Tests:**
+    - New `test/variant_dispatch_tests.jl` (21 checks): the removed names, diffuse functional = in-place via generic names, scalar vs 1 × 1 values and gradients, scalar filter+smoother.
+    - Migrated: ekf, failure, missing_input, partial_missing, accessor, dsl, runtests (the scalar checks now compare loglik/covariances/gains/crosscov with the 1 × 1 system).
 
 ### CHUNK-017: unify-forecast-output
 - **Kind**: `implement`
@@ -838,6 +867,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-013 (apply-failure-model) → next: CHUNK-014
 - 2026-10-08 CHUNK-014 (apply-missing-data-model) → next: CHUNK-015
 - 2026-10-08 CHUNK-015 (unify-filter-smoother-interfaces) → next: CHUNK-016
+- 2026-10-08 CHUNK-016 (dispatch-based-variant-selection) → next: CHUNK-017
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -852,3 +882,5 @@ Other author answers, verbatim:
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
 - `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
 - `ForecastResult` still carries a `time` field, while `SmootherResult` and `KalmanFilterResult` take `time` as a plot attribute. Align in CHUNK-017.
+- Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
+- `EKFLogDensity` and `SSMLogDensity` remain two types; with `EKFSpec` going through `ssm_loglik`/`optimize_ssm`, a single `SSMLogDensity(spec, y)` constructor dispatching on the spec type would finish the job (CHUNK-023).

@@ -140,7 +140,7 @@ end
     SmootherResult(ws::AbstractFilterWorkspace)
 
 Copy the smoother output of `ws` into a [`SmootherResult`](@ref). Needs a prior
-`kalman_smoother!(ws)` (or `ekf_smoother!(ws)`) run. The cross-lag covariances are
+`kalman_smoother!(ws)` run. The cross-lag covariances are
 copied when that run computed them. Later runs on `ws` don't change the result.
 
 # Example

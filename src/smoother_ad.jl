@@ -45,6 +45,10 @@ function crosslag_covs(r::SmootherResult)
     return r.Pcross
 end
 
+# A scalar system's matrices as 1 × 1 matrices.
+_as_matrix(x::Real) = fill(x, 1, 1)
+_as_matrix(x::AbstractMatrix) = x
+
 # The RTS recursion on the arrays of a filter output. Durbin & Koopman (2012), §4.4,
 # eqs. (4.32)-(4.44), on the predicted states `at = a_{t|t-1}`. Where a period was only
 # partly observed, the filter stored the reduced-system v_t and F_t in the leading
@@ -224,8 +228,8 @@ smoothed_states(sm)
 function kalman_smoother(result::KalmanFilterResult; crosscov::Bool = false)
     _require_output(result, :kalman_smoother)
     return _kalman_smoother(
-        result.p.Z,
-        result.p.T,
+        _as_matrix(result.p.Z),
+        _as_matrix(result.p.T),
         result.at,
         result.Pt,
         result.vt,
@@ -256,14 +260,7 @@ sm = kalman_smoother(p, y, a1, P1)
 smoothed_states(sm)
 ```
 """
-function kalman_smoother(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix;
-        crosscov::Bool = false
-)
-    y = _nan_obs(y)
+function kalman_smoother(p::KFParms, y, a1, P1; crosscov::Bool = false)
     return kalman_smoother(kalman_filter(p, y, a1, P1); crosscov = crosscov)
 end
 
@@ -282,89 +279,7 @@ filt, sm = kalman_filter_and_smooth(p, y, a1, P1)
 loglikelihood(filt), smoothed_states(sm)
 ```
 """
-function kalman_filter_and_smooth(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix;
-        crosscov::Bool = false
-)
-    y = _nan_obs(y)
+function kalman_filter_and_smooth(p::KFParms, y, a1, P1; crosscov::Bool = false)
     filt = kalman_filter(p, y, a1, P1)
     return filt, kalman_smoother(filt; crosscov = crosscov)
-end
-
-"""
-    kalman_smoother_scalar(Z, T, at, Pt, vt, Ft; missing_mask=nothing)
-
-Scalar version of RTS smoother for univariate state-space models.
-
-Handles missing observations (NaN in vt or indicated by missing_mask). Returns a
-[`SmootherResult`](@ref) with one state (1 × n means, 1 × 1 × n variances).
-"""
-function kalman_smoother_scalar(
-        Z::Real,
-        T::Real,
-        at::AbstractVector,
-        Pt::AbstractVector,
-        vt::AbstractVector,
-        Ft::AbstractVector;
-        missing_mask::Union{Nothing, BitVector} = nothing
-)
-    n_obs = length(vt)
-    ET = promote_type(typeof(Z), typeof(T), eltype(at), eltype(Pt), eltype(vt), eltype(Ft))
-
-    alpha_smooth = Vector{ET}(undef, n_obs)
-    V_smooth = Vector{ET}(undef, n_obs)
-
-    # Initialize: r_n = 0, N_n = 0
-    r = zero(ET)
-    N = zero(ET)
-
-    @inbounds for t in n_obs:-1:1
-        a_t = at[t]
-        P_t = Pt[t]
-        v_t = vt[t]
-
-        # Check for missing observation
-        is_missing = if missing_mask !== nothing
-            missing_mask[t]
-        else
-            isnan(v_t)
-        end
-
-        if is_missing
-            # Missing observation: simplified recursion
-            r_new = T * r
-            N_new = T * N * T
-
-            # Smoothed estimates
-            alpha_smooth[t] = a_t + P_t * r_new
-            V_smooth[t] = P_t - P_t * N_new * P_t
-
-            r = r_new
-            N = N_new
-        else
-            # Valid observation
-            F_inv = one(ET) / Ft[t]
-
-            # Kalman gain and L
-            K_t = T * P_t * Z * F_inv
-            L_t = T - K_t * Z
-
-            # Recursion
-            r_new = Z * F_inv * v_t + L_t * r
-            N_new = Z * F_inv * Z + L_t * N * L_t
-
-            # Smoothed estimates
-            alpha_smooth[t] = a_t + P_t * r_new
-            V_smooth[t] = P_t - P_t * N_new * P_t
-
-            r = r_new
-            N = N_new
-        end
-    end
-
-    n = length(alpha_smooth)
-    return SmootherResult(reshape(alpha_smooth, 1, n), reshape(V_smooth, 1, 1, n), nothing)
 end
