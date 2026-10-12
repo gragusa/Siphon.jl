@@ -190,6 +190,19 @@ ll = logdensity(ld, θ_u)
 
 The `SSMLogDensity` type implements `LogDensityProblems.jl` interface, so you can use it with any compatible sampler.
 
+A prior goes in the `prior` keyword. `ParameterPriors` assigns a univariate
+prior to each named parameter, evaluated on the parameter as estimated (a
+variance for `var_*`); parameters without one get a flat prior:
+
+```julia
+prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 1.0e4),
+                        var_level = InverseGammaPrior(2.0, 1.0e3))
+ld = SSMLogDensity(spec, y; prior)
+```
+
+With Distributions.jl loaded, any univariate distribution works in the same
+place, e.g. `ParameterPriors(var_obs = InverseGamma(2, 1e4))`.
+
 ## Tips and Best Practices
 
 1. **Always use `lower=0.0` for variances**: This ensures the exp transform is applied.

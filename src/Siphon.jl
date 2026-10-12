@@ -120,7 +120,8 @@ export transform_to_constrained, transform_to_unconstrained
 
 # Log-density for optimization/sampling (LogDensityProblems.jl integration)
 export SSMLogDensity, logdensity
-export FlatPrior, NormalPrior, NormalPriorVec, InverseGammaPrior, CompositePrior
+export AbstractPrior, FlatPrior, ParameterPriors, NormalPrior, InverseGammaPrior,
+       CompositePrior
 
 # Optimization (Optimization.jl integration)
 export optimize_ssm, optimize_ssm_with_stderr
@@ -128,7 +129,6 @@ export optimize_ssm, optimize_ssm_with_stderr
 # EKF model specification
 export EKFSpec, MeasurementExpr, custom_ekf
 export build_measurement, build_ekfparms, build_nonlinear_state_space
-export EKFLogDensity
 
 # In-place Kalman filter/smoother (zero-allocation for large models)
 export KalmanWorkspace

@@ -11,6 +11,7 @@ using Random
 using ForwardDiff
 using CSV
 using DataFrames
+using Distributions: Distributions
 
 # ============================================
 # SSMParameter and SSMSpec Tests
@@ -546,63 +547,92 @@ end
 @testset "SSMLogDensity with prior" begin
     spec = local_level()
     y = randn(1, 100) .* 10 .+ 100
+    prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 100.0),
+        var_level = NormalPrior(25.0, 100.0))
+    ld = SSMLogDensity(spec, y; prior)
+    ld_flat = SSMLogDensity(spec, y)
+    @test ld_flat.prior isa FlatPrior
 
-    # NormalPrior now takes NamedTuple arguments (variance parameters)
-    prior = NormalPrior(
-        (var_obs = 25.0, var_level = 25.0),
-        (var_obs = 100.0, var_level = 100.0)
-    )
-    ld = SSMLogDensity(spec, y; prior = prior)
+    θ_u = transform_to_unconstrained(spec, (var_obs = 80.0, var_level = 30.0))
+    θ, _ = transform_to_constrained(spec, θ_u)
+    @test logdensity(ld, θ_u) - logdensity(ld_flat, θ_u) ≈ prior(θ)
+    @test all(isfinite, ForwardDiff.gradient(u -> logdensity(ld, u), θ_u))
 
-    θ_u = transform_to_unconstrained(spec, initial_values(spec))
-    ll_with_prior = logdensity(ld, θ_u)
+    # A plain function θ -> log p(θ) is accepted
+    ld_fun = SSMLogDensity(spec, y; prior = θ -> -θ.var_obs)
+    @test logdensity(ld_fun, θ_u) - logdensity(ld_flat, θ_u) ≈ -80.0
 
-    ld_no_prior = SSMLogDensity(spec, y)
-    ll_no_prior = logdensity(ld_no_prior, θ_u)
-
-    @test ll_with_prior != ll_no_prior
+    @test_throws "which the spec does not estimate; its parameters are var_obs, var_level" SSMLogDensity(
+        spec, y; prior = ParameterPriors(σ_obs = NormalPrior(0.0, 1.0)))
+    @test_throws "which the spec does not estimate" SSMLogDensity(spec, y;
+        prior = CompositePrior(FlatPrior(), ParameterPriors(σ_obs = NormalPrior(0.0, 1.0))))
+    @test_throws "use FlatPrior() for no prior" SSMLogDensity(spec, y; prior = nothing)
 end
 
 @testset "FlatPrior" begin
     prior = FlatPrior()
-    @test prior([1.0, 2.0, 3.0]) == 0.0
+    @test prior isa AbstractPrior
+    @test prior((a = 1.0, b = 2.0)) == 0
 end
 
 @testset "NormalPrior" begin
-    # NormalPrior takes NamedTuple arguments
-    prior = NormalPrior((a = 0.0, b = 0.0), (a = 1.0, b = 1.0))
-
-    # At mean, should be maximum
-    ll_at_mean = prior((a = 0.0, b = 0.0))
-    ll_away = prior((a = 2.0, b = 2.0))
-    @test ll_at_mean > ll_away
-end
-
-@testset "NormalPriorVec" begin
-    # NormalPriorVec uses vectors for backwards compatibility
-    prior = NormalPriorVec([0.0, 0.0], [1.0, 1.0])
-
-    # At mean, should be maximum
-    ll_at_mean = prior([0.0, 0.0])
-    ll_away = prior([2.0, 2.0])
-    @test ll_at_mean > ll_away
+    p = NormalPrior(1, 2)
+    @test p isa NormalPrior{Float64}
+    @test p(0.5) ≈ -0.5 * (0.25)^2 - log(2.0) - 0.5 * log(2π)
+    @test p(1.0) > p(3.0)
+    @test_throws "σ must be positive" NormalPrior(0.0, 0.0)
 end
 
 @testset "InverseGammaPrior" begin
-    prior = InverseGammaPrior(2.0, 1.0, (:σ,))
-    # θ holds σ; the density is that of σ² ~ InverseGamma(α, β)
-    σ = 0.7
-    @test prior((σ = σ,)) ≈ 2.0 * log(1.0) - log(gamma(2.0)) - 3.0 * log(σ^2) - 1.0 / σ^2
+    # Density of the parameter itself (a variance), no change of variables
+    p = InverseGammaPrior(3, 2.0)
+    x = 0.7
+    @test p(x) ≈ 3 * log(2.0) - log(gamma(3.0)) - 4 * log(x) - 2.0 / x
+    @test p(0.0) == -Inf
+    @test p(-1.0) == -Inf
+    @test_throws "α and β must be positive" InverseGammaPrior(0.0, 1.0)
+end
+
+@testset "ParameterPriors" begin
+    prior = ParameterPriors(a = NormalPrior(0.0, 1.0), b = InverseGammaPrior(2.0, 1.0))
+    θ = (b = 0.5, a = 0.3, c = 10.0)  # order-free; unnamed `c` is flat
+    @test prior(θ) ≈ NormalPrior(0.0, 1.0)(0.3) + InverseGammaPrior(2.0, 1.0)(0.5)
+    @test (@inferred prior(θ)) isa Float64
+    @test ParameterPriors((a = NormalPrior(0.0, 1.0),))((a = 0.0,)) ≈ -0.5 * log(2π)
+    @test_throws "use FlatPrior() for no prior" ParameterPriors()
+    @test_throws "the prior for `a` is a Float64" ParameterPriors(a = 1.0)
+end
+
+@testset "ParameterPriors with Distributions" begin
+    prior = ParameterPriors(a = Distributions.Normal(0.0, 2.0),
+        b = Distributions.InverseGamma(2.0, 1.0), c = NormalPrior(1.0, 1.0))
+    θ = (a = 0.3, b = 0.5, c = 0.0)
+    @test prior(θ) ≈
+          Distributions.logpdf(Distributions.Normal(0.0, 2.0), 0.3) +
+          Distributions.logpdf(Distributions.InverseGamma(2.0, 1.0), 0.5) +
+          NormalPrior(1.0, 1.0)(0.0)
+    @test InverseGammaPrior(2.0, 1.0)(0.5) ≈
+          Distributions.logpdf(Distributions.InverseGamma(2.0, 1.0), 0.5)
+
+    # A prior with narrower support than the parameter's bounds gives -Inf outside it
+    spec = local_level()
+    ld = SSMLogDensity(spec, randn(1, 50);
+        prior = ParameterPriors(var_level = Distributions.Beta(2, 2)))
+    @test logdensity(ld, transform_to_unconstrained(spec, (
+        var_obs = 1.0, var_level = 2.0))) ==
+          -Inf
+    @test isfinite(logdensity(ld,
+        transform_to_unconstrained(spec, (var_obs = 1.0, var_level = 0.5))))
 end
 
 @testset "CompositePrior" begin
-    # Using NamedTuple-based priors
-    p1 = NormalPrior((x = 0.0,), (x = 1.0,))
-    p2 = NormalPrior((x = 0.0,), (x = 2.0,))
-    composite = CompositePrior(p1, p2)
+    p1 = ParameterPriors(x = NormalPrior(0.0, 1.0))
+    p2 = ParameterPriors(x = NormalPrior(0.0, 2.0))
+    composite = CompositePrior(p1, p2, θ -> -θ.x)
+    @test composite isa AbstractPrior
 
     θ = (x = 1.0,)
-    @test composite(θ) ≈ p1(θ) + p2(θ)
+    @test composite(θ) ≈ p1(θ) + p2(θ) - 1.0
 end
 
 # ============================================

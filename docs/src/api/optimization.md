@@ -243,8 +243,13 @@ Siphon.logdensity
 
 ## Prior Distributions
 
+With Distributions.jl loaded, any `Distributions.UnivariateDistribution` can
+be used in `ParameterPriors` alongside the built-in univariate priors.
+
 ```@docs
+Siphon.AbstractPrior
 Siphon.FlatPrior
+Siphon.ParameterPriors
 Siphon.NormalPrior
 Siphon.InverseGammaPrior
 Siphon.CompositePrior

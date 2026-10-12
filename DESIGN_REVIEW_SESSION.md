@@ -4,31 +4,29 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-040: migrate-template-keywords
-Every template parameter keyword now takes a number (fixed) or a `FreeParam` (estimated); unset `FreeParam` fields take the template's name, bounds and starting value. Group keywords take one value or a vector. `ParamSpec`, `parse_param_spec` and all `*_init`/`λ_lower`/`λ_upper` template keywords are removed. New keywords:
-- `arma(p, q; ar, ma, var)`
-- `dynamic_factor(…; loadings, ar, var_obs, var_factor)`
-- `dns_model(…; λ, T, H, Q)`
+CHUNK-023: rework-priors
+Priors are now univariate building blocks (`NormalPrior(μ, σ)`, `InverseGammaPrior(α, β)`) combined by parameter name in `ParameterPriors(; name = prior, …)`, all under `AbstractPrior`. A Distributions.jl weak-dependency extension lets any univariate distribution take the same slot. `EKFLogDensity` is folded into `SSMLogDensity`, which now accepts an `EKFSpec` and supports priors for it.
 
 ## Key decisions / shim choices
-- No shims. The conversion guide has a new section, "Template keywords", that also lists three changes in starting values (DFM group inits no longer divided by lag; DNS `:full` T init broadcast; DNS variances now data-rescaled).
-- A FreeParam name in a template must be omitted or equal the template's name, so templates do not support renaming or tying. `custom_ssm` does.
-- For full covariances (DFM `correlated_errors`, DNS `Q_structure = :full`), the variance keyword can only set starting variances.
-- A fixed DNS `λ` makes `Z` a fixed matrix (new capability).
+- Author chose the per-parameter prior API and folding the EKF density into `SSMLogDensity` (recorded in Decisions).
+- Priors stay callable; no `logprior` function was added.
+- `InverseGammaPrior` is the density of the parameter itself (a variance), and it returns `-Inf` off the support.
+- Default `prior = FlatPrior()`; `prior = nothing` throws an `ArgumentError`.
+- No shims; the conversion guide has a new "Priors" section.
 
 ## State of the codebase
-- Files modified: src/dsl/{templates,optimization}.jl, src/inplace.jl (docstrings); test/{dsl,arma,dns_marss_validation}_tests.jl; docs (index, getting_started, arma_models, dynamic_factor, estimation_methods, conversion_guide); examples/dns_estimation_dsl.jl; benchmark/benchmarks.jl; DESIGN_REVIEW_PLAN.md; local CLAUDE.md (untracked)
-- Test suite: full `Pkg.test()` passes (Aqua 10/10).
+- Files modified: Project.toml, ext/SiphonDistributionsExt.jl (new), src/Siphon.jl, src/dsl/bayesian.jl, src/ekf_optim.jl, test/dsl_tests.jl, test/ekf_tests.jl, docs/src/{conversion_guide.md, api/optimization.md, api/ekf.md, tutorials/transformations.md}, DESIGN_REVIEW_PLAN.md
+- Test suite: full `Pkg.test()` passes.
 - Ambiguity count: 0 (no change).
-- Staged but uncommitted: no (all changes unstaged).
+- Staged but uncommitted: no (all changes unstaged)
 
 ## Cluster status
-- dsl: 3 of 4 complete (CHUNK-023 remains).
+- dsl: 4 of 4 complete (cluster done).
 
 ## Next chunk
-CHUNK-023: rework-priors. Add `AbstractPrior`, a Distributions.jl weak-dependency extension, and consistent keyed/positional styles. Fix `InverseGammaPrior` for the variance parameterization, and add prior support to `EKFLogDensity`, possibly by unifying it with `SSMLogDensity` (see Open Questions).
+CHUNK-024: extend-statsapi-and-logdensityproblems. Depend on StatsAPI and extend `fit!`, `loglikelihood`, `predict`, `isfitted`, `nobs`, `coef`, etc.; make `logdensity` the `LogDensityProblems.logdensity` method.
 
 ## Watch out for
-- `FreeParam` prints as `FreeParam(nothing, 0.0, nothing, nothing)` in error messages (Open Questions → CHUNK-025).
-- `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`-style keywords (Open Questions).
-- CHUNK-023 adds a weak dependency: update `[weakdeps]`, `[extensions]` and `[compat]` in Project.toml and run `Pkg.resolve()`.
+- `using Siphon, Distributions` currently makes `loglikelihood` ambiguous in `Main`; CHUNK-024 fixes it. The test files import Distributions with `using Distributions: Distributions` to avoid this until then.
+- The MCP session has a scratch env (with Distributions, CSV, DataFrames) pushed onto `LOAD_PATH`; a fresh session will not have it. TestEnv is not on the session load path.
+- `src/api/*.md` are stray tracked files (Open Questions → CHUNK-030).

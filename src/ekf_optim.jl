@@ -1,54 +1,25 @@
 """
     ekf_optim.jl
 
-`EKFLogDensity` (LogDensityProblems-compatible) and the `optimize_ssm` method
-(Optimization.jl-backed MLE) for `EKFSpec`. Mirrors `SSMLogDensity`.
+The `SSMLogDensity` constructor and the `optimize_ssm` method (Optimization.jl-backed
+MLE) for `EKFSpec`.
 """
 
 # ============================================================================
-# EKFLogDensity
+# SSMLogDensity
 # ============================================================================
 
-"""
-    EKFLogDensity(spec::EKFSpec, y)
-
-Log-density evaluator for an `EKFSpec`, working in unconstrained ℝⁿ via the
-`TransformVariables` transformation built from `spec.params`. Pairs with
-`logdensity(ld, θ_u)` and integrates with `LogDensityProblems`.
-
-Behaviour and contract match `SSMLogDensity` for the linear case.
-"""
-struct EKFLogDensity{S <: EKFSpec, Tr, Y <: AbstractMatrix}
-    spec::S
-    transformation::Tr
-    y::Y
-end
-
-function EKFLogDensity(spec::EKFSpec, y::AbstractMatrix)
+function SSMLogDensity(spec::EKFSpec, y::AbstractMatrix; prior = FlatPrior())
     y = _nan_obs(y)
+    _check_prior(prior, spec)
     t = build_transformation(spec)
-    return EKFLogDensity{typeof(spec), typeof(t), typeof(y)}(spec, t, y)
-end
-
-# logdensity is defined in bayesian.jl as a generic function operating on
-# SSMLogDensity. We add an EKF method here.
-function logdensity(ld::EKFLogDensity, θ_u::AbstractVector)
-    θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
-    return _spec_loglik(ld.spec, θ_nt, ld.y, :off) + logjac
+    return SSMLogDensity(spec, t, y, prior, :off)
 end
 
 # The EKF has no StaticArrays specialization; `static` is always `:off` here.
 function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
     ss = build_nonlinear_state_space(spec, θ, y)
     return kalman_loglik(ss.p, y, ss.a1, ss.P1)
-end
-
-# Optional LogDensityProblems integration
-LogDensityProblems.logdensity(ld::EKFLogDensity, θ_u::AbstractVector) = logdensity(
-    ld, θ_u)
-LogDensityProblems.dimension(ld::EKFLogDensity) = n_params(ld.spec)
-function LogDensityProblems.capabilities(::Type{<:EKFLogDensity})
-    LogDensityProblems.LogDensityOrder{0}()
 end
 
 # ============================================================================

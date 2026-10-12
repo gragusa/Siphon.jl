@@ -58,46 +58,39 @@ end
 # ============================================
 
 """
-    SSMLogDensity(spec, y; prior=nothing, static=:auto)
+    SSMLogDensity(spec::SSMSpec, y; prior = FlatPrior(), static = :auto)
+    SSMLogDensity(spec::EKFSpec, y; prior = FlatPrior())
 
-Log-density for a state-space model, evaluated in UNCONSTRAINED ℝⁿ space.
+Log-posterior density of a state-space model, evaluated at unconstrained
+parameters θ_u ∈ ℝⁿ:
 
-This integrates seamlessly with LogDensityProblems.jl for optimization and
-sampling. The transformation from unconstrained to constrained space is
-handled automatically using TransformVariables.jl.
+    logdensity(ld, θ_u) = log p(y | θ) + log p(θ) + log|J(θ_u)|
 
-# Fields
-- `spec`: Model specification (SSMSpec)
-- `transformation`: TransformVariables transformation (ℝⁿ → NamedTuple)
-- `y`: Observation data (p × n matrix)
-- `prior`: Optional prior on CONSTRAINED parameters (θ::NamedTuple -> log_prior)
-- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
+where θ is the constrained parameter NamedTuple obtained from θ_u by
+[`build_transformation`](@ref)`(spec)` and `log|J|` is the log-Jacobian of
+that map. The prior is evaluated on θ as estimated, so a prior on `var_obs`
+is a prior on the variance. Implements the LogDensityProblems.jl interface.
 
-# Usage
+`prior` is an [`AbstractPrior`](@ref) (usually [`ParameterPriors`](@ref)) or
+any callable `θ::NamedTuple -> log p(θ)`. Parameter names in a
+`ParameterPriors` must belong to `spec`; parameters without a prior get a flat
+one. `static` (`:auto`, `:on` or `:off`) is passed to
+[`build_linear_state_space`](@ref); the extended Kalman filter has no
+StaticArrays specialization and takes no `static` keyword.
+
+# Example
 
 ```julia
 spec = local_level()
-y = randn(1, 100)
+prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 1.0e4),
+                        var_level = InverseGammaPrior(2.0, 1.0e3))
+ld = SSMLogDensity(spec, y; prior)
 
-# Create log-density (works in unconstrained space)
-ld = SSMLogDensity(spec, y)
-
-# Get initial point in unconstrained space
-θ0 = transform_to_unconstrained(spec, initial_values(spec))
-
-# Evaluate log-density
-logdensity(ld, θ0)
-
-# For optimization (in unconstrained space, no bounds needed!)
-using Optim
-result = optimize(θ -> -logdensity(ld, θ), θ0, LBFGS())
-
-# Transform result back to NamedTuple
-θ_hat, _ = transform_to_constrained(spec, result.minimizer)
-# θ_hat is a NamedTuple like (σ_obs = 12.3, σ_level = 3.4)
+θ_u = transform_to_unconstrained(spec, initial_values(spec))
+logdensity(ld, θ_u)
 ```
 """
-struct SSMLogDensity{S <: SSMSpec, T, Y <: AbstractMatrix, P}
+struct SSMLogDensity{S <: AbstractSSMSpec, T, Y <: AbstractMatrix, P}
     spec::S
     transformation::T
     y::Y
@@ -108,11 +101,12 @@ end
 function SSMLogDensity(
         spec::SSMSpec,
         y::AbstractMatrix;
-        prior = nothing,
+        prior = FlatPrior(),
         static::Symbol = :auto
 )
     y = _nan_obs(y)
     _use_static(static, spec.n_states, spec.n_obs, spec.n_shocks)  # validate the keyword
+    _check_prior(prior, spec)
     t = build_transformation(spec)
     SSMLogDensity(spec, t, y, prior, static)
 end
@@ -120,27 +114,16 @@ end
 """
     logdensity(ld::SSMLogDensity, θ_unconstrained)
 
-Evaluate the log-density at unconstrained parameters.
-
-Returns log p(y|θ) + log p(θ) + log|J| where J is the Jacobian
-of the transformation from unconstrained to constrained space.
-
-The parameters are automatically transformed to a NamedTuple and
-passed to the likelihood function.
+Log-likelihood plus log-prior plus the log-Jacobian of the map from
+unconstrained to constrained parameters, at `θ_unconstrained`. Returns `-Inf`
+when the filter fails or θ lies outside the prior's support.
 """
 function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
-    # Transform to NamedTuple (constrained space)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
-
-    ll = _spec_loglik(ld.spec, θ_nt, ld.y, ld.static)
-
-    # Add prior (on constrained parameters)
-    if ld.prior !== nothing
-        ll += ld.prior(θ_nt)
-    end
-
-    # Add Jacobian for change of variables
-    return ll + logjac
+    lp = ld.prior(θ_nt)
+    # θ is outside the prior's support; the likelihood cannot change the result.
+    lp == -Inf && return lp + logjac
+    return _spec_loglik(ld.spec, θ_nt, ld.y, ld.static) + lp + logjac
 end
 
 # ============================================
@@ -156,107 +139,150 @@ LogDensityProblems.dimension(ld::SSMLogDensity) = n_params(ld.spec)
 LogDensityProblems.logdensity(ld::SSMLogDensity, θ::AbstractVector) = logdensity(ld, θ)
 
 # ============================================
-# Prior Types
+# Priors
 # ============================================
+
+"""
+    AbstractPrior
+
+Supertype of Siphon's priors. A prior `p` is callable: `p(θ)` returns the log
+prior density. Joint priors ([`FlatPrior`](@ref), [`ParameterPriors`](@ref),
+[`CompositePrior`](@ref)) take the parameter NamedTuple θ; univariate priors
+([`NormalPrior`](@ref), [`InverseGammaPrior`](@ref)) take one parameter value
+and are combined by name with `ParameterPriors`.
+"""
+abstract type AbstractPrior end
 
 """
     FlatPrior()
 
-Improper flat prior (log-density = 0 everywhere).
-Works with both Vector and NamedTuple arguments.
+Improper flat prior: `FlatPrior()(θ) == 0` for every θ. The default prior of
+[`SSMLogDensity`](@ref).
 """
-struct FlatPrior end
+struct FlatPrior <: AbstractPrior end
 (::FlatPrior)(θ) = 0.0
 
 """
-    NormalPrior(μ::NamedTuple, σ::NamedTuple)
+    NormalPrior(μ, σ)
 
-Independent normal priors for parameters, specified by name.
+Univariate normal prior with mean `μ` and standard deviation `σ > 0`, for use
+in [`ParameterPriors`](@ref). `NormalPrior(μ, σ)(x)` is the log density at `x`.
+"""
+struct NormalPrior{T <: Real} <: AbstractPrior
+    μ::T
+    σ::T
+    function NormalPrior{T}(μ, σ) where {T <: Real}
+        σ > 0 || throw(ArgumentError("NormalPrior: σ must be positive, got σ = $σ"))
+        new{T}(μ, σ)
+    end
+end
+NormalPrior(μ::Real, σ::Real) = NormalPrior{float(promote_type(typeof(μ), typeof(σ)))}(μ, σ)
+
+(p::NormalPrior)(x::Real) = -((x - p.μ) / p.σ)^2 / 2 - log(p.σ) - log(2π) / 2
+
+"""
+    InverseGammaPrior(α, β)
+
+Univariate inverse-gamma prior with shape `α > 0` and scale `β > 0`, for use in
+[`ParameterPriors`](@ref), usually on a variance. `InverseGammaPrior(α, β)(x)`
+is the log density at `x`: `α log β - log Γ(α) - (α + 1) log x - β / x` for
+`x > 0`, and `-Inf` otherwise.
+"""
+struct InverseGammaPrior{T <: Real} <: AbstractPrior
+    α::T
+    β::T
+    function InverseGammaPrior{T}(α, β) where {T <: Real}
+        (α > 0 && β > 0) || throw(ArgumentError(
+            "InverseGammaPrior: α and β must be positive, got α = $α, β = $β"))
+        new{T}(α, β)
+    end
+end
+function InverseGammaPrior(α::Real, β::Real)
+    InverseGammaPrior{float(promote_type(typeof(α), typeof(β)))}(α, β)
+end
+
+function (p::InverseGammaPrior)(x::Real)
+    x > 0 || return oftype(float(x) * p.β, -Inf)
+    return p.α * log(p.β) - loggamma(p.α) - (p.α + 1) * log(x) - p.β / x
+end
+
+# A prior that `ParameterPriors` accepts for one parameter. The Distributions
+# extension adds `UnivariateDistribution`.
+_is_univariate_prior(p) = false
+_is_univariate_prior(::Union{NormalPrior, InverseGammaPrior}) = true
+_univariate_logpdf(p::AbstractPrior, x) = p(x)
+
+"""
+    ParameterPriors(; name = prior, ...)
+
+Independent priors on the named parameters. Each `prior` is a univariate prior
+([`NormalPrior`](@ref), [`InverseGammaPrior`](@ref)) or, with Distributions.jl
+loaded, any `Distributions.UnivariateDistribution`. `ParameterPriors(...)(θ)`
+is the sum of the log densities at the named entries of θ; parameters not named
+contribute nothing (a flat prior). [`SSMLogDensity`](@ref) checks the names
+against the spec.
 
 # Example
+
 ```julia
-prior = NormalPrior(
-    (σ_obs = 10.0, σ_level = 5.0),   # means
-    (σ_obs = 5.0, σ_level = 2.0)     # standard deviations
-)
+prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 1.0),
+                        ρ = NormalPrior(0.0, 0.5))
+
+using Distributions
+prior = ParameterPriors(var_obs = InverseGamma(2, 1), ρ = Beta(2, 2))
 ```
 """
-struct NormalPrior{M <: NamedTuple, S <: NamedTuple}
-    μ::M
-    σ::S
-end
-
-function (p::NormalPrior)(θ::NamedTuple)
-    result = 0.0
-    for name in keys(p.μ)
-        μ_i = getproperty(p.μ, name)
-        σ_i = getproperty(p.σ, name)
-        θ_i = getproperty(θ, name)
-        result += -0.5 * ((θ_i - μ_i) / σ_i)^2 - log(σ_i)
+struct ParameterPriors{N <: NamedTuple} <: AbstractPrior
+    priors::N
+    function ParameterPriors{N}(priors) where {N <: NamedTuple}
+        isempty(priors) && throw(ArgumentError(
+            "ParameterPriors needs at least one `name = prior`; use FlatPrior() for no prior"))
+        for (name, p) in pairs(priors)
+            _is_univariate_prior(p) || throw(ArgumentError(
+                "ParameterPriors: the prior for `$name` is a $(typeof(p)); use " *
+                "NormalPrior, InverseGammaPrior or (with Distributions loaded) " *
+                "a univariate distribution"))
+        end
+        new{N}(priors)
     end
-    result - length(keys(p.μ)) * 0.5 * log(2π)
 end
+ParameterPriors(priors::NamedTuple) = ParameterPriors{typeof(priors)}(priors)
+ParameterPriors(; priors...) = ParameterPriors(NamedTuple(priors))
 
-# Also support vector-based priors for backwards compatibility
-struct NormalPriorVec{M <: AbstractVector, S <: AbstractVector}
-    μ::M
-    σ::S
-end
-
-function (p::NormalPriorVec)(θ::NamedTuple)
-    θ_vec = collect(values(θ))
-    _normal_logpdf(θ_vec, p.μ, p.σ)
-end
-
-function (p::NormalPriorVec)(θ::AbstractVector)
-    _normal_logpdf(θ, p.μ, p.σ)
-end
-
-function _normal_logpdf(θ, μ, σ)
-    n = length(θ)
-    result = zero(eltype(θ))
-    for i in 1:n
-        result += -0.5 * ((θ[i] - μ[i]) / σ[i])^2 - log(σ[i])
-    end
-    result - n * 0.5 * log(2π)
-end
-
-"""
-    InverseGammaPrior(α, β, param_names)
-
-Inverse gamma priors for variance parameters at specified parameter names.
-Assumes θ contains standard deviations (will square them).
-
-# Example
-```julia
-prior = InverseGammaPrior(2.0, 1.0, (:σ_obs, :σ_level))
-```
-"""
-struct InverseGammaPrior{A <: Real, B <: Real, N}
-    α::A
-    β::B
-    param_names::N  # Tuple of Symbols
-end
-
-function (p::InverseGammaPrior)(θ::NamedTuple)
-    result = 0.0
-    for name in p.param_names
-        σ = getproperty(θ, name)
-        σ² = σ^2
-        result += p.α * log(p.β) - loggamma(p.α) - (p.α + 1) * log(σ²) - p.β / σ²
-    end
-    result
+function (p::ParameterPriors)(θ::NamedTuple)
+    θsub = NamedTuple{keys(p.priors)}(θ)
+    return sum(map(_univariate_logpdf, values(p.priors), values(θsub)))
 end
 
 """
     CompositePrior(priors...)
 
-Combine multiple priors by summing their log-densities.
+Joint prior whose log density is the sum of those of `priors`, each an
+[`AbstractPrior`](@ref) or a callable `θ -> log p(θ)`.
 """
-struct CompositePrior{T <: Tuple}
+struct CompositePrior{T <: Tuple} <: AbstractPrior
     priors::T
 end
 
 CompositePrior(priors...) = CompositePrior(priors)
 
 (cp::CompositePrior)(θ) = sum(p(θ) for p in cp.priors)
+
+# Fail at construction, not at the first evaluation, when a prior names a
+# parameter the spec lacks.
+_check_prior(prior, spec) = nothing
+function _check_prior(::Nothing, spec)
+    throw(ArgumentError("prior = nothing is not supported; use FlatPrior() for no prior"))
+end
+function _check_prior(p::ParameterPriors, spec)
+    names = param_names(spec)
+    unknown = [k for k in keys(p.priors) if k ∉ names]
+    isempty(unknown) || throw(ArgumentError(
+        "ParameterPriors names $(join(unknown, ", ")), which the spec does not " *
+        "estimate; its parameters are $(join(names, ", "))"))
+    return nothing
+end
+function _check_prior(p::CompositePrior, spec)
+    foreach(q -> _check_prior(q, spec), p.priors)
+    return nothing
+end

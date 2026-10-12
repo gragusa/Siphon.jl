@@ -487,3 +487,25 @@ Two starting values differ from Siphon 0.1:
 
 `dns_model` variances left unset are now rescaled to the data by maximum
 likelihood, as in the other templates.
+
+## Priors
+
+Priors are now univariate building blocks combined by parameter name with
+`ParameterPriors`. Each one applies to the parameter as estimated, so a prior on
+`var_obs` is a prior on the variance. With Distributions.jl loaded, any
+univariate distribution can take the place of a built-in prior.
+`SSMLogDensity` checks that each name in a `ParameterPriors` is a parameter
+of the spec, and parameters without a prior get a flat one.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `NormalPrior((a = μa, b = μb), (a = σa, b = σb))` | `ParameterPriors(a = NormalPrior(μa, σa), b = NormalPrior(μb, σb))` |
+| `NormalPriorVec(μ, σ)` | `ParameterPriors` with one `NormalPrior` per name |
+| `InverseGammaPrior(α, β, (:σ_obs,))`: density of σ² at a standard deviation σ | `ParameterPriors(var_obs = InverseGammaPrior(α, β))`: density of the variance itself |
+| `CompositePrior(p1, p2)` | unchanged; mixed families fit in one `ParameterPriors` |
+| *(not possible)* | `using Distributions; ParameterPriors(var_obs = InverseGamma(2, 1), ρ = Beta(2, 2))` |
+| `SSMLogDensity(spec, y; prior = nothing)` | `SSMLogDensity(spec, y)` or `prior = FlatPrior()` |
+| `EKFLogDensity(spec, y)` | `SSMLogDensity(spec, y; prior)`, which now accepts an `EKFSpec` |
+
+All priors are subtypes of `AbstractPrior`. `SSMLogDensity` also accepts a plain
+function `θ -> log p(θ)` as `prior`.

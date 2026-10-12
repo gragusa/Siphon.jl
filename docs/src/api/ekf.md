@@ -69,9 +69,5 @@ Siphon.build_nonlinear_state_space
 
 ## Estimation
 
-```@docs
-Siphon.EKFLogDensity
-```
-
-`ssm_loglik(spec, θ, y)` and `optimize_ssm(spec, y)` accept an `EKFSpec` as well as an
-`SSMSpec`; see [Optimization](optimization.md).
+`ssm_loglik(spec, θ, y)`, `optimize_ssm(spec, y)` and `SSMLogDensity(spec, y; prior)`
+accept an `EKFSpec` as well as an `SSMSpec`; see [Optimization](optimization.md).

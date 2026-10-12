@@ -480,6 +480,30 @@ end
     end
 end
 
+@testset "EKF DSL — SSMLogDensity with a prior matches the linear spec" begin
+    s = _ekf_test_linear_setup()
+    kw = (H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, s.m, s.m),
+        Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
+        a1 = zeros(s.m),
+        P1 = 10.0 .* Matrix(I, s.m, s.m))
+    spec_ssm = custom_ssm(; Z = s.Z, kw...)
+    spec_ekf = custom_ekf(; measurement = EKFTestLinearMeasurement(s.Z),
+        jacobian_mode = AnalyticJacobian(), kw...)
+    prior = ParameterPriors(σh_1 = InverseGammaPrior(2.0, 0.1), ψ_1 = NormalPrior(0.5, 0.2))
+
+    ld_ssm = SSMLogDensity(spec_ssm, s.y; prior)
+    ld_ekf = SSMLogDensity(spec_ekf, s.y; prior)
+    @test ld_ekf isa SSMLogDensity
+    θ_u = transform_to_unconstrained(spec_ekf, initial_values(spec_ekf)) .+ 0.1
+    @test logdensity(ld_ekf, θ_u) ≈ logdensity(ld_ssm, θ_u) rtol = 1e-10
+    @test logdensity(ld_ekf, θ_u) - logdensity(SSMLogDensity(spec_ekf, s.y), θ_u) ≈
+          prior(transform_to_constrained(spec_ekf, θ_u)[1])
+    @test_throws "does not estimate" SSMLogDensity(spec_ekf, s.y;
+        prior = ParameterPriors(var_obs = NormalPrior(0.0, 1.0)))
+end
+
 @testset "EKF DSL — MeasurementExpr nonlinear MLE recovers parameters" begin
     Random.seed!(99)
     λ = 0.069

@@ -92,6 +92,10 @@ Other author answers, verbatim:
   - **Naming:** keep the `var_` prefix for variances (`var_obs`, `var_level`, …). Full covariances use `<prefix>_sd_<i>` and `<prefix>_corr_<i>`. DNS `H_i` become `var_obs_i`, and the DNS diagonal `Q_L/Q_S/Q_C` become `var_L/var_S/var_C`.
   - **Split:** the template keyword migration is its own chunk (CHUNK-040).
 
+- **CHUNK-023** (2026-10-13, author's answers):
+  - **Prior API: per-parameter.** Univariate `NormalPrior(μ, σ)` and `InverseGammaPrior(α, β)` are combined by name in `ParameterPriors(; name = prior, …)`. With Distributions loaded, any univariate distribution takes the same slot (weak-dependency extension). `FlatPrior`, `CompositePrior` and plain functions `θ -> log p` are kept; `NormalPriorVec` is dropped. Priors apply to the parameter as estimated (a variance for `var_*`). Names are checked against the spec when `SSMLogDensity` is built.
+  - **`EKFLogDensity` folded into `SSMLogDensity`**, which dispatches on the spec type.
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -794,11 +798,16 @@ Other author answers, verbatim:
   - make the keyed and positional styles consistent (`NormalPrior` vs `NormalPriorVec`);
   - make `InverseGammaPrior` correct for the variance parameterisation (CHUNK-010 only stopped it crashing);
   - give `EKFLogDensity` prior support like `SSMLogDensity`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-005, CHUNK-007
 - **Cluster**: dsl
 - **Notes**:
+  - **Types:** `AbstractPrior` (exported) is the supertype of `FlatPrior`, `NormalPrior{T}`, `InverseGammaPrior{T}`, `ParameterPriors{N<:NamedTuple}` and `CompositePrior`. Priors stay callable (`p(θ)` / `p(x)`); there is no `logprior` function. The univariate constructors validate positivity and promote to float. `InverseGammaPrior(x)` is the density of x itself and returns `-Inf` for x ≤ 0. `ParameterPriors` rejects an empty set and non-univariate entries (`_is_univariate_prior`), and is evaluated with `map` over the NamedTuple (inferrable).
+  - **Extension:** `ext/SiphonDistributionsExt.jl` adds `_is_univariate_prior(::UnivariateDistribution)` and `_univariate_logpdf = logpdf`. Project.toml: `[weakdeps]`/`[extensions]`, compat `Distributions = "0.25"`, Distributions in extras/test target.
+  - **SSMLogDensity:** `S <: AbstractSSMSpec`; default `prior = FlatPrior()`; `prior = nothing` throws (use `FlatPrior()`); `_check_prior` validates `ParameterPriors` names (recursing into `CompositePrior`). `logdensity` skips the filter when the prior is `-Inf`. The EKF method `SSMLogDensity(::EKFSpec, y; prior)` is in `ekf_optim.jl` and takes no `static` (stored as `:off`). `EKFLogDensity` removed.
+  - **Docs:** conversion guide "Priors"; api/optimization.md prior list; api/ekf.md; transformations.md Bayesian section.
+  - **Tests:** dsl_tests prior testsets rewritten (SSMLogDensity with prior, FlatPrior, NormalPrior, InverseGammaPrior, ParameterPriors, ParameterPriors with Distributions, CompositePrior); ekf_tests "SSMLogDensity with a prior matches the linear spec".
 
 ### CHUNK-024: extend-statsapi-and-logdensityproblems
 - **Kind**: `implement`
@@ -971,16 +980,15 @@ Other author answers, verbatim:
 - 2026-10-12 CHUNK-021 (restructure-dsl-layering-and-exports) → next: CHUNK-022
 - 2026-10-13 CHUNK-022 (unify-dsl-conventions) → next: CHUNK-040
 - 2026-10-13 CHUNK-040 (migrate-template-keywords) → next: CHUNK-023
+- 2026-10-13 CHUNK-023 (rework-priors) → next: CHUNK-024
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
-- `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
 - `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
 - Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
-- `EKFLogDensity` and `SSMLogDensity` remain two types; with `EKFSpec` going through `ssm_loglik`/`optimize_ssm`, a single `SSMLogDensity(spec, y)` constructor dispatching on the spec type would finish the job (CHUNK-023).
 - `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
@@ -992,3 +1000,5 @@ Other author answers, verbatim:
 - `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
 - `FreeParam` has no custom `show`, so error messages print `FreeParam(nothing, 0.0, nothing, nothing)`. CHUNK-025 should print it as constructor syntax that shows only the set fields (`FreeParam(lower = 0.0)`).
 - `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`/`λ_lower`/`λ_upper` keywords, unlike the templates. Consider `λ = FreeParam(…)` there for consistency (CHUNK-026 or CHUNK-030).
+- `using Siphon, Distributions` makes `loglikelihood` ambiguous in `Main` (both export it), so unqualified `loglikelihood(model)` fails. The Distributions extension makes this combination common; CHUNK-024 (extend `StatsAPI.loglikelihood`) fixes it.
+- `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
