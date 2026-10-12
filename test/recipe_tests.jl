@@ -117,31 +117,17 @@ end
     @test crosslag_covs(SmootherResult(αs, Vs, Pcross)) === Pcross
 end
 
-@testset "ForecastResult wrapper" begin
+@testset "ForecastResult accessors" begin
 
     p_obs, m_state, h = 3, 2, 12
-    nt = (
-        yhat = rand(p_obs, h),
-        a = rand(m_state, h),
-        P = rand(m_state, m_state, h),
-        F = rand(p_obs, p_obs, h)
-    )
+    fr = ForecastResult(rand(p_obs, h), rand(p_obs, p_obs, h), rand(m_state, h),
+        rand(m_state, m_state, h), 100)
 
-    fr = ForecastResult(nt)
-
-    @test fr.yhat == nt.yhat
-    @test fr.a == nt.a
-    @test fr.P == nt.P
-    @test fr.F == nt.F
-    @test fr.time === nothing
-
-    # With time
-    fr2 = ForecastResult(nt; time = 101:112)
-    @test fr2.time == 101:112
-
-    # Accessor methods
     @test forecast_observations(fr) == fr.yhat
+    @test forecast_observations_cov(fr) == fr.F
     @test forecast_states(fr) == fr.a
+    @test forecast_states_cov(fr) == fr.P
+    @test forecast_periods(fr) == 101:112
 end
 
 @testset "kalman_smoother returns a SmootherResult" begin
@@ -213,8 +199,7 @@ end
 
     # Create mock forecast result
     h = 12
-    nt = (yhat = rand(1, h), a = rand(1, h), P = rand(1, 1, h), F = rand(1, 1, h))
-    fr = ForecastResult(nt)
+    fr = ForecastResult(rand(1, h), rand(1, 1, h), rand(1, h), rand(1, 1, h), 100)
 
     # Observations (default)
     rec = RecipesBase.apply_recipe(Dict{Symbol, Any}(), fr)
@@ -223,6 +208,11 @@ end
     # States
     rec2 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:what => :states), fr)
     @test !isempty(rec2)
+
+    # The x axis is the forecast periods unless `time` is given
+    @test rec[end].args[1] == 101:112
+    rec3 = RecipesBase.apply_recipe(Dict{Symbol, Any}(:time => 1:12), fr)
+    @test rec3[end].args[1] == 1:12
 end
 
 @testset "Comparison recipe (filter vs smoother)" begin

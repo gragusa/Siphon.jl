@@ -168,50 +168,6 @@ function SmootherResult(model::StateSpaceModel)
         nothing)
 end
 
-"""
-    ForecastResult{T<:Real}
-
-Wrapper for forecast output to enable plot recipes.
-
-This is a convenience wrapper around the NamedTuple returned by `forecast()`.
-The underlying `forecast()` function is unchanged.
-
-# Fields
-- `yhat::Matrix{T}`: Forecasted observations (p × h)
-- `a::Matrix{T}`: Forecasted states (m × h)
-- `P::Array{T,3}`: State forecast covariances (m × m × h)
-- `F::Array{T,3}`: Observation forecast covariances (p × p × h)
-- `time::Union{AbstractVector, Nothing}`: Optional time axis for forecast horizon
-
-# Constructors
-```julia
-# Wrap existing forecast output
-fc_nt = forecast(spec, θ, y, h)
-fc = ForecastResult(fc_nt)
-
-# With custom time axis
-fc = ForecastResult(fc_nt; time=101:112)
-```
-"""
-struct ForecastResult{T <: Real}
-    yhat::Matrix{T}
-    a::Matrix{T}
-    P::Array{T, 3}
-    F::Array{T, 3}
-    time::Union{AbstractVector, Nothing}
-end
-
-# Constructor from NamedTuple (output of forecast)
-function ForecastResult(nt::NamedTuple; time::Union{AbstractVector, Nothing} = nothing)
-    ForecastResult(nt.yhat, nt.a, nt.P, nt.F, time)
-end
-
-# Accessor methods
-forecast_observations(r::ForecastResult) = r.yhat
-forecast_states(r::ForecastResult) = r.a
-forecast_states_cov(r::ForecastResult) = r.P
-forecast_observations_cov(r::ForecastResult) = r.F
-
 # ============================================================================
 # Color Scheme
 # ============================================================================
@@ -525,10 +481,11 @@ Plot forecasted states or observations with confidence bands.
 - `level=0.95`: Confidence level for bands
 - `what=:observations`: Plot :observations (yhat) or :states (a)
 - `band=true`: Show confidence bands
+- `time=nothing`: Custom time axis (default: `forecast_periods(fc)`)
 
 # Examples
 ```julia
-fc = ForecastResult(forecast_output)
+fc = forecast(model, 12)
 plot(fc)                           # Forecasted observations (default)
 plot(fc, what=:states, vars=1)     # Forecasted state 1
 plot(fc, level=0.90)               # 90% CI
@@ -556,15 +513,15 @@ plot(fc, level=0.90)               # 90% CI
     var_indices = select_vars(vars, dim)
     n_vars = length(var_indices)
 
-    # Time axis
-    t_axis = result.time !== nothing ? result.time : 1:h
+    time_axis = get(plotattributes, :time, nothing)
+    t_axis = time_axis !== nothing ? time_axis : forecast_periods(result)
 
     if n_vars > 1
         layout --> (n_vars, 1)
     end
 
     legend --> :topright
-    xlabel --> "Forecast Horizon"
+    xlabel --> "Time"
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         fc_mean = means[var_idx, :]

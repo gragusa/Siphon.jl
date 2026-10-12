@@ -4276,84 +4276,26 @@ end
 # ============================================
 
 """
-    forecast(model::StateSpaceModel, h::Int)
+    forecast(model::StateSpaceModel, h::Integer) -> ForecastResult
 
-Forecast h steps ahead from fitted model.
-
-Uses the filtered state at the last observation and iterates forward.
-
-# Arguments
-- `model`: Fitted StateSpaceModel
-- `h`: Forecast horizon
-
-# Returns
-NamedTuple with:
-- `yhat`: Forecasted observations (p × h)
-- `a`: Forecasted states (m × h)
-- `P`: Forecasted state covariances (m × m × h)
-- `F`: Forecasted observation covariances (p × p × h)
+Forecast the `h` periods after the sample from a fitted model, starting from the
+filtered state of the last period. See [`ForecastResult`](@ref).
 
 # Example
 ```julia
 model = StateSpaceModel(local_level(), 100)
 fit!(MLE(), model, y)
 fc = forecast(model, 10)
-fc.yhat  # 1 × 10 forecasts
+forecast_observations(fc)  # 1 × 10 forecasts of periods 101:110
 ```
 """
-function forecast(model::StateSpaceModel{T}, h::Int) where {T}
+function forecast(model::StateSpaceModel, h::Integer)
     _require_fitted(model)
     _require_filter(model)
 
-    # Get system matrices at fitted parameters
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-
-    # Get final filtered state
+    kfparms = Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
     n = model.n_times
-    a_final = model.att[:, n]
-    P_final = model.Ptt[:, :, n]
-
-    # Forecast forward
-    _ssm_forecast_from_state(kfparms, a_final, P_final, h)
-end
-
-"""Internal forecast helper."""
-function _ssm_forecast_from_state(
-        p::KFParms,
-        a::AbstractVector{T},
-        P::AbstractMatrix{T},
-        h::Int
-) where {T}
-    m = length(a)
-    obs_dim = size(p.Z, 1)
-
-    yhat = Matrix{T}(undef, obs_dim, h)
-    a_fc = Matrix{T}(undef, m, h)
-    P_fc = Array{T, 3}(undef, m, m, h)
-    F_fc = Array{T, 3}(undef, obs_dim, obs_dim, h)
-
-    # Compute RQR' once
-    RQR = p.R * p.Q * p.R'
-
-    # First step: predict from final filtered state
-    a_curr = p.T * a
-    P_curr = p.T * P * p.T' + RQR
-
-    for j in 1:h
-        a_fc[:, j] = a_curr
-        P_fc[:, :, j] = P_curr
-        yhat[:, j] = p.Z * a_curr
-        F_fc[:, :, j] = p.Z * P_curr * p.Z' + p.H
-
-        # Propagate for next step
-        if j < h
-            a_curr = p.T * a_curr
-            P_curr = p.T * P_curr * p.T' + RQR
-        end
-    end
-
-    return (yhat = yhat, a = a_fc, P = P_fc, F = F_fc)
+    return _forecast_from_filtered(kfparms, model.att[:, n], model.Ptt[:, :, n], n, h)
 end
 
 # ============================================
@@ -5275,31 +5217,7 @@ end
 # ============================================
 
 """
-    DynamicFactorModelForecast{T}
-
-Result of h-step ahead forecasting.
-
-# Fields
-- `h::Int` - Forecast horizon
-- `state_mean::Matrix{T}` - Forecasted state means E[αₙ₊ₕ|Y₁:ₙ] (m × h)
-- `state_cov::Array{T,3}` - Forecasted state covariances Var[αₙ₊ₕ|Y₁:ₙ] (m × m × h)
-- `obs_mean::Matrix{T}` - Forecasted observation means E[yₙ₊ₕ|Y₁:ₙ] (N × h)
-- `obs_cov::Array{T,3}` - Forecasted observation covariances Var[yₙ₊ₕ|Y₁:ₙ] (N × N × h)
-- `factor_mean::Matrix{T}` - Forecasted factor means (k × h)
-- `factor_cov::Array{T,3}` - Forecasted factor covariances (k × k × h)
-"""
-struct DynamicFactorModelForecast{T <: Real}
-    h::Int
-    state_mean::Matrix{T}      # m × h
-    state_cov::Array{T, 3}      # m × m × h
-    obs_mean::Matrix{T}        # N × h
-    obs_cov::Array{T, 3}        # N × N × h
-    factor_mean::Matrix{T}     # k × h
-    factor_cov::Array{T, 3}     # k × k × h
-end
-
-"""
-    forecast(model::DynamicFactorModel, h::Int)
+    forecast(model::DynamicFactorModel, h::Integer) -> ForecastResult
 
 Compute h-step ahead forecasts from a fitted DFM.
 
@@ -5312,98 +5230,37 @@ With AR errors the observation forecast also iterates
 `Xₙ₊ⱼ = δ₁Xₙ₊ⱼ₋₁ + … + δᵣXₙ₊ⱼ₋ᵣ + Z αₙ₊ⱼ + vₙ₊ⱼ` from the last `r` observations,
 which must not be missing.
 
-# Arguments
-- `model::DynamicFactorModel` - Fitted DFM model
-- `h::Int` - Forecast horizon
-
-# Returns
-- `DynamicFactorModelForecast` with forecasted states and observations
+The factor forecasts are the first `k` states: `forecast_states(fc)[1:k, :]`, with
+intervals from `forecast_interval(fc; what = :states)`.
 
 # Example
 ```julia
 model = DynamicFactorModel(100, 6, 200; factor_lags=3)
 fit!(EM(), model, y)
 fc = forecast(model, 4)
-ci = forecast_interval(fc, 0.05)
+lower, upper = forecast_interval(fc, 0.95)
 ```
 """
-function forecast(model::DynamicFactorModel{T}, h::Int) where {T}
+function forecast(model::DynamicFactorModel{T}, h::Integer) where {T}
     model.fitted ||
         throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
 
     model.spec.error_lags > 0 && return _forecast_dfm_ar(model, h)
 
-    k = model.spec.n_factors
-    N = model.spec.n_obs
     kf_ws = model.kf_ws
-    m = kf_ws.state_dim
-    n = kf_ws.n_times
-
-    # Initialize with filtered state at time n
-    a_h = copy(kf_ws.att[:, n])
-    P_h = copy(kf_ws.Ptt[:, :, n])
-
-    # Storage for forecasts
-    state_mean = Matrix{T}(undef, m, h)
-    state_cov = Array{T, 3}(undef, m, m, h)
-    obs_mean = Matrix{T}(undef, N, h)
-    obs_cov = Array{T, 3}(undef, N, N, h)
-
-    # Temporaries
-    tmp_mm = similar(P_h)
-    tmp_nm = Matrix{T}(undef, N, m)
-
-    Tmat = kf_ws.Tmat
-    Z = kf_ws.Z
-    H = kf_ws.H
-    RQR = kf_ws.RQR
-
-    @inbounds for j in 1:h
-        # State forecast: αₙ₊ⱼ|ₙ = T αₙ₊ⱼ₋₁|ₙ
-        a_new = Tmat * a_h
-
-        # Covariance forecast: Pₙ₊ⱼ|ₙ = T Pₙ₊ⱼ₋₁|ₙ T' + RQR'
-        mul!(tmp_mm, Tmat, P_h)
-        mul!(P_h, tmp_mm, Tmat')
-        P_h .+= RQR
-
-        # Store state forecast
-        state_mean[:, j] .= a_new
-        state_cov[:, :, j] .= P_h
-
-        # Observation forecast: yₙ₊ⱼ|ₙ = Z αₙ₊ⱼ|ₙ
-        mul!(view(obs_mean, :, j), Z, a_new)
-
-        # Observation covariance: Fₙ₊ⱼ|ₙ = Z Pₙ₊ⱼ|ₙ Z' + H
-        mul!(tmp_nm, Z, P_h)
-        mul!(view(obs_cov, :, :, j), tmp_nm, Z')
-        obs_cov[:, :, j] .+= H
-
-        # Update for next iteration
-        a_h .= a_new
-    end
-
-    # Extract factor forecasts (first k elements of state)
-    factor_mean = state_mean[1:k, :]
-    factor_cov = state_cov[1:k, 1:k, :]
-
-    return DynamicFactorModelForecast{T}(
-        h,
-        state_mean,
-        state_cov,
-        obs_mean,
-        obs_cov,
-        factor_mean,
-        factor_cov
-    )
+    m, n = kf_ws.state_dim, kf_ws.n_times
+    # The workspace keeps RQR' only, so it stands in for Q with R = I.
+    p = KFParms(kf_ws.Z, kf_ws.H, kf_ws.Tmat, Matrix{T}(I, m, m), kf_ws.RQR)
+    return _forecast_from_filtered(p, kf_ws.att[:, n], kf_ws.Ptt[:, :, n], n, h)
 end
 
 # Forecast of a DFM with AR errors. The observations follow
 #   Xₜ₊₁ = δ₁Xₜ + … + δᵣXₜ₋ᵣ₊₁ + Z αₜ₊₁ + vₜ₊₁,
 # so the forecast iterates the augmented state βₜ = [αₜ; Xₜ; …; Xₜ₋ᵣ₊₁] from the
 # filtered αₙ and the last r observations, which are known.
-function _forecast_dfm_ar(model::DynamicFactorModel{T}, h::Int) where {T}
-    k, N, r = model.spec.n_factors, model.spec.n_obs, model.spec.error_lags
+function _forecast_dfm_ar(model::DynamicFactorModel{T}, h::Integer) where {T}
+    h >= 1 || throw(ArgumentError("forecast horizon must be at least 1, got $h"))
+    N, r = model.spec.n_obs, model.spec.error_lags
     kf_ws, dfm_ws = model.kf_ws, model.dfm_ws
     m, n = kf_ws.state_dim, kf_ws.n_times
     any(isnan, dfm_ws.y_tail) && throw(ArgumentError(
@@ -5454,63 +5311,5 @@ function _forecast_dfm_ar(model::DynamicFactorModel{T}, h::Int) where {T}
         obs_cov[:, :, j] .= view(P, xs, xs)
     end
 
-    return DynamicFactorModelForecast{T}(h, state_mean, state_cov, obs_mean, obs_cov,
-        state_mean[1:k, :], state_cov[1:k, 1:k, :])
+    return ForecastResult(obs_mean, obs_cov, state_mean, state_cov, n)
 end
-
-"""
-    forecast_interval(fc::DynamicFactorModelForecast, α::Real=0.05)
-
-Compute (1-α) confidence intervals for forecasts.
-
-# Returns
-- NamedTuple with `lower` and `upper` for observation forecasts, each N × h
-"""
-function forecast_interval(fc::DynamicFactorModelForecast{T}, α::Real = 0.05) where {T}
-    # z-value for (1-α) confidence interval: Φ⁻¹(1 - α/2) ≈ 1.96 for α=0.05
-    z = quantile_normal(one(T) - T(α) / 2)
-
-    N, h = size(fc.obs_mean)
-    lower = similar(fc.obs_mean)
-    upper = similar(fc.obs_mean)
-
-    @inbounds for j in 1:h
-        for i in 1:N
-            se = sqrt(fc.obs_cov[i, i, j])
-            lower[i, j] = fc.obs_mean[i, j] - z * se
-            upper[i, j] = fc.obs_mean[i, j] + z * se
-        end
-    end
-
-    return (lower = lower, upper = upper)
-end
-
-"""
-    factor_forecast_interval(fc::DynamicFactorModelForecast, α::Real=0.05)
-
-Compute (1-α) confidence intervals for factor forecasts.
-
-# Returns
-- NamedTuple with `lower` and `upper` for factor forecasts, each k × h
-"""
-function factor_forecast_interval(
-        fc::DynamicFactorModelForecast{T},
-        α::Real = 0.05
-) where {T}
-    z = quantile_normal(one(T) - T(α) / 2)
-
-    k, h = size(fc.factor_mean)
-    lower = similar(fc.factor_mean)
-    upper = similar(fc.factor_mean)
-
-    @inbounds for j in 1:h
-        for i in 1:k
-            se = sqrt(fc.factor_cov[i, i, j])
-            lower[i, j] = fc.factor_mean[i, j] - z * se
-            upper[i, j] = fc.factor_mean[i, j] + z * se
-        end
-    end
-
-    return (lower = lower, upper = upper)
-end
-

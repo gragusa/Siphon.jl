@@ -37,9 +37,11 @@ on the [Core Functions](core.md) page.
 ### Accessors on `EKFFilterResult`
 
 ```@docs
-Siphon.predicted_observations
 Siphon.measurement_jacobians
 ```
+
+`predicted_observations(r)` returns the predicted measurements `h(aₜ, t)`; see the
+[Core Functions](core.md) page.
 
 The standard accessors (`predicted_states`, `filtered_states`, `prediction_errors`,
 etc.) also work on `EKFFilterResult`.

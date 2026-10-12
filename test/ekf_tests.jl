@@ -135,6 +135,18 @@ end
     end
 end
 
+@testset "EKF — forecast" begin
+    s = _ekf_test_linear_setup()
+    kfp = KFParms(s.Z, s.H, s.Tmat, s.R, s.Q)
+    fc_kf = forecast(kalman_filter(kfp, s.y, s.a1, s.P1), 3)
+    for mode in (AnalyticJacobian(), ADJacobian())
+        ekf_p = EKFParms(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
+        fc = forecast(kalman_filter(ekf_p, s.y, s.a1, s.P1), 3)
+        @test fc.yhat ≈ fc_kf.yhat && fc.F ≈ fc_kf.F && fc.a ≈ fc_kf.a && fc.P ≈ fc_kf.P
+        @test forecast_periods(fc) == forecast_periods(fc_kf)
+    end
+end
+
 @testset "EKF — linear-measurement equivalence (in-place)" begin
     s = _ekf_test_linear_setup()
     kfp = KFParms(s.Z, s.H, s.Tmat, s.R, s.Q)

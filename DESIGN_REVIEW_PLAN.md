@@ -65,6 +65,9 @@ Other author answers, verbatim:
   - DSL: `diffuse = :exact` as a model property.
 
   Rejected: initial-state objects and a `P1_inf` keyword.
+- **CHUNK-017** (2026-10-12, implementer's call; the author has not confirmed it):
+  - `predict` returns the p × n fitted-value matrix rather than a filter result or a flattened NamedTuple. The filter output comes from `kalman_filter`, and `predicted_observations(result)` gives the same matrix.
+  - `ForecastResult` keeps the field names `yhat`/`F`/`a`/`P` and adds `origin`.
 
 ## Chunks
 
@@ -596,11 +599,22 @@ Other author answers, verbatim:
   - **New method.** Add `forecast(::AbstractFilterResult, h)` so forecasting doesn't re-run the filter. Merge the duplicate loop `_ssm_forecast_from_state` (`inplace.jl:4374`).
   - **`predict`.** Fix the docstring/shape mismatch: `predict.jl:87-99` describes keys and column counts the code doesn't return. Decide whether `predict` returns a filter result instead of a flattened NamedTuple.
   - **`forecast_paths`.** Add an `rng` keyword. Use `psd_factor` instead of `cholesky`, so singular Q or zero H works. Respect the element type instead of forcing Float64.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-012
 - **Cluster**: api-unification
 - **Notes**:
+  - **`ForecastResult`** now lives in `predict.jl`. Fields: `yhat`, `F`, `a`, `P`, `origin` (the last sample period n). The field names are kept so `fc.yhat` still works. `time` is gone; the recipe takes `time` as a plot attribute and otherwise plots against `forecast_periods(fc) = origin+1:origin+h`. The x label is now "Time".
+  - **New exports:** `forecast_periods` and `forecast_interval(fc, level=0.95; what=:observations|:states)`, which reuses `confidence_bands`. The `forecast_*` accessors moved to the forecast export block.
+  - **Shared kernel:** `_forecast_from_filtered(p, att_n, Ptt_n, n, h)`, with hooks `_measurement_mean`/`_measurement_jacobian` for `KFParms` and `EKFParms`. It serves `forecast(::AbstractFilterResult, h)` (linear, scalar via `_as_matrix`, exact diffuse, and EKF, which uses `h(a, n+j)` and its Jacobian), the spec and `KFParms` methods, `forecast(::StateSpaceModel)` (`_ssm_forecast_from_state` deleted), and the white-noise DFM (`KFParms(Z, H, T, I, RQR)`). The AR-error DFM keeps its augmented-state loop but returns `ForecastResult`.
+  - **DFM:** `DynamicFactorModelForecast`, `Siphon.forecast_interval(::DFMForecast, α)` and `factor_forecast_interval` were removed; factors are the first k states.
+  - **Diffuse edge case:** `forecast` on a `DiffuseFilterResult` with `d == n` throws. That also fires, wrongly, if the diffuse period ends exactly in period n, because the result does not record whether it ended.
+  - **`predict` (implementer's call, grounded in "results feed the next function" and CHUNK-024's StatsAPI `predict`):** it returns the p × n matrix ŷ. The flattened filter NamedTuple is gone. `predicted_observations` gained a method on `KalmanFilterResult`/`DiffuseFilterResult`. `predict(::KFParms…)` takes an untyped `y`/`a1`/`P1`, so scalar systems work.
+  - **Open Question confirmed:** `predict`/`forecast`/`forecast_paths` on a failed filter keep throwing `ArgumentError`, because they are not objectives.
+  - **`forecast_paths`:** gained `rng`, `psd_factor`, the promoted element type, and a `forecast_paths(::AbstractFilterResult, h, n_paths)` method. It does not work under ForwardDiff duals (`eigen`).
+  - **Horizon:** `h < 1` throws `ArgumentError`.
+  - **Docs:** a conversion-guide section "Prediction and forecasting". In `api/core.md` (both copies), the forecast accessors plus the `predicted_observations` whole binding were added, and `api/ekf.md` now refers to it in prose. The visualization and DFM tutorials were migrated. The docs build was not run.
+  - **Tests:** api_coverage (from-result, scalar, diffuse, interval, rng/singular/Float32 paths), ekf (linear-measurement EKF forecast = KF), failure (`forecast(model)` = spec forecast), recipe (x axis), dfm; predict call sites were migrated.
 
 ### CHUNK-018: unify-static-backend-controls
 - **Kind**: `implement`
@@ -868,6 +882,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-014 (apply-missing-data-model) → next: CHUNK-015
 - 2026-10-08 CHUNK-015 (unify-filter-smoother-interfaces) → next: CHUNK-016
 - 2026-10-08 CHUNK-016 (dispatch-based-variant-selection) → next: CHUNK-017
+- 2026-10-12 CHUNK-017 (unify-forecast-output) → next: CHUNK-018
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -875,12 +890,12 @@ Other author answers, verbatim:
 - `docs/src/index.md:55` calls `local_level(var_obs_init=225.0, var_level_init=100.0)`; those keywords don't exist (the template takes `var_obs=(init=…,)`). Fix in CHUNK-032.
 - CHUNK-022 (DSL conventions) must keep `SSMParameter.default_init` or an equivalent "init was defaulted" signal, and should decide whether `FreeParam` without an `init` gets it too. Today `FreeParam` defaults `init = 0.0`, which sits on the bound for a variance.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, plus 67 pre-existing "Log-likelihood decreased" warnings from the DSL EMs (CHUNK-019 deletes them). Pass `warn = false` in the capped tests if a quiet suite is wanted.
-- `predict`/`forecast` on a model or spec whose filter fails now throw `ArgumentError`. `predict` is not an objective, but CHUNK-017 should confirm this when it reworks the forecast types.
 - The `_ssm_fit_em_static!` in `src/inplace.jl` has no callers. Delete it in CHUNK-019 or CHUNK-030.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `compute_sufficient_stats!` sums `S_αα` over all periods but `S_yα`/`S_yy` only over observed ones. So `update_Z!` and `update_H!` are biased whenever whole periods are missing, in the general EM and the white-noise DFM. The AR-error DFM path uses its own valid-period moments. Fix in CHUNK-019 (consolidate EM).
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
 - `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
-- `ForecastResult` still carries a `time` field, while `SmootherResult` and `KalmanFilterResult` take `time` as a plot attribute. Align in CHUNK-017.
 - Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
 - `EKFLogDensity` and `SSMLogDensity` remain two types; with `EKFSpec` going through `ssm_loglik`/`optimize_ssm`, a single `SSMLogDensity(spec, y)` constructor dispatching on the spec type would finish the job (CHUNK-023).
+- `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
+- No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.

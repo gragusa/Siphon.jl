@@ -24,23 +24,21 @@ const P1_cov = [1e7;;]
 @testset "API coverage" begin
 
 @testset "predict (KFParms)" begin
-    pr = predict(p_cov, y_cov, a1_cov, P1_cov)
+    yhat = predict(p_cov, y_cov, a1_cov, P1_cov)
     filt = kalman_filter(p_cov, y_cov, a1_cov, P1_cov)
     n = size(y_cov, 2)
-    @test size(pr.yhat) == (1, n)
-    @test pr.yhat ≈ p_cov.Z * filt.at
-    @test pr.at == filt.at
-    @test pr.Ptt == filt.Ptt
-    @test pr.loglik ≈ kalman_loglik(p_cov, y_cov, a1_cov, P1_cov)
+    @test size(yhat) == (1, n)
+    @test yhat ≈ p_cov.Z * filt.at
+    @test predicted_observations(filt) == yhat
 end
 
 @testset "predict (SSMSpec)" begin
     spec = local_level()
     θ = (var_obs = 15099.0, var_level = 1469.1)
-    pr = predict(spec, θ, y_cov)
+    yhat = predict(spec, θ, y_cov)
     ss = build_linear_state_space(spec, θ, y_cov)
-    @test pr.loglik ≈ kalman_loglik(ss.p, y_cov, ss.a1, ss.P1)
-    @test size(pr.yhat) == size(y_cov)
+    @test yhat ≈ predict(ss.p, y_cov, ss.a1, ss.P1)
+    @test size(yhat) == size(y_cov)
 end
 
 @testset "forecast (KFParms)" begin
@@ -58,6 +56,46 @@ end
     @test fc.P[1, 1, 1] ≈ filt.Ptt[1, 1, n] + 1469.1
     @test diff(vec(fc.P)) ≈ fill(1469.1, h - 1)
     @test fc.F[1, 1, :] ≈ fc.P[1, 1, :] .+ 15099.0
+    @test fc isa ForecastResult{Float64}
+    @test forecast_periods(fc) == (n + 1):(n + h)
+    @test forecast_observations(fc) === fc.yhat
+    @test forecast_observations_cov(fc) === fc.F
+    @test forecast_states(fc) === fc.a
+    @test forecast_states_cov(fc) === fc.P
+end
+
+@testset "forecast from a filter result" begin
+    h = 4
+    filt = kalman_filter(p_cov, y_cov, a1_cov, P1_cov)
+    fc = forecast(filt, h)
+    fc2 = forecast(p_cov, y_cov, a1_cov, P1_cov, h)
+    @test fc.yhat == fc2.yhat && fc.F == fc2.F && fc.a == fc2.a && fc.P == fc2.P
+    @test_throws ArgumentError forecast(filt, 0)
+
+    # A scalar system forecasts like its 1 × 1 matrix version
+    ps = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+    fcs = forecast(kalman_filter(ps, vec(y_cov), 0.0, 1e7), h)
+    @test fcs.yhat ≈ fc.yhat && fcs.F ≈ fc.F && fcs.P ≈ fc.P
+
+    # Exact diffuse: forecasts start after the sample once the diffuse period ends
+    dfilt = kalman_filter(p_cov, y_cov, a1_cov, zeros(1, 1), ones(1, 1))
+    dfc = forecast(dfilt, h)
+    n = size(y_cov, 2)
+    @test dfc.yhat ≈ fill(dfilt.att[1, n], 1, h)
+    @test forecast_periods(dfc) == (n + 1):(n + h)
+    @test_throws "diffuse period" forecast(
+        kalman_filter(p_cov, y_cov[:, 1:1] .* NaN, a1_cov, zeros(1, 1), ones(1, 1)), 1)
+end
+
+@testset "forecast_interval" begin
+    fc = forecast(p_cov, y_cov, a1_cov, P1_cov, 3)
+    lo, hi = forecast_interval(fc, 0.9)
+    z = Siphon.quantile_normal(0.95)
+    @test lo ≈ fc.yhat .- z .* sqrt.(fc.F[1, 1, :])'
+    @test hi ≈ fc.yhat .+ z .* sqrt.(fc.F[1, 1, :])'
+    slo, shi = forecast_interval(fc; what = :states)
+    @test size(slo) == size(fc.a) && all(slo .< fc.a .< shi)
+    @test_throws ArgumentError forecast_interval(fc; what = :factors)
 end
 
 @testset "forecast (SSMSpec)" begin
@@ -72,8 +110,7 @@ end
 
 @testset "forecast_paths" begin
     h, n_paths = 4, 4000
-    Random.seed!(42)
-    paths = forecast_paths(p_cov, y_cov, a1_cov, P1_cov, h, n_paths)
+    paths = forecast_paths(p_cov, y_cov, a1_cov, P1_cov, h, n_paths; rng = Xoshiro(42))
     @test size(paths) == (1, h, n_paths)
     fc = forecast(p_cov, y_cov, a1_cov, P1_cov, h)
     # Simulated paths are centred on the point forecast with variance F
@@ -81,6 +118,22 @@ end
     @test all(abs.(m .- vec(fc.yhat)) .< 4 .* sqrt.(fc.F[1, 1, :] ./ n_paths))
     v = [var(paths[1, j, :]) for j in 1:h]
     @test all(abs.(v ./ fc.F[1, 1, :] .- 1) .< 0.1)
+
+    # The rng keyword makes draws reproducible, from the filter result too
+    filt = kalman_filter(p_cov, y_cov, a1_cov, P1_cov)
+    @test forecast_paths(filt, h, 5; rng = Xoshiro(1)) ==
+          forecast_paths(p_cov, y_cov, a1_cov, P1_cov, h, 5; rng = Xoshiro(1))
+
+    # Singular covariances (H = 0, rank-deficient Q) are allowed
+    p0 = KFParms([1.0 0.0], zeros(1, 1), [1.0 1.0; 0.0 1.0], [0.0; 1.0;;], [1.0;;])
+    paths0 = forecast_paths(p0, y_cov, zeros(2), 1e7 * Matrix(1.0I, 2, 2), 3, 10;
+        rng = Xoshiro(2))
+    @test size(paths0) == (1, 3, 10) && all(isfinite, paths0)
+
+    # The element type follows the system
+    p32 = KFParms(Float32[1;;], Float32[15099;;], Float32[1;;], Float32[1;;], Float32[1469;;])
+    @test eltype(forecast_paths(p32, Float32.(y_cov), Float32[0], Float32[1e7;;], 2, 3;
+        rng = Xoshiro(3))) == Float32
 end
 
 @testset "missing-data utilities" begin

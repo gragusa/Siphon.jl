@@ -363,11 +363,11 @@ println("  Factor 2: ", round(cor(f_hat[2, :], f[2, :]), digits=3))
 # Forecast h steps ahead
 fc = forecast(model, 12)  # 12-step forecast
 
-# Access forecast components
-fc.obs_mean      # N × h forecasted observations
-fc.obs_cov       # N × N × h forecast covariances
-fc.factor_mean   # k × h forecasted factors
-fc.factor_cov    # k × k × h factor forecast covariances
+forecast_observations(fc)            # N × h forecasted observations
+forecast_observations_cov(fc)        # N × N × h forecast covariances
+forecast_states(fc)[1:k, :]          # k × h forecasted factors (the first k states)
+forecast_states_cov(fc)[1:k, 1:k, :] # k × k × h factor forecast covariances
+lower, upper = forecast_interval(fc, 0.95)
 ```
 
 ## Tips and Best Practices

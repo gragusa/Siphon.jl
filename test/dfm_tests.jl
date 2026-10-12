@@ -137,11 +137,13 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         # Xₙ₊₁ = δ Xₙ + Z αₙ₊₁ + vₙ₊₁ and Xₙ₊₂ = δ Xₙ₊₁ + Z αₙ₊₂ + vₙ₊₂.
         a1 = Tm * kf.att[:, n]
         P1 = Tm * kf.Ptt[:, :, n] * Tm' + kf.RQR
-        @test fc.obs_mean[:, 1] ≈ δ .* y[:, n] .+ Z * a1
-        @test fc.obs_cov[:, :, 1] ≈ Z * P1 * Z' + kf.H
-        @test fc.obs_mean[:, 2] ≈ δ .* fc.obs_mean[:, 1] .+ Z * Tm * a1
-        @test fc.state_mean[:, 1] ≈ a1
-        @test fc.factor_mean ≈ fc.state_mean[1:1, :]
+        @test fc isa ForecastResult
+        @test forecast_periods(fc) == (n + 1):(n + 2)
+        @test forecast_observations(fc)[:, 1] ≈ δ .* y[:, n] .+ Z * a1
+        @test forecast_observations_cov(fc)[:, :, 1] ≈ Z * P1 * Z' + kf.H
+        @test forecast_observations(fc)[:, 2] ≈
+              δ .* forecast_observations(fc)[:, 1] .+ Z * Tm * a1
+        @test forecast_states(fc)[:, 1] ≈ a1
 
         y[:, end] .= NaN
         Random.seed!(3)

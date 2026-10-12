@@ -564,7 +564,7 @@ end
     ref = kalman_smoother(ss.p, y, ss.a1, ss.P1)
 
     # The default use_static = true no longer rejects the partial periods
-    @test predict(spec, θ, y).loglik ≈ filt.loglik
+    @test predict(spec, θ, y) ≈ predicted_observations(filt)
     @test forecast(spec, θ, y, 2).yhat ≈ forecast(ss.p, y, ss.a1, ss.P1, 2).yhat
     @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ filt.loglik
 

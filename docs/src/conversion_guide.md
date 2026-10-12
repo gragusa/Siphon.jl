@@ -252,3 +252,46 @@ initialisation, as before: the 5-argument `kalman_loglik(p, y, a1, P1_star, P1_i
 `P1_inf`. In the DSL it is `diffuse = :exact`. The in-place diffuse filter is now only
 `kalman_filter!(ws::DiffuseKalmanWorkspace, y)`; the unexported
 `Siphon.kalman_filter_diffuse!` is gone.
+
+## Prediction and forecasting
+
+Every `forecast` method returns a `ForecastResult`. It holds the observation forecasts
+`yhat` (p × h) with covariances `F`, the state forecasts `a` (m × h) with covariances
+`P`, and `origin`, the last sample period. Before, `forecast` returned a `NamedTuple`
+`(yhat, a, P, F)` on a `KFParms`, spec or `StateSpaceModel` and a
+`DynamicFactorModelForecast` on a `DynamicFactorModel`, and `ForecastResult` was a
+separate plotting wrapper.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `fc = forecast(…)`, then `fc.yhat`, `fc.a`, `fc.P`, `fc.F` | unchanged field names; prefer `forecast_observations(fc)`, `forecast_states(fc)`, `forecast_states_cov(fc)`, `forecast_observations_cov(fc)` |
+| `ForecastResult(forecast(…))`, `ForecastResult(nt; time = 101:112)` | `forecast(…)` is already a `ForecastResult`; pass `time` to `plot` |
+| `fc.time` | `forecast_periods(fc)`, which is `n+1:n+h` |
+| `plot(fc)` with x axis `1:h` | x axis `forecast_periods(fc)`, or `plot(fc; time = …)` |
+| `forecast(dfm, h).obs_mean`, `.obs_cov` | `forecast_observations(fc)`, `forecast_observations_cov(fc)` |
+| `forecast(dfm, h).state_mean`, `.state_cov` | `forecast_states(fc)`, `forecast_states_cov(fc)` |
+| `forecast(dfm, h).factor_mean`, `.factor_cov` | `forecast_states(fc)[1:k, :]`, `forecast_states_cov(fc)[1:k, 1:k, :]` |
+| `forecast(dfm, h).h` | `size(forecast_observations(fc), 2)` |
+| `Siphon.forecast_interval(fc, α)` (DFM only) | `forecast_interval(fc, 1 - α)`, exported, for every forecast |
+| `Siphon.factor_forecast_interval(fc, α)` | `forecast_interval(fc, 1 - α; what = :states)`, rows `1:k` |
+
+New:
+
+- `forecast(result, h)` forecasts from any filter result (`KalmanFilterResult`,
+  `DiffuseFilterResult`, `EKFFilterResult`) without running the filter again. An exact
+  diffuse result whose diffuse period lasts the whole sample throws an `ArgumentError`.
+- `forecast_paths(result, h, n_paths)` does the same for simulated paths.
+
+`predict` returns the fitted values ŷₜ|ₜ₋₁ = Z aₜ (p × n) as a matrix:
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `predict(…).yhat` | `predict(…)` |
+| `predict(…).at`, `.Pt`, `.att`, `.Ptt`, `.vt`, `.Ft`, `.loglik`, `.missing_mask` | `filt = kalman_filter(…)`, then the filter accessors; `predicted_observations(filt)` gives the same matrix as `predict` |
+
+`predicted_observations`, previously defined only for the extended Kalman filter, now
+works on `KalmanFilterResult` and `DiffuseFilterResult` too.
+
+`forecast_paths` takes an `rng` keyword, keeps the element type of the system instead of
+returning `Float64`, and accepts singular covariances (a state shock of reduced rank, or
+`H = 0`), which made it throw before.

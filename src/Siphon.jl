@@ -61,6 +61,9 @@ include("recipes.jl")
 
 # Prediction and forecasting exports
 export predict, forecast, forecast_paths
+export ForecastResult, forecast_periods, forecast_interval
+export forecast_observations, forecast_states
+export forecast_states_cov, forecast_observations_cov
 
 # Missing data utilities
 export missing_to_nan, nan_to_missing
@@ -140,9 +143,7 @@ export factors, loadings, var_coefficients
 export isconverged, niterations, innovation_cov, ar_coefficients, idiosyncratic_variances
 
 # Plotting recipes (RecipesBase)
-export ForecastResult, ObservablePlot
+export ObservablePlot
 export confidence_bands, select_vars, quantile_normal
-export forecast_observations, forecast_states
-export forecast_states_cov, forecast_observations_cov
 
 end # module

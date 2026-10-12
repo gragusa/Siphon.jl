@@ -215,6 +215,10 @@ end
     @test_throws "kalman_filter!(model, y)" loglikelihood(model)
     ll = kalman_filter!(model, y)
     @test loglikelihood(model) == ll
+    fc = forecast(model, 3)
+    fc_ref = forecast(spec, (var_obs = 1.0, var_level = 0.5), y, 3; use_static = false)
+    @test fc.yhat ≈ fc_ref.yhat && fc.F ≈ fc_ref.F
+    @test forecast_periods(fc) == (n + 1):(n + 3)
 
     @test_throws DimensionMismatch kalman_filter!(model, randn(2, n))
     @test_throws DimensionMismatch kalman_loglik(model, randn(1, n - 1))

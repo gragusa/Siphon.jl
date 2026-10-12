@@ -1036,8 +1036,8 @@ end
     @test ssm_loglik(spec, θ, y) ≈ -632.55 atol = 0.01
     @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ exact
     @test objective_function(spec, y)([15099.0, 1469.1]) ≈ -exact
-    @test predict(spec, θ, y).loglik ≈ exact
     filt = kalman_filter(p, y, [0.0], zeros(1, 1), ones(1, 1))
+    @test predict(spec, θ, y) ≈ predicted_observations(filt)
     @test forecast(spec, θ, y, 2).yhat ≈ fill(filt.att[1, end], 1, 2)
     @test size(forecast_paths(spec, θ, y, 3, 4)) == (1, 3, 4)
     @test optimize_ssm(spec, y).loglik ≈ -632.5456 atol = 1e-3

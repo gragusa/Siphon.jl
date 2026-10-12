@@ -33,7 +33,7 @@ using StaticArrays
           kalman_loglik(p, y, a1, zeros(m, m), Matrix(1.0I, m, m))
     @test isequal(smoothed_states(kalman_smoother(p, ym, a1, P1)),
         smoothed_states(kalman_smoother(p, y, a1, P1)))
-    @test isequal(predict(p, ym, a1, P1).yhat, predict(p, y, a1, P1).yhat)
+    @test isequal(predict(p, ym, a1, P1), predict(p, y, a1, P1))
     @test forecast(p, ym, a1, P1, 3).yhat == forecast(p, y, a1, P1, 3).yhat
 
     ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
@@ -58,7 +58,7 @@ end
     θ = (var_obs = 1.0, var_level = 0.5)
 
     @test ssm_loglik(spec, θ, ym) == ssm_loglik(spec, θ, y)
-    @test isequal(predict(spec, θ, ym).yhat, predict(spec, θ, y).yhat)
+    @test isequal(predict(spec, θ, ym), predict(spec, θ, y))
     θ0 = (var_obs = 0.8, var_level = 0.4)
     @test optimize_ssm(spec, ym; θ0).loglik ≈ optimize_ssm(spec, y; θ0).loglik
 

@@ -36,8 +36,16 @@ SmootherResult
 
 ```@docs
 predict
+predicted_observations
 forecast
 forecast_paths
+ForecastResult
+forecast_observations
+forecast_observations_cov
+forecast_states
+forecast_states_cov
+forecast_periods
+forecast_interval
 ```
 
 ## Missing Data Utilities

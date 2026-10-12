@@ -104,12 +104,11 @@ smooth = SmootherResult(model)
 
 ## Plotting Forecasts
 
-Wrap forecast output in `ForecastResult`:
+`forecast` returns a `ForecastResult`, which plots against the forecast periods
+`n+1:n+h`:
 
 ```julia
-# Run forecast
-fc_nt = forecast(spec, θ, y, 24)  # 24-step ahead forecast
-fc = ForecastResult(fc_nt)
+fc = forecast(spec, θ, y, 24)  # 24-step ahead forecast
 
 # Plot forecasted observations (default)
 plot(fc)
@@ -128,6 +127,7 @@ plot(fc, what=:states, vars=1)
 | `level` | `0.95` | Confidence level for bands |
 | `what` | `:observations` | Plot `:observations` or `:states` |
 | `band` | `true` | Whether to show confidence bands |
+| `time` | `n+1:n+h` | Time axis |
 
 ## Comparing Filtered vs Smoothed
 
@@ -252,7 +252,7 @@ The default color scheme uses consistent colors across plot types:
 - `KalmanWorkspace`: In-place filter/smoother workspace (recommended)
 - `KalmanFilterResult`: Functional API filter output
 - `SmootherResult`: Smoother output (smoothed states, covariances, cross-lag covariances)
-- `ForecastResult`: Wrapper for forecast output
+- `ForecastResult`: Forecast output
 - `ObservablePlot`: Marker type for observable prediction plots
 
 ### In-place Functions
