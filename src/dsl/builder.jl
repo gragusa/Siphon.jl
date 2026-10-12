@@ -6,8 +6,6 @@ Matrix-based state-space model specification for custom models.
 Use `custom_ssm` when the pre-built templates don't fit your model.
 """
 
-export custom_ssm, FreeParam, @P
-
 """
     FreeParam(name; init=0.0, lower=-Inf, upper=Inf)
 
@@ -98,7 +96,7 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     # Collect parameters and MatrixExpr objects
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
 
     # Process each matrix, handling MatrixExpr specially
     Z_spec, Z_dims = _process_matrix_input(:Z, Z, params, param_set, matrix_exprs)
@@ -145,22 +143,12 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     )
 end
 
-# Check if something is a MatrixExpr (duck typing to avoid circular dependency)
-function _is_matrix_expr(x)
-    hasfield(typeof(x), :builder) &&
-        hasfield(typeof(x), :dims) &&
-        hasfield(typeof(x), :params)
-end
-
-# Check if something is a CovFree specification
-_is_cov_free(x) = x isa CovFree
-
 """
 Process a matrix input, handling regular matrices, MatrixExpr, and CovFree.
 Returns (SSMMatrixSpec, dims).
 """
 function _process_matrix_input(name::Symbol, input, params, param_set, matrix_exprs)
-    if _is_cov_free(input)
+    if input isa CovFree
         # Handle CovFree - create parameters and CovMatrixExpr
         n = input.n
         prefix = input.prefix
@@ -198,7 +186,7 @@ function _process_matrix_input(name::Symbol, input, params, param_set, matrix_ex
         # Return placeholder spec with correct dimensions
         return (SSMMatrixSpec((n, n)), (n, n))
 
-    elseif _is_matrix_expr(input)
+    elseif input isa MatrixExpr
         # It's a MatrixExpr - extract params and store it
         for p in input.params
             if !(p.name in param_set)

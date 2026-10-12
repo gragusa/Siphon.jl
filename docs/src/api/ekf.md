@@ -59,18 +59,18 @@ An `EKFWorkspace` runs with the same in-place functions as a `KalmanWorkspace`:
 ## DSL
 
 ```@docs
-Siphon.DSL.EKFSpec
-Siphon.DSL.MeasurementExpr
-Siphon.DSL.custom_ekf
-Siphon.DSL.build_measurement
-Siphon.DSL.build_ekfparms
-Siphon.DSL.build_nonlinear_state_space
+Siphon.EKFSpec
+Siphon.MeasurementExpr
+Siphon.custom_ekf
+Siphon.build_measurement
+Siphon.build_ekfparms
+Siphon.build_nonlinear_state_space
 ```
 
 ## Estimation
 
 ```@docs
-Siphon.DSL.EKFLogDensity
+Siphon.EKFLogDensity
 ```
 
 `ssm_loglik(spec, θ, y)` and `optimize_ssm(spec, y)` accept an `EKFSpec` as well as an

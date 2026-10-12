@@ -40,11 +40,6 @@ Specialized dynamic factor model:
 - Factor extraction and forecasting
 """
 
-# Note: LinearAlgebra is already imported by the main module
-
-# DSL types (SSMSpec, SSMParameter, etc.) are available from the DSL submodule
-# which is loaded before this file
-
 # ============================================
 # KalmanWorkspace - Pre-allocated storage
 # ============================================
@@ -3708,7 +3703,7 @@ function kalman_loglik(
     theta_nt = _ssm_get_theta_namedtuple(model)
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
 
-    return DSL._ss_loglik(ss, y)
+    return _ss_loglik(ss, y)
 end
 
 """
@@ -3750,7 +3745,7 @@ function kalman_filter!(
     theta_nt = _ssm_get_theta_namedtuple(model)
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
 
-    filt = DSL._ss_filter(ss, y)
+    filt = _ss_filter(ss, y)
 
     # Store results
     _ssm_store_filter_results!(model, filt)
@@ -3862,7 +3857,7 @@ function fit!(
     # Run full filter to get filter results
     theta_nt = _ssm_get_theta_namedtuple(model)
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
-    filt = DSL._ss_filter(ss, y)
+    filt = _ss_filter(ss, y)
 
     # Copy filter results to model storage
     _ssm_store_filter_results!(model, filt)

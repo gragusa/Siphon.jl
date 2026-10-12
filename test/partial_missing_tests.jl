@@ -396,9 +396,9 @@ end
         a1 = [0.0],
         P1 = [0.0]
     )
-    P1_inf = Siphon.DSL.SSMMatrixSpec((1, 1))
-    P1_inf.elements[(1, 1)] = Siphon.DSL.FixedValue(1.0)
-    spec = Siphon.DSL.SSMSpec(base.name, base.n_states, base.n_obs, base.n_shocks,
+    P1_inf = Siphon.SSMMatrixSpec((1, 1))
+    P1_inf.elements[(1, 1)] = Siphon.FixedValue(1.0)
+    spec = Siphon.SSMSpec(base.name, base.n_states, base.n_obs, base.n_shocks,
         base.params, base.Z, base.H, base.T, base.R, base.Q, base.a1, base.P1,
         P1_inf, base.matrix_exprs)
 
@@ -567,7 +567,7 @@ end
     # The static path (the default for this small model) accepts partial periods
     @test predict(spec, θ, y) ≈ predicted_observations(filt)
     @test forecast(spec, θ, y, 2).yhat ≈ forecast(ss.p, y, ss.a1, ss.P1, 2).yhat
-    @test Siphon.DSL._spec_loglik(spec, θ, y, :on) ≈ filt.loglik
+    @test Siphon._spec_loglik(spec, θ, y, :on) ≈ filt.loglik
 
     # The model smoother uses the observed-row mask
     model = StateSpaceModel(spec, θ, n)

@@ -23,17 +23,6 @@ end
 
 const _EM_MATRICES = (:Z, :H, :T, :Q, :P1)
 
-function _expr_symbols!(out::Set{Symbol}, ex)
-    if ex isa Symbol
-        push!(out, ex)
-    elseif ex isa Expr
-        for a in ex.args
-            _expr_symbols!(out, a)
-        end
-    end
-    return out
-end
-
 function _em_layout(spec::SSMSpec)
     names = Set(prm.name for prm in spec.params)
     cells = Dict{Symbol, Tuple{Symbol, Vector{CartesianIndex{2}}}}()
@@ -54,13 +43,7 @@ function _em_layout(spec::SSMSpec)
     end
     function scan_spec!(mat, mspec::SSMMatrixSpec)
         for ((i, j), elem) in mspec.elements
-            if elem isa ParameterRef
-                add_cell!(elem.name, mat, CartesianIndex(i, j))
-            elseif elem isa Expr
-                for s in _expr_symbols!(Set{Symbol}(), elem)
-                    block!(s, "it enters $mat through an expression")
-                end
-            end
+            elem isa ParameterRef && add_cell!(elem.name, mat, CartesianIndex(i, j))
         end
     end
 
@@ -83,13 +66,7 @@ function _em_layout(spec::SSMSpec)
         end
     end
     for (i, elem) in enumerate(spec.a1)
-        if elem isa ParameterRef
-            add_cell!(elem.name, :a1, CartesianIndex(i, 1))
-        elseif elem isa Expr
-            for s in _expr_symbols!(Set{Symbol}(), elem)
-                block!(s, "it enters a1 through an expression")
-            end
-        end
+        elem isa ParameterRef && add_cell!(elem.name, :a1, CartesianIndex(i, 1))
     end
     if haskey(spec.matrix_exprs, :R)
         for prm in spec.matrix_exprs[:R].params
@@ -97,11 +74,8 @@ function _em_layout(spec::SSMSpec)
         end
     else
         for (_, elem) in spec.R.elements
-            syms = elem isa ParameterRef ? (elem.name,) :
-                   elem isa Expr ? _expr_symbols!(Set{Symbol}(), elem) : ()
-            for s in syms
-                block!(s, "it enters R, which EM does not update")
-            end
+            elem isa ParameterRef &&
+                block!(elem.name, "it enters R, which EM does not update")
         end
     end
 
@@ -197,7 +171,7 @@ function _em_theta(spec::SSMSpec, layout::_EMLayout, kf_ws::KalmanWorkspace{T},
     mats = (Z = kf_ws.Z, H = kf_ws.H, T = kf_ws.Tmat, Q = kf_ws.Q, P1 = kf_ws.P1)
     from_cov = Dict{Symbol, T}()
     for (mat, expr) in layout.cov
-        σ, corr = DSL.cov_expr_params(expr, mats[mat])
+        σ, corr = cov_expr_params(expr, mats[mat])
         for (name, v) in zip(expr.σ_param_names, σ)
             from_cov[name] = v
         end

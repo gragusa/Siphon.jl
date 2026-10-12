@@ -725,11 +725,17 @@ Other author answers, verbatim:
   - Move the EKF spec, codegen and optimiser files next to the EKF core.
   - Give `MatrixExpr`, `CovMatrixExpr` and `MeasurementExpr` a common abstract type in place of the untyped `build_from_expr` method.
   - Remove the dead `Expr` branch of `MatrixElement`, which relies on runtime `eval` (`codegen.jl:238-377`).
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-004
 - **Cluster**: dsl
 - **Notes**:
+  - **Layout:** `src/dsl/dsl.jl` deleted; `Siphon.jl` includes `dsl/{types,expressions,codegen,templates,builder,matrix_helpers,bayesian,optimization}.jl` directly, then `src/ekf_{spec,codegen,optim}.jl` (moved out of `src/dsl/` with `git mv`). All `using` lines and file-level `export`s in those files are gone; `Siphon.jl` holds the only import block and the only export list. New imports there: `LogDensityProblems: LogDensityProblems`, `Optimization: Optimization, OptimizationFunction, OptimizationProblem`, `OptimizationOptimJL: Optim`, `SpecialFunctions: loggamma`, `Statistics: mean, var`, `TransformVariables` (whole) + `corr_cholesky_factor`.
+  - **Export list:** unchanged from Siphon's old list. `build_kfparms`, `build_initial_state` and `param_index` stay unexported (reachable as `Siphon.name`; CHUNK-031 declares them `public`). `ekf.md` now writes `Siphon.build_initial_state`.
+  - **AbstractMatrixExpr** (unexported; **CHUNK-031: declare `public`**): supertype of `MatrixExpr` and `CovMatrixExpr`; `matrix_exprs` is `Dict{Symbol, AbstractMatrixExpr}` on `SSMSpec`/`EKFSpec`; `build_from_expr` dispatches on `MatrixExpr` (no untyped method); the duck-typed `_is_matrix_expr`/`_is_cov_free` are replaced by `isa`. **Divergence:** `MeasurementExpr` is not a subtype — it builds an EKF measurement object, not a matrix, is never stored in `matrix_exprs`, and has no `build_from_expr`, so a shared supertype would carry no shared interface.
+  - **Expr branch removed:** `MatrixElement = Union{FixedValue, ParameterRef}`; `evaluate_expr` and the `Expr` methods of `evaluate_element` (runtime `eval`) deleted, along with the `Expr` handling and `_expr_symbols!` in `em_spec.jl`'s `_em_layout`.
+  - **Call sites:** tests (`dsl_tests`, `partial_missing_tests`, `dns_marss_validation_tests`) and `docs/src/api/{dsl,ekf,optimization,matrix_helpers}.md` use `Siphon.name`. The stale `src/api/*.md` copies still say `Siphon.DSL.` (CHUNK-032 deletes them). Conversion guide: new section "Module layout".
+  - **Tests:** dsl_tests gains "matrix expressions share a supertype" and "single export list".
 
 ### CHUNK-022: unify-dsl-conventions
 - **Kind**: `implement`
@@ -864,7 +870,7 @@ Other author answers, verbatim:
 - **Depends on**: CHUNK-030
 - **Cluster**: release
 - **Notes**:
-  - From CHUNK-020: declare `DynamicFactorModelSpec` `public` (unexported). From CHUNK-019: `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!`, `set_em_masks!`.
+  - From CHUNK-020: declare `DynamicFactorModelSpec` `public` (unexported). From CHUNK-019: `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!`, `set_em_masks!`. From CHUNK-021: `AbstractMatrixExpr`.
 
 ### CHUNK-032: sync-docs
 - **Kind**: `implement`
@@ -931,6 +937,7 @@ Other author answers, verbatim:
 - 2026-10-12 CHUNK-018 (unify-static-backend-controls) → next: CHUNK-019
 - 2026-10-12 CHUNK-019 (consolidate-em) → next: CHUNK-020
 - 2026-10-12 CHUNK-020 (integrate-dfm) → next: CHUNK-021
+- 2026-10-12 CHUNK-021 (restructure-dsl-layering-and-exports) → next: CHUNK-022
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -951,3 +958,4 @@ Other author answers, verbatim:
 - `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
 - Implementing the `identification =` option of `DynamicFactorModel` (named-factor / lower-triangular Λ₀ restrictions in the DFM M-step) was dropped from the docs in CHUNK-020; it can become a separate feature chunk. The deleted tests are at `git show 746f82d:test/em_tests.jl`, lines 905–1072.
+- `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).

@@ -35,8 +35,6 @@ spec = local_level(var_obs=(init=225.0, lower=1.0, upper=40000.0), var_level=:fr
 ```
 """
 
-export local_level, local_linear_trend, ar1, arma, dynamic_factor, dns_model
-
 """
     ParamSpec
 
@@ -607,7 +605,7 @@ function dynamic_factor(
     # Build using custom_ssm approach for flexibility
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
 
     # ==========================================
     # Z matrix (loadings): n_obs × n_states
@@ -910,7 +908,7 @@ function dns_model(
 
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
 
     # ==========================================
     # Z matrix: DNS loadings via MatrixExpr

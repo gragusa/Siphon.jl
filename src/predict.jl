@@ -9,9 +9,6 @@ Provides:
 - `forecast_paths`: Simulated forecast trajectories
 """
 
-using LinearAlgebra
-using .DSL: SSMSpec, build_linear_state_space, _ss_filter
-
 # ============================================
 # Forecast result
 # ============================================

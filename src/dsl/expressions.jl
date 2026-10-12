@@ -6,8 +6,6 @@ Useful for models like Dynamic Nelson-Siegel where matrix entries are
 complex functions of parameters and external data.
 """
 
-export ParamExpr, MatrixExpr, build_dns_loadings
-
 """
     ParamExpr(params, data, expr)
 
@@ -76,7 +74,7 @@ Z = MatrixExpr(
 )
 ```
 """
-struct MatrixExpr
+struct MatrixExpr <: AbstractMatrixExpr
     params::Vector{SSMParameter{Float64}}
     data::NamedTuple
     builder::Function

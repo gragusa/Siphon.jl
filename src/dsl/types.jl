@@ -5,8 +5,6 @@ Type definitions for the state-space model DSL.
 These types form the intermediate representation (IR) for model specification.
 """
 
-export SSMParameter, SSMSpec, CovFree
-
 """
     SSMParameter{T<:Real}
 
@@ -66,13 +64,9 @@ end
 """
     MatrixElement
 
-Represents a single element of a state-space matrix.
-Can be:
-- Fixed value
-- Parameter reference
-- Expression involving parameters
+A single element of a state-space matrix: a `FixedValue` or a `ParameterRef`.
 """
-const MatrixElement = Union{FixedValue, ParameterRef, Expr}
+const MatrixElement = Union{FixedValue, ParameterRef}
 
 """
     SSMMatrixSpec
@@ -95,8 +89,16 @@ function SSMMatrixSpec(dims::Tuple{Int, Int})
     SSMMatrixSpec(dims, Dict{Tuple{Int, Int}, MatrixElement}(), FixedValue(0.0))
 end
 
-# Forward declaration for MatrixExpr (defined in expressions.jl)
-# We use a placeholder here that will be refined after expressions.jl is loaded
+"""
+    AbstractMatrixExpr
+
+Supertype of system matrices computed from parameters as a whole rather than
+cell by cell: `MatrixExpr` and `CovMatrixExpr`. A subtype `E` implements
+`build_from_expr(::E, θ::NamedTuple)` and
+`build_from_expr(::E, θ::AbstractVector, param_map::Dict{Symbol, Int})`, both
+returning the matrix.
+"""
+abstract type AbstractMatrixExpr end
 
 """
     SSMSpec
@@ -117,7 +119,7 @@ Complete specification of a state-space model.
 - `a1::Vector{MatrixElement}`: Initial state mean
 - `P1::SSMMatrixSpec`: Initial state covariance (finite part for exact diffuse)
 - `P1_inf::Union{Nothing,SSMMatrixSpec}`: Diffuse covariance (nothing = approximate diffuse)
-- `matrix_exprs::Dict{Symbol,Any}`: Expression-based matrices (for DNS, etc.)
+- `matrix_exprs::Dict{Symbol,AbstractMatrixExpr}`: Matrices computed from parameters as a whole (DNS loadings, full covariances)
 
 When `P1_inf` is not `nothing`, exact diffuse initialization is used:
 - `P1` becomes P1_star (finite part)
@@ -139,7 +141,7 @@ struct SSMSpec
     a1::Vector{MatrixElement}
     P1::SSMMatrixSpec
     P1_inf::Union{Nothing, SSMMatrixSpec}  # nothing = approximate, SSMMatrixSpec = exact diffuse
-    matrix_exprs::Dict{Symbol, Any}  # Maps :Z, :H, etc. to MatrixExpr objects
+    matrix_exprs::Dict{Symbol, AbstractMatrixExpr}  # :Z, :H, … → expression; overrides the SSMMatrixSpec field
 end
 
 # Convenience constructor without matrix_exprs or P1_inf (approximate diffuse)
@@ -158,7 +160,7 @@ function SSMSpec(name, n_states, n_obs, n_shocks, params, Z, H, T, R, Q, a1, P1)
         a1,
         P1,
         nothing,
-        Dict{Symbol, Any}()
+        Dict{Symbol, AbstractMatrixExpr}()
     )
 end
 
@@ -192,7 +194,7 @@ function SSMSpec(
         a1,
         P1,
         P1_inf,
-        Dict{Symbol, Any}()
+        Dict{Symbol, AbstractMatrixExpr}()
     )
 end
 
@@ -210,7 +212,7 @@ function SSMSpec(
         Q,
         a1,
         P1,
-        matrix_exprs::Dict{Symbol, Any}
+        matrix_exprs::AbstractDict{Symbol}
 )
     SSMSpec(
         name,

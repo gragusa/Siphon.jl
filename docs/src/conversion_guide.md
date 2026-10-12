@@ -402,3 +402,17 @@ Changed behavior:
   `[0.0]`.
 - `DynamicFactorModel(…; rng)` takes the random number generator for the starting
   loadings. Previously it always drew from the global RNG.
+
+## Module layout
+
+The `Siphon.DSL` submodule is gone. Model specification (templates, `custom_ssm`,
+matrix helpers, transformations, `optimize_ssm`, the EKF specification types) now lives
+in `Siphon` itself, with the same exported names.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `using Siphon.DSL` | `using Siphon` |
+| `Siphon.DSL.name` | `Siphon.name` |
+| `Siphon.DSL.build_kfparms`, `Siphon.DSL.build_initial_state`, `Siphon.DSL.param_index` | `Siphon.build_kfparms`, `Siphon.build_initial_state`, `Siphon.param_index` (not exported) |
+| A matrix element given as an `Expr` in an `SSMMatrixSpec` | a `MatrixExpr` for the whole matrix |
+| Any object with `params`, `builder` and `dims` fields passed as a matrix to `custom_ssm` | a `MatrixExpr` |

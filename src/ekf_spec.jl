@@ -20,9 +20,6 @@ later files dispatch on `EKFSpec` so the DSL surface (`build_transformation`,
 `build_initial_state`, `optimize_*`) is symmetric with the linear case.
 """
 
-using ..Siphon: AbstractEKFMeasurement, AbstractEKFJacobianMode, ADJacobian,
-                AnalyticJacobian, EKFParms
-
 # ============================================================================
 # MeasurementExpr
 # ============================================================================
@@ -85,7 +82,7 @@ Specification of an Extended-Kalman-Filter state-space model. Mirrors
 - `jacobian_mode::AbstractEKFJacobianMode`.
 - `H, T, R, Q, P1` — `SSMMatrixSpec`s (placeholder dims for `MatrixExpr`s).
 - `a1::Vector{MatrixElement}` — initial-state mean.
-- `matrix_exprs::Dict{Symbol,Any}` — expression-based system matrices.
+- `matrix_exprs::Dict{Symbol,AbstractMatrixExpr}` — expression-based system matrices.
 """
 struct EKFSpec{ME, JM <: AbstractEKFJacobianMode}
     name::Symbol
@@ -101,7 +98,7 @@ struct EKFSpec{ME, JM <: AbstractEKFJacobianMode}
     Q::SSMMatrixSpec
     a1::Vector{MatrixElement}
     P1::SSMMatrixSpec
-    matrix_exprs::Dict{Symbol, Any}
+    matrix_exprs::Dict{Symbol, AbstractMatrixExpr}
 end
 
 # ============================================================================

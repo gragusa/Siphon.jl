@@ -1,5 +1,5 @@
 """
-Tests for the DSL module: templates, custom_ssm, matrix helpers, MatrixExpr, and SSMLogDensity.
+Tests for model specification: templates, custom_ssm, matrix helpers, MatrixExpr, and SSMLogDensity.
 """
 
 using Test
@@ -596,8 +596,8 @@ end
     spec = local_level()
     θ = initial_values(spec)
 
-    kfparms = Siphon.DSL.build_kfparms(spec, θ)
-    a1, P1 = Siphon.DSL.build_initial_state(spec, θ)
+    kfparms = Siphon.build_kfparms(spec, θ)
+    a1, P1 = Siphon.build_initial_state(spec, θ)
     y = randn(1, 50)
 
     result = kalman_filter(kfparms, y, a1, P1)
@@ -1000,11 +1000,11 @@ end
     @test !SSMParameter(:x; init = 1.0, lower = 0.0).default_init
 
     # A user-given init is used as given; a defaulted one is rescaled
-    init = Siphon.DSL._initial_constrained(local_level(var_obs = (init = 5.0,)), nothing, y)
+    init = Siphon._initial_constrained(local_level(var_obs = (init = 5.0,)), nothing, y)
     @test init[1] == 5.0
     @test init[2] ≈ var(diff(vec(y)))
     # Defaults keep the template's ratios between variances
-    init = Siphon.DSL._initial_constrained(local_linear_trend(), (var_slope = 2.0,), y)
+    init = Siphon._initial_constrained(local_linear_trend(), (var_slope = 2.0,), y)
     @test init[2] / init[1] ≈ 0.01
     @test init[3] == 2.0
 
@@ -1033,7 +1033,7 @@ end
     # Every spec-based path uses the diffuse filter. KFAS gives −632.55.
     @test ssm_loglik(spec, θ, y) ≈ exact
     @test ssm_loglik(spec, θ, y) ≈ -632.55 atol = 0.01
-    @test Siphon.DSL._spec_loglik(spec, θ, y, :auto) ≈ exact
+    @test Siphon._spec_loglik(spec, θ, y, :auto) ≈ exact
     @test objective_function(spec, y)([15099.0, 1469.1]) ≈ -exact
     filt = kalman_filter(p, y, [0.0], zeros(1, 1), ones(1, 1))
     @test predict(spec, θ, y) ≈ predicted_observations(filt)
@@ -1056,12 +1056,12 @@ end
     @test uses_exact_diffuse(arma(1, 1; diffuse = :exact))
     @test !uses_exact_diffuse(arma(1, 1))
     θa = (φ1 = 0.5, θ1 = 0.2, var = 1.0)
-    @test Siphon.DSL.build_initial_state(arma(1, 1; diffuse = false), θa)[2] == 1e4 * I(2)
+    @test Siphon.build_initial_state(arma(1, 1; diffuse = false), θa)[2] == 1e4 * I(2)
 
     # A cov_free initial covariance is built from its parameters
     cs = custom_ssm(Z = [1.0], H = [1.0], T = [1.0], R = [1.0], Q = [1.0],
         a1 = [0.0], P1 = cov_free(1, :P1; init_σ = 30.0))
-    @test Siphon.DSL.build_initial_state(cs, (P1_σ_1 = 30.0,))[2] ≈ [900.0;;]
+    @test Siphon.build_initial_state(cs, (P1_σ_1 = 30.0,))[2] ≈ [900.0;;]
 end
 
 @testset "optimize_ssm_with_stderr uses the delta method" begin
@@ -1099,4 +1099,28 @@ end
     θ0 = initial_values(spec)
     θc, _ = transform_to_constrained(spec, transform_to_unconstrained(spec, θ0))
     @test collect(θc) ≈ θ0
+end
+
+@testset "matrix expressions share a supertype" begin
+    @test MatrixExpr <: Siphon.AbstractMatrixExpr
+    @test CovMatrixExpr <: Siphon.AbstractMatrixExpr
+    @test !(Expr <: Siphon.MatrixElement)
+
+    spec = dns_model([3, 12, 60])
+    @test spec.matrix_exprs isa Dict{Symbol, Siphon.AbstractMatrixExpr}
+    @test spec.matrix_exprs[:Z] isa MatrixExpr
+    spec = custom_ssm(Z = [1.0], H = [FreeParam(:h, init = 1.0, lower = 0.0)],
+        T = [1.0], R = [1.0], Q = cov_free(1, :Q), a1 = [0.0], P1 = [1e7])
+    @test spec.matrix_exprs[:Q] isa CovMatrixExpr
+
+    # Only a MatrixExpr is read as one; a look-alike is an ordinary input.
+    lookalike = (params = SSMParameter{Float64}[], builder = (θ, d) -> ones(1, 1),
+        dims = (1, 1))
+    @test_throws MethodError custom_ssm(Z = lookalike, H = [1.0], T = [1.0],
+        R = [1.0], Q = [1.0], a1 = [0.0], P1 = [1e7])
+end
+
+@testset "single export list" begin
+    @test !isdefined(Siphon, :DSL)
+    @test all(n -> isdefined(Siphon, n), names(Siphon))
 end

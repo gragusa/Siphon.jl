@@ -160,8 +160,8 @@ Siphon.crosslag_covs
 For more control, use `optimize_ssm` directly:
 
 ```@docs
-Siphon.DSL.optimize_ssm
-Siphon.DSL.optimize_ssm_with_stderr
+Siphon.optimize_ssm
+Siphon.optimize_ssm_with_stderr
 ```
 
 ## Profile EM for DNS Models
@@ -229,23 +229,23 @@ For `tinitx = 1` (MARSS's other mode), `a1 = x0` and `P1 = V0` directly.
 ## Parameter Transformations
 
 ```@docs
-Siphon.DSL.build_transformation
-Siphon.DSL.transform_to_constrained
-Siphon.DSL.transform_to_unconstrained
+Siphon.build_transformation
+Siphon.transform_to_constrained
+Siphon.transform_to_unconstrained
 ```
 
 ## Log-Density Interface
 
 ```@docs
-Siphon.DSL.SSMLogDensity
-Siphon.DSL.logdensity
+Siphon.SSMLogDensity
+Siphon.logdensity
 ```
 
 ## Prior Distributions
 
 ```@docs
-Siphon.DSL.FlatPrior
-Siphon.DSL.NormalPrior
-Siphon.DSL.InverseGammaPrior
-Siphon.DSL.CompositePrior
+Siphon.FlatPrior
+Siphon.NormalPrior
+Siphon.InverseGammaPrior
+Siphon.CompositePrior
 ```

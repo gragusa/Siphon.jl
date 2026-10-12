@@ -9,12 +9,6 @@ Supports both:
 - NamedTuple parameters (accessed by name, from TransformVariables)
 """
 
-export CovMatrixExpr
-
-using LinearAlgebra
-using TransformVariables
-using TransformVariables: corr_cholesky_factor
-
 # ============================================
 # Transformation Builder
 # ============================================
@@ -86,7 +80,7 @@ Represents Σ = D * Corr * D where:
 - `corr_param_names::Vector{Symbol}`: Names of correlation parameters (unconstrained)
 - `var_init::Vector{Float64}`: Initial variance values (to avoid sqrt/square roundoff)
 """
-struct CovMatrixExpr
+struct CovMatrixExpr <: AbstractMatrixExpr
     n::Int
     σ_param_names::Vector{Symbol}
     corr_param_names::Vector{Symbol}
@@ -244,34 +238,6 @@ function evaluate_element(elem::ParameterRef, θ::NamedTuple)
     getproperty(θ, elem.name)
 end
 
-function evaluate_element(elem::Expr, θ::NamedTuple)
-    evaluate_expr(elem, θ)
-end
-
-function evaluate_expr(ex::Expr, θ::NamedTuple)
-    if ex.head == :call
-        func = ex.args[1]
-        args = [evaluate_expr(a, θ) for a in ex.args[2:end]]
-        return eval(Expr(:call, func, args...))
-    elseif ex.head == :ref
-        error("Array indexing not supported in parameter expressions")
-    else
-        return eval(ex)
-    end
-end
-
-function evaluate_expr(sym::Symbol, θ::NamedTuple)
-    if haskey(θ, sym)
-        return getproperty(θ, sym)
-    else
-        return eval(sym)
-    end
-end
-
-function evaluate_expr(val::Number, θ::NamedTuple)
-    val
-end
-
 # ============================================
 # Building KFParms and Initial State
 # ============================================
@@ -311,7 +277,7 @@ end
 
 Build a matrix from a MatrixExpr using NamedTuple parameters.
 """
-function build_from_expr(expr, θ::NamedTuple)
+function build_from_expr(expr::MatrixExpr, θ::NamedTuple)
     T = _eltype(θ)
     # Create a Dict for the builder function (it expects Dict)
     θ_dict = Dict{Symbol, T}()
@@ -389,34 +355,6 @@ function evaluate_element(elem::ParameterRef, theta::AbstractVector, param_map::
     theta[idx]
 end
 
-function evaluate_element(elem::Expr, theta::AbstractVector, param_map::Dict)
-    evaluate_expr(elem, theta, param_map)
-end
-
-function evaluate_expr(ex::Expr, theta::AbstractVector, param_map::Dict)
-    if ex.head == :call
-        func = ex.args[1]
-        args = [evaluate_expr(a, theta, param_map) for a in ex.args[2:end]]
-        return eval(Expr(:call, func, args...))
-    elseif ex.head == :ref
-        error("Array indexing not supported in parameter expressions")
-    else
-        return eval(ex)
-    end
-end
-
-function evaluate_expr(sym::Symbol, theta::AbstractVector, param_map::Dict)
-    if haskey(param_map, sym)
-        return theta[param_map[sym]]
-    else
-        return eval(sym)
-    end
-end
-
-function evaluate_expr(val::Number, theta::AbstractVector, param_map::Dict)
-    val
-end
-
 """
     build_kfparms(spec::SSMSpec, theta::AbstractVector)
 
@@ -450,7 +388,7 @@ function build_matrix_or_expr(
 end
 
 function build_from_expr(
-        expr,
+        expr::MatrixExpr,
         theta::AbstractVector{T},
         param_map::Dict{Symbol, Int}
 ) where {T}

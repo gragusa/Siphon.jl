@@ -4,11 +4,6 @@
 Syntactic sugar for common state-space matrix structures.
 """
 
-export diag_free, scalar_free, identity_mat, zeros_mat, ones_mat
-export lower_triangular_free, symmetric_free
-export cov_free
-export block_diag
-
 """
     diag_free(names; init=1.0, lower=0.0, upper=Inf)
     diag_free(n, prefix; init=1.0, lower=0.0, upper=Inf)
@@ -343,7 +338,7 @@ _block_to_matrix(x::AbstractVector) = reshape(collect(x), :, 1)
 _block_to_matrix(x::Real) = fill(Float64(x), 1, 1)
 _block_to_matrix(x::FreeParam) = fill(x, 1, 1)
 function _block_to_matrix(x)
-    if _is_cov_free(x) || _is_matrix_expr(x)
+    if x isa CovFree || x isa MatrixExpr
         throw(ArgumentError(
             "block_diag does not yet support CovFree or MatrixExpr blocks; " *
             "got $(typeof(x)). Place these matrices directly in custom_ssm instead."))

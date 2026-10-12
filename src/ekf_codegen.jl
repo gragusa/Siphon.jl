@@ -168,7 +168,7 @@ function custom_ekf(; measurement,
         name::Symbol = :CustomEKF)
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
 
     # Process system matrices (reuses linear DSL machinery)
     H_spec, H_dims = _process_matrix_input(:H, H, params, param_set, matrix_exprs)

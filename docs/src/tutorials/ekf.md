@@ -289,7 +289,7 @@ their smoothed counterparts:
 # Build EKFParms at the optimum
 θ̂ = result.θ
 p̂ = build_ekfparms(spec, θ̂)
-a1, P1 = build_initial_state(spec, θ̂)
+a1, P1 = Siphon.build_initial_state(spec, θ̂)
 
 ws = EKFWorkspace(p̂.measurement, p̂.jacobian_mode, p̂.H, p̂.T, p̂.R, p̂.Q,
                   a1, P1, n)

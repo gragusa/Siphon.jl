@@ -3,9 +3,15 @@ module Siphon
 using StaticArrays
 using ForwardDiff
 using LinearAlgebra
+using LogDensityProblems: LogDensityProblems
+using Optimization: Optimization, OptimizationFunction, OptimizationProblem
+using OptimizationOptimJL: Optim
 using Random: Random, AbstractRNG, randn!
 using RecipesBase
-using SpecialFunctions: erfcinv
+using SpecialFunctions: erfcinv, loggamma
+using Statistics: mean, var
+using TransformVariables
+using TransformVariables: corr_cholesky_factor
 
 include("accessors.jl")
 include("types.jl")
@@ -38,14 +44,25 @@ export prediction_errors, prediction_errors_cov
 export kalman_gains, loglikelihood
 export smoothed_states, smoothed_states_cov, crosslag_covs
 
-# Include DSL submodule (before predict.jl which depends on SSMSpec)
-include("dsl/dsl.jl")
-using .DSL
+# Model specification: parameters, matrix specs, templates, estimation
+include("dsl/types.jl")
+include("dsl/expressions.jl")
+include("dsl/codegen.jl")
+include("dsl/templates.jl")
+include("dsl/builder.jl")
+include("dsl/matrix_helpers.jl")
+include("dsl/bayesian.jl")
+include("dsl/optimization.jl")
 
-# Prediction and forecasting (depends on DSL types)
+# EKF model specification (builds on the specification layer above)
+include("ekf_spec.jl")
+include("ekf_codegen.jl")
+include("ekf_optim.jl")
+
+# Prediction and forecasting
 include("predict.jl")
 
-# In-place filter/smoother for large models (depends on DSL types)
+# In-place filter/smoother for large models
 include("inplace.jl")
 include("em_spec.jl")
 
@@ -77,7 +94,7 @@ export measurement, measurement!, measurement_jacobian, measurement_jacobian!
 export EKFWorkspace
 export predicted_observations, measurement_jacobians
 
-# Re-export DSL components
+# Model specification
 export SSMParameter, SSMSpec, FixedValue, ParameterRef, SSMMatrixSpec
 export param_names, n_params, initial_values, param_bounds
 export uses_exact_diffuse
@@ -109,7 +126,7 @@ export FlatPrior, NormalPrior, NormalPriorVec, InverseGammaPrior, CompositePrior
 # Optimization (Optimization.jl integration)
 export optimize_ssm, optimize_ssm_with_stderr
 
-# EKF DSL surface
+# EKF model specification
 export EKFSpec, MeasurementExpr, custom_ekf
 export build_measurement, build_ekfparms, build_nonlinear_state_space
 export EKFLogDensity

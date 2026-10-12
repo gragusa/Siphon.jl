@@ -7,12 +7,6 @@ Provides convenient functions to optimize SSM parameters using various backends
 (L-BFGS, Newton, etc.) with automatic differentiation.
 """
 
-using Optimization
-using OptimizationOptimJL
-using ForwardDiff
-
-export optimize_ssm
-
 """
     optimize_ssm(spec, y; method=Optim.LBFGS(), kwargs...)
 
