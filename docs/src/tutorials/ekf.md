@@ -118,7 +118,7 @@ ll_new = kalman_filter!(ws, y)
 ### 3. DSL API — `EKFSpec`, `custom_ekf`, `optimize_ssm`
 
 `EKFSpec` is the nonlinear-measurement counterpart to `SSMSpec`. System
-matrices use the same DSL helpers (`diag_free`, `cov_free`, `identity_mat`,
+matrices use the same DSL helpers (`diag_free`, `cov_free`, `I`,
 `MatrixExpr`); only the measurement is new.
 
 ```julia
@@ -127,7 +127,7 @@ spec = custom_ekf(
     jacobian_mode = AnalyticJacobian(),
     H = diag_free(p, :σh; init=0.04, lower=1e-8),
     T = diag_free(m, :ψ; init=0.5, lower=-0.99, upper=0.99),
-    R = identity_mat(m),
+    R = Matrix(1.0I, m, m),
     Q = diag_free(m, :σq; init=0.01, lower=1e-8),
     a1 = zeros(m),
     P1 = 10.0 .* Matrix(I, m, m),
@@ -263,7 +263,7 @@ spec = custom_ekf(
     jacobian_mode = AnalyticJacobian(),
     H  = diag_free(p_obs,  :σh2; init=0.05^2, lower=1e-10),
     T  = diag_free(m_state, :ψ;  init=0.9,    lower=-0.999, upper=0.999),
-    R  = identity_mat(m_state),
+    R  = Matrix(1.0I, m_state, m_state),
     Q  = diag_free(m_state, :σq2; init=0.04,  lower=1e-10),
     a1 = zeros(m_state),
     P1 = 1.0 .* Matrix(I, m_state, m_state),

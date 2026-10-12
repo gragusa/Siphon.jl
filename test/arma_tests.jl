@@ -429,7 +429,7 @@ end
 
     spec_custom = custom_ssm(
         Z = [1.0 0.0],
-        H = zeros_mat(1, 1),
+        H = [0.0;;],
         T = T_mat,
         R = R_mat,
         Q = reshape([FreeParam(:var, init = 1.0, lower = 0.0)], 1, 1),

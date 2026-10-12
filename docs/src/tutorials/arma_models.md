@@ -129,7 +129,7 @@ r = max(p, q + 1)
 # Using helper functions
 spec_helpers = custom_ssm(
     Z = [1.0 0.0 0.0],                    # First state observed
-    H = zeros_mat(1, 1),                   # No observation noise
+    H = [0.0;;],                   # No observation noise
     T = [FreeParam(:φ1, init=0.5, lower=-0.99, upper=0.99)  1.0  0.0;
          FreeParam(:φ2, init=0.2, lower=-0.99, upper=0.99)  0.0  1.0;
          0.0                                                 0.0  0.0],
@@ -138,7 +138,7 @@ spec_helpers = custom_ssm(
          FreeParam(:θ2, init=0.1)],
     Q = scalar_free(:var; init=1.0),
     a1 = [0.0, 0.0, 0.0],
-    P1 = 1e7 * identity_mat(3),
+    P1 = 1e7 * Matrix(1.0I, 3, 3),
     name = :ARMA22_helpers
 )
 ```

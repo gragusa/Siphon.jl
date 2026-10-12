@@ -87,6 +87,11 @@ Other author answers, verbatim:
   - `identification=`: **remove from the docs**. Describe what the EM identifies instead (factors up to rotation). Implementing the option can be a separate chunk later.
   - `innovation_cov(dfm)` → **`factor_innovation_cov`**; `state_cov(dfm)` also works through `system_matrices`.
 
+- **CHUNK-022** (2026-10-13, author's answers):
+  - **Template keywords:** `Real` (fixed) or `FreeParam` (free). Every `FreeParam` field except the type is optional: `FreeParam(; init, lower, upper)` in a template takes the template's name and default bounds/init for any unset field. A parameter group (ARMA `ar`/`ma`, DFM loadings, DNS `T`/`Q`/`H`) takes one `Real`/`FreeParam` applied to every member, or a vector elementwise. All `*_init` keywords and the `:free`/NamedTuple forms go. In `custom_ssm`, `FreeParam` needs a name; unset bounds mean unbounded, and an unset init is a default inside the bounds, flagged like a template default.
+  - **Naming:** keep the `var_` prefix for variances (`var_obs`, `var_level`, …). Full covariances use `<prefix>_sd_<i>` and `<prefix>_corr_<i>`. DNS `H_i` become `var_obs_i`, and the DNS diagonal `Q_L/Q_S/Q_C` become `var_L/var_S/var_C`.
+  - **Split:** the template keyword migration is its own chunk (CHUNK-040).
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -749,9 +754,28 @@ Other author answers, verbatim:
     - `CovFree.init_σ::Float64` rejecting `Int`;
     - `EKFSpec.n_obs` being derived from H without checking it against the measurement.
   - Give `SSMSpec`/`EKFSpec` an abstract supertype, so the accessors copied at `ekf_spec.jl:111-155` are defined once.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-005, CHUNK-021
+- **Cluster**: dsl
+- **Notes**:
+  - **FreeParam:** fields `(name, lower, upper, init)`, all `Union{…, Nothing}`; positional order matches `SSMParameter`. `SSMParameter(::FreeParam)` resolves it (name required; unset bounds ±Inf; unset init via `_default_init`, flagged `default_init`). `@P` and `const P` removed.
+  - **SSMParameter:** requires `lower < upper` and a finite `init` strictly inside the bounds (`_check_init`). Keyword `init` now defaults to `nothing` → `_default_init(lower, upper)` with `default_init = true`. `parse_param_spec` falls back to `_default_init` when the template default lies outside user-given bounds. CHUNK-040 replaces `parse_param_spec`.
+  - **Duplicates:** `_add_param!` is used for every parameter (FreeParam cells, CovFree, MatrixExpr, MeasurementExpr). A repeated name must have identical `(lower, upper, init)`; otherwise it throws `ArgumentError`. Templates still push directly, guarded by `param_set`.
+  - **`I`/Diagonal:** `custom_ssm` sizes `UniformScaling` (m from `a1`; p from `Z`; r from `R`). `custom_ekf` sizes `T`, `R`, `Q` and `P1`; `H = I` throws.
+  - **Helpers:** removed `identity_mat`, `zeros_mat`, `ones_mat` and `diag_fixed`; `companion_mat` → `companion_free` (docstring fixed). `cov_free(…; init_sd::Real)`; `CovFree.init_sd` is validated (> 0) and `n ≥ 1`.
+  - **Names:** `<prefix>_sd_i` in place of `<prefix>_σ_i` (cov_free, DFM correlated H, DNS full Q); DNS `H_i`/`H` → `var_obs_i`/`var_obs`; DNS diagonal `Q_L/S/C` → `var_L/S/C`. Internal `CovMatrixExpr.σ_param_names` field left as is.
+  - **AbstractSSMSpec** (exported, in `dsl/types.jl`): supertype of `SSMSpec`/`EKFSpec`. Introspection, `build_transformation` and `transform_to_*` are defined once on it, and the EKF copies are deleted.
+  - **EKF n_obs:** `custom_ekf` evaluates the measurement at the initial θ, `a1` and t = 1, and throws `DimensionMismatch` if its length ≠ size of H.
+  - **Docs:** custom_models.md FreeParam/helper sections rewritten (this also fixed the wrong `scalar_free(3,…)`, `selection_mat([1,3],4)` and companion layout examples); api/{matrix_helpers,dsl}.md; ekf.md; estimation_methods.md; transformations.md; examples/dns_estimation_dsl.jl comments. Conversion guide: new sections "Free parameters and matrix helpers" and "Parameter names".
+  - **Tests:** dsl_tests gains "custom_ssm accepts I and Diagonal", "FreeParam fields and defaults", "cov_free names and init_sd" and "spec supertype"; ekf_tests gains "custom_ekf checks the measurement length against H".
+
+### CHUNK-040: migrate-template-keywords
+- **Kind**: `implement`
+- **Description**: Move every template (`local_level`, `local_linear_trend`, `ar1`, `arma`, `dynamic_factor`, `dns_model`) to the CHUNK-022 keyword convention: `Real` = fixed, `FreeParam` (optional name/bounds/init filled from template defaults) = free, groups take one value or a vector. Remove `ParamSpec`/`parse_param_spec` and all `*_init` keywords; keep the `default_init` flag for unset inits. Update tests, docs, examples, and the conversion guide.
+- **Status**: `not-started`
+- **Breaking**: yes
+- **Depends on**: CHUNK-022
 - **Cluster**: dsl
 - **Notes**:
 
@@ -938,12 +962,12 @@ Other author answers, verbatim:
 - 2026-10-12 CHUNK-019 (consolidate-em) → next: CHUNK-020
 - 2026-10-12 CHUNK-020 (integrate-dfm) → next: CHUNK-021
 - 2026-10-12 CHUNK-021 (restructure-dsl-layering-and-exports) → next: CHUNK-022
+- 2026-10-13 CHUNK-022 (unify-dsl-conventions) → next: CHUNK-040
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - `docs/src/index.md:55` calls `local_level(var_obs_init=225.0, var_level_init=100.0)`; those keywords don't exist (the template takes `var_obs=(init=…,)`). Fix in CHUNK-032.
-- CHUNK-022 (DSL conventions) must keep `SSMParameter.default_init` or an equivalent "init was defaulted" signal, and should decide whether `FreeParam` without an `init` gets it too. Today `FreeParam` defaults `init = 0.0`, which sits on the bound for a variance.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.

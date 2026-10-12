@@ -92,9 +92,11 @@ function parse_param_spec(
         default_lower,
         default_upper
 )
-    init = get(spec, :init, default_init)
     lower = get(spec, :lower, default_lower)
     upper = get(spec, :upper, default_upper)
+    # The template default may fall outside user-given bounds.
+    init = get(spec, :init,
+        lower < default_init < upper ? default_init : _default_init(lower, upper))
     (
         true,
         SSMParameter(name; lower = lower, upper = upper, init = init,
@@ -573,7 +575,7 @@ spec = dynamic_factor(5, 2; factor_lags=1, loading_lags=2)
 - `λl_i_j`: Loadings for lag l (l = 1, ..., loading_lags), all free
 - `φ_i_l`: AR coefficient for factor i at lag l (l = 1, ..., factor_lags)
 - `var_obs_i`: Observation error variances (if correlated_errors=false)
-- `H_σ_i`, `H_corr_i`: Covariance parameters (if correlated_errors=true, σ for D*Corr*D)
+- `H_sd_i`, `H_corr_i`: Standard deviations and correlation parameters of H (if correlated_errors=true)
 - `var_factor_i`: Factor innovation variances
 """
 function dynamic_factor(
@@ -664,14 +666,13 @@ function dynamic_factor(
     # ==========================================
     if correlated_errors
         # Full covariance matrix using CovMatrixExpr (D*Corr*D parameterization)
-        # Note: CovMatrixExpr uses std dev σ parameters (kept as-is per design decision)
         prefix = :H
         n = n_obs
 
-        # Create σ parameters (positive std devs for D*Corr*D)
+        # Standard deviation parameters (positive, for D*Corr*D)
         σ_param_names = Symbol[]
         for i in 1:n
-            pname = Symbol("$(prefix)_σ_$i")
+            pname = Symbol("$(prefix)_sd_$i")
             if !(pname in param_set)
                 push!(
                     params,
@@ -845,11 +846,11 @@ where:
   - `:diagonal` - Diagonal AR(1) (3 parameters: `T_L`, `T_S`, `T_C`)
   - `:ar1` - Single AR coefficient for all factors (1 parameter: `φ`)
 - `H_structure::Symbol=:diagonal`: Observation error structure
-  - `:diagonal` - Diagonal (p parameters: `H_1`, ..., `H_p`)
-  - `:scalar` - Single variance for all (1 parameter: `H`)
+  - `:diagonal` - Diagonal (p variances: `var_obs_1`, ..., `var_obs_p`)
+  - `:scalar` - Single variance for all (1 parameter: `var_obs`)
 - `Q_structure::Symbol=:full`: State covariance structure
-  - `:full` - Full 3×3 covariance via Cholesky (6 parameters)
-  - `:diagonal` - Diagonal (3 parameters: `Q_L`, `Q_S`, `Q_C`)
+  - `:full` - Full 3×3 covariance (6 parameters: standard deviations `Q_sd_L`, `Q_sd_S`, `Q_sd_C` and correlation parameters `Q_corr_1`, …, `Q_corr_3`)
+  - `:diagonal` - Diagonal (3 variances: `var_L`, `var_S`, `var_C`)
 - `λ_init`, `λ_lower`, `λ_upper`: Decay parameter settings
 - `T_init`: Initial value for T diagonal elements (scalar or 3-vector)
 - `Q_init`: Initial value for Q variances (scalar or 3-vector)
@@ -1036,7 +1037,7 @@ function _build_dns_H_spec(
     if structure == :diagonal
         # Diagonal observation variances
         for i in 1:p
-            pname = Symbol("H_$i")
+            pname = Symbol("var_obs_$i")
             init_val = H_init isa Real ? H_init : H_init[i]
             push!(params, SSMParameter(pname; init = init_val, lower = 0.0, upper = Inf))
             push!(param_set, pname)
@@ -1047,15 +1048,15 @@ function _build_dns_H_spec(
         push!(
             params,
             SSMParameter(
-                :H;
+                :var_obs;
                 init = H_init isa Real ? H_init : H_init[1],
                 lower = 0.0,
                 upper = Inf
             )
         )
-        push!(param_set, :H)
+        push!(param_set, :var_obs)
         for i in 1:p
-            H.elements[(i, i)] = ParameterRef(:H)
+            H.elements[(i, i)] = ParameterRef(:var_obs)
         end
     else
         throw(ArgumentError("H_structure must be :diagonal or :scalar, got :$structure"))
@@ -1075,12 +1076,12 @@ function _build_dns_Q_spec(structure::Symbol, Q_init, params, param_set, matrix_
         prefix = :Q
         n = 3
 
-        # Create σ parameters (std devs) and store original variances
+        # Standard deviation parameters; the variances are kept as var_init
         σ_param_names = Symbol[]
         var_init = Float64[]
         factor_labels = [:L, :S, :C]
         for (i, fl) in enumerate(factor_labels)
-            pname = Symbol("Q_σ_$fl")
+            pname = Symbol("Q_sd_$fl")
             var_val = Q_init isa Real ? Float64(Q_init) : Float64(Q_init[i])
             init_val = sqrt(var_val)
             push!(params, SSMParameter(pname; init = init_val, lower = 0.0, upper = Inf))
@@ -1104,7 +1105,7 @@ function _build_dns_Q_spec(structure::Symbol, Q_init, params, param_set, matrix_
 
     elseif structure == :diagonal
         # Diagonal variances
-        factor_names = [:Q_L, :Q_S, :Q_C]
+        factor_names = [:var_L, :var_S, :var_C]
         for (i, fname) in enumerate(factor_names)
             init_val = Q_init isa Real ? Q_init : Q_init[i]
             push!(params, SSMParameter(fname; init = init_val, lower = 0.0, upper = Inf))

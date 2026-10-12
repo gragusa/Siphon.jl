@@ -5,6 +5,7 @@ This page documents the domain-specific language for model specification and pre
 ## Core Types
 
 ```@docs
+Siphon.AbstractSSMSpec
 Siphon.SSMParameter
 Siphon.SSMSpec
 Siphon.FixedValue

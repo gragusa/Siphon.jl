@@ -43,8 +43,8 @@ println("\n=== Model Specifications ===")
 spec_diag = dns_model(
     maturities;
     T_structure = :diagonal,  # 3 params: T_L, T_S, T_C
-    H_structure = :diagonal,  # p params: H_1, ..., H_p
-    Q_structure = :diagonal,  # 3 params: Q_L, Q_S, Q_C
+    H_structure = :diagonal,  # p params: var_obs_1, ..., var_obs_p
+    Q_structure = :diagonal,  # 3 params: var_L, var_S, var_C
     λ_init = 0.06,
     T_init = 0.95,
     Q_init = 0.01,
@@ -59,7 +59,7 @@ spec_full = dns_model(
     maturities;
     T_structure = :full,      # 9 params: T_1_1, T_1_2, ..., T_3_3
     H_structure = :diagonal,  # p params
-    Q_structure = :full,      # 6 params (via Cholesky): Q_σ_L, Q_σ_S, Q_σ_C, Q_corr_1, Q_corr_2, Q_corr_3
+    Q_structure = :full,      # 6 params (via Cholesky): Q_sd_L, Q_sd_S, Q_sd_C, Q_corr_1, Q_corr_2, Q_corr_3
     λ_init = 0.06,
     T_init = 0.95,
     Q_init = 0.01,

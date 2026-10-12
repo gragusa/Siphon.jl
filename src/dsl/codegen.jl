@@ -14,9 +14,9 @@ Supports both:
 # ============================================
 
 """
-    build_transformation(spec::SSMSpec)
+    build_transformation(spec::AbstractSSMSpec)
 
-Build a TransformVariables transformation from an SSMSpec.
+Build a TransformVariables transformation from a model specification.
 
 Returns a transformation that maps ℝⁿ → NamedTuple with the parameter names
 and appropriate constraints (positive for variances, bounded for others).
@@ -25,13 +25,13 @@ and appropriate constraints (positive for variances, bounded for others).
 ```julia
 spec = local_level()
 t = build_transformation(spec)
-# t transforms ℝ² → (σ_obs = ..., σ_level = ...)
+# t transforms ℝ² → (var_obs = ..., var_level = ...)
 
 θ_nt = transform(t, randn(2))
 # θ_nt is a NamedTuple with positive values
 ```
 """
-function build_transformation(spec::SSMSpec)
+function build_transformation(spec::AbstractSSMSpec)
     transforms = [_param_to_transform(p) for p in spec.params]
     names = Tuple(p.name for p in spec.params)
     as(NamedTuple{names}(Tuple(transforms)))

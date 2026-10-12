@@ -139,10 +139,10 @@ spec = custom_ssm(
     T = [FreeParam(:φ_L, init=0.99, lower=0.0, upper=0.9999) 0.0 0.0;
          0.0 FreeParam(:φ_S, init=0.99, lower=0.0, upper=0.9999) 0.0;
          0.0 0.0 FreeParam(:φ_C, init=0.99, lower=0.0, upper=0.9999)],
-    R = identity_mat(3),
+    R = I,
     Q = diag_free([:var_L, :var_S, :var_C], init=0.01),
     a1 = [0.0, 0.0, 0.0],
-    P1 = 1e4 * identity_mat(3)
+    P1 = 1e4I
 )
 ```
 """

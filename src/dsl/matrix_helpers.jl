@@ -73,53 +73,6 @@ function scalar_free(name::Symbol; init = 1.0, lower = 0.0, upper = Inf)
 end
 
 """
-    identity_mat(n)
-
-Create an n×n identity matrix (fixed values).
-
-# Example
-```julia
-R = identity_mat(3)  # 3×3 identity
-```
-"""
-identity_mat(n::Int) = Matrix{Float64}(LinearAlgebra.I, n, n)
-
-"""
-    zeros_mat(m, n=m)
-
-Create an m×n zero matrix.
-"""
-zeros_mat(m::Int, n::Int = m) = zeros(Float64, m, n)
-
-"""
-    ones_mat(m, n=m)
-
-Create an m×n matrix of ones.
-"""
-ones_mat(m::Int, n::Int = m) = ones(Float64, m, n)
-
-"""
-    diag_fixed(values)
-
-Create a diagonal matrix with fixed values on the diagonal.
-
-# Example
-```julia
-Q = diag_fixed([0.1, 0.01, 0.001])  # Fixed 3×3 diagonal
-```
-"""
-function diag_fixed(values::AbstractVector{<:Real})
-    n = length(values)
-    mat = zeros(Float64, n, n)
-    for i in 1:n
-        mat[i, i] = values[i]
-    end
-    mat
-end
-
-diag_fixed(value::Real, n::Int) = diag_fixed(fill(value, n))
-
-"""
     lower_triangular_free(n, prefix; init=0.0, lower=-Inf, upper=Inf)
 
 Create a lower triangular matrix with free parameters below and on the diagonal.
@@ -229,19 +182,20 @@ function selection_mat(m::Int, r::Int)
 end
 
 """
-    companion_mat(n)
+    companion_free(n, prefix; init=0.5, lower=-Inf, upper=Inf)
 
-Create an n×n companion matrix structure (for AR(n) models).
-Returns a matrix with 1s on the superdiagonal and FreeParams in the first column.
+Create an n×n companion matrix for an AR(n) transition: free parameters
+`prefix_1`, …, `prefix_n` in the first column, ones on the superdiagonal, and
+zeros elsewhere. The parameter for lag i starts at `init / i`.
 
 # Example
 ```julia
-T = companion_mat(2, :φ)  # AR(2) transition
+T = companion_free(2, :φ)  # AR(2) transition
 # [FreeParam(:φ_1)  1.0]
 # [FreeParam(:φ_2)  0.0]
 ```
 """
-function companion_mat(n::Int, prefix::Symbol; init = 0.5, lower = -Inf, upper = Inf)
+function companion_free(n::Int, prefix::Symbol; init = 0.5, lower = -Inf, upper = Inf)
     mat = Matrix{Any}(undef, n, n)
     fill!(mat, 0.0)
 
@@ -275,7 +229,7 @@ fixed values from each block.
 Each `block` may be:
 
 - An `AbstractMatrix` of `Real`, `FreeParam`, or mixed (`Matrix{Any}` from
-  helpers like [`diag_free`](@ref), [`companion_mat`](@ref),
+  helpers like [`diag_free`](@ref), [`companion_free`](@ref),
   [`symmetric_free`](@ref), [`lower_triangular_free`](@ref)).
 - An `AbstractVector` (treated as a column-vector block of size `length × 1`).
 - A `Real` (treated as a 1×1 fixed block).
@@ -301,7 +255,7 @@ Q = block_diag(diag_free([:q1, :q2]), [3.0;;])
 # 3×3, free on (1,1)/(2,2), fixed 3.0 on (3,3), zeros elsewhere
 
 # T as block-diagonal: AR(2) companion plus a stationary AR(1)
-T = block_diag(companion_mat(2, :φ),
+T = block_diag(companion_free(2, :φ),
                FreeParam(:ρ; init=0.9, lower=-0.99, upper=0.99))
 
 # Rectangular Z: independent loadings for two factor groups
@@ -349,31 +303,32 @@ function _block_to_matrix(x)
 end
 
 """
-    cov_free(n, prefix; init_σ=1.0)
+    cov_free(n, prefix; init_sd=1.0)
 
 Create a full n×n positive definite covariance matrix specification.
 
 Uses Σ = D * Corr * D decomposition where:
-- D = Diagonal(σ) with n standard deviation parameters (positive, named `prefix_σ_1`, etc.)
-- Corr = L'L from `corr_cholesky_factor(n)` with n(n-1)/2 correlation parameters (unconstrained)
+- D = Diagonal(sd) with n positive standard deviation parameters `prefix_sd_1`, …
+- Corr = L'L from `corr_cholesky_factor(n)` with n(n-1)/2 unconstrained
+  correlation parameters `prefix_corr_1`, …
 
 Total parameters: n + n(n-1)/2 = n(n+1)/2
 
 # Arguments
 - `n::Int`: Matrix dimension
 - `prefix::Symbol`: Prefix for parameter names
-- `init_σ::Float64=1.0`: Initial value for standard deviation parameters
+- `init_sd::Real=1.0`: Initial value for the standard deviation parameters
 
 # Example
 ```julia
-# 2×2 covariance with 3 parameters: Q_σ_1, Q_σ_2, Q_corr_1
+# 2×2 covariance with 3 parameters: Q_sd_1, Q_sd_2, Q_corr_1
 Q = cov_free(2, :Q)
 
 # 3×3 covariance with 6 parameters
-Q = cov_free(3, :Q, init_σ=0.5)
+Q = cov_free(3, :Q, init_sd=0.5)
 ```
 
 # See also
 - [`diag_free`](@ref): For diagonal covariance matrices (no correlation)
 """
-cov_free(n::Int, prefix::Symbol; init_σ::Float64 = 1.0) = CovFree(n, prefix, init_σ)
+cov_free(n::Int, prefix::Symbol; init_sd::Real = 1.0) = CovFree(n, prefix, init_sd)

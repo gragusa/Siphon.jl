@@ -490,7 +490,7 @@ end
     spec = dns_model(maturities; H_structure = :scalar, λ_init = 0.06, diffuse = false)
     res = profile_em_ssm(spec, y; λ_grid = [0.06], maxiter = 50, warn = false)
     H = res.em_result.H
-    @test H == res.θ.H * Matrix(1.0I, 5, 5)
+    @test H == res.θ.var_obs * Matrix(1.0I, 5, 5)
     @test occursin("ProfileEMResult(λ_optimal = 0.06", sprint(show, res))
 end
 

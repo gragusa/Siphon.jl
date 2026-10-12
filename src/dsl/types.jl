@@ -14,8 +14,10 @@ Represents a single estimable parameter in a state-space model.
 - `name::Symbol`: Parameter name for identification
 - `lower::T`: Lower bound for optimization (use -Inf for unbounded)
 - `upper::T`: Upper bound for optimization (use Inf for unbounded)
-- `init::T`: Initial value for optimization
-- `default_init::Bool`: `true` when `init` is a template default rather than a
+- `init::T`: Initial value for optimization, strictly inside the bounds. The
+  keyword constructor picks one when `init` is omitted: the midpoint of two
+  finite bounds, one unit inside a single finite bound, or `0.0`.
+- `default_init::Bool`: `true` when `init` is a default rather than a
   value the user gave. Maximum likelihood then rescales a default variance to the
   data before optimising (see [`optimize_ssm`](@ref)).
 """
@@ -28,17 +30,36 @@ struct SSMParameter{T <: Real}
 
     function SSMParameter(name::Symbol, lower::T, upper::T, init::T,
             default_init::Bool = false) where {T <: Real}
-        lower <= init <= upper || throw(
-            ArgumentError("Initial value $init for $name must be in [$lower, $upper]"),
-        )
+        lower < upper || throw(
+            ArgumentError("lower bound $lower for $name must be below upper bound $upper"))
+        _check_init(name, lower, upper, init)
         new{T}(name, lower, upper, init, default_init)
     end
 end
 
+# A starting value on a finite bound maps to ±Inf in unconstrained space.
+function _check_init(name, lower, upper, init)
+    isfinite(init) && lower < init < upper || throw(ArgumentError(
+        "initial value $init for $(repr(name)) must be finite and strictly inside " *
+        "the bounds ($lower, $upper)"))
+    return nothing
+end
+
+# Starting value used when none is given: the midpoint of two finite bounds,
+# one unit inside a single finite bound, or zero.
+function _default_init(lower, upper)
+    isfinite(lower) && isfinite(upper) && return (lower + upper) / 2
+    isfinite(lower) && return lower + 1.0
+    isfinite(upper) && return upper - 1.0
+    return 0.0
+end
+
 # Convenience constructors
-function SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = 0.0,
-        default_init::Bool = false)
-    SSMParameter(name, Float64(lower), Float64(upper), Float64(init), default_init)
+function SSMParameter(name::Symbol; lower = -Inf, upper = Inf, init = nothing,
+        default_init::Bool = init === nothing)
+    lo, up = Float64(lower), Float64(upper)
+    x = init === nothing ? _default_init(lo, up) : Float64(init)
+    SSMParameter(name, lo, up, x, default_init)
 end
 
 SSMParameter(name::Symbol, init::Real) = SSMParameter(name, -Inf, Inf, Float64(init))
@@ -101,6 +122,17 @@ returning the matrix.
 abstract type AbstractMatrixExpr end
 
 """
+    AbstractSSMSpec
+
+Supertype of model specifications: [`SSMSpec`](@ref) for linear models and
+`EKFSpec` for models with a nonlinear measurement. A subtype has a `params`
+field holding its `SSMParameter`s, which the introspection functions
+(`param_names`, `n_params`, `initial_values`, `param_bounds`, `param_index`)
+and the parameter transformations read.
+"""
+abstract type AbstractSSMSpec end
+
+"""
     SSMSpec
 
 Complete specification of a state-space model.
@@ -127,7 +159,7 @@ When `P1_inf` is not `nothing`, exact diffuse initialization is used:
 
 When `P1_inf` is `nothing`, approximate diffuse is used (P1 is the full initial covariance).
 """
-struct SSMSpec
+struct SSMSpec <: AbstractSSMSpec
     name::Symbol
     n_states::Int
     n_obs::Int
@@ -233,32 +265,32 @@ function SSMSpec(
 end
 
 """
-    param_names(spec::SSMSpec)
+    param_names(spec::AbstractSSMSpec)
 
 Return the names of all free parameters.
 """
-param_names(spec::SSMSpec) = [p.name for p in spec.params]
+param_names(spec::AbstractSSMSpec) = [p.name for p in spec.params]
 
 """
-    n_params(spec::SSMSpec)
+    n_params(spec::AbstractSSMSpec)
 
 Return the number of free parameters.
 """
-n_params(spec::SSMSpec) = length(spec.params)
+n_params(spec::AbstractSSMSpec) = length(spec.params)
 
 """
-    initial_values(spec::SSMSpec)
+    initial_values(spec::AbstractSSMSpec)
 
 Return a vector of initial parameter values.
 """
-initial_values(spec::SSMSpec) = [p.init for p in spec.params]
+initial_values(spec::AbstractSSMSpec) = [p.init for p in spec.params]
 
 """
-    param_bounds(spec::SSMSpec)
+    param_bounds(spec::AbstractSSMSpec)
 
 Return lower and upper bound vectors.
 """
-function param_bounds(spec::SSMSpec)
+function param_bounds(spec::AbstractSSMSpec)
     lower = [p.lower for p in spec.params]
     upper = [p.upper for p in spec.params]
     (lower, upper)
@@ -273,11 +305,11 @@ Returns `true` if `P1_inf` is specified, `false` otherwise.
 uses_exact_diffuse(spec::SSMSpec) = spec.P1_inf !== nothing
 
 """
-    param_index(spec::SSMSpec, name::Symbol)
+    param_index(spec::AbstractSSMSpec, name::Symbol)
 
 Return the index of a parameter by name.
 """
-function param_index(spec::SSMSpec, name::Symbol)
+function param_index(spec::AbstractSSMSpec, name::Symbol)
     idx = findfirst(p -> p.name == name, spec.params)
     idx === nothing && throw(ArgumentError("Unknown parameter: $name"))
     idx
@@ -294,15 +326,16 @@ Marker type for a full positive definite covariance matrix with free parameters.
 
 Used in `custom_ssm` to specify that a covariance matrix (Q or H) should be
 parameterized as Σ = D * Corr * D where:
-- D = Diagonal(σ) with n positive standard deviation parameters
-- Corr = L'L where L comes from `corr_cholesky_factor(n)` with n(n-1)/2 correlation parameters
+- D = Diagonal(sd) with n positive standard deviation parameters
+- Corr = L'L where L comes from `corr_cholesky_factor(n)` with n(n-1)/2
+  unconstrained correlation parameters
 
 Total parameters: n + n(n-1)/2 = n(n+1)/2
 
 # Fields
 - `n::Int`: Matrix dimension
-- `prefix::Symbol`: Prefix for parameter names (e.g., :Q creates :Q_σ_1, :Q_corr_1, etc.)
-- `init_σ::Float64`: Initial value for standard deviation parameters (default: 1.0)
+- `prefix::Symbol`: Prefix for parameter names (`:Q` creates `:Q_sd_1`, …, `:Q_corr_1`, …)
+- `init_sd::Float64`: Initial value for the standard deviation parameters
 
 # Example
 ```julia
@@ -312,5 +345,11 @@ Q = cov_free(3, :Q)  # Creates 3×3 covariance with 6 parameters
 struct CovFree
     n::Int
     prefix::Symbol
-    init_σ::Float64
+    init_sd::Float64
+
+    function CovFree(n, prefix, init_sd)
+        n >= 1 || throw(ArgumentError("CovFree dimension must be at least 1, got $n"))
+        init_sd > 0 || throw(ArgumentError("init_sd must be positive, got $init_sd"))
+        new(n, prefix, init_sd)
+    end
 end

@@ -1,49 +1,35 @@
-# Session Handoff — 2026-10-12
+# Session Handoff — 2026-10-13
 
 ## Plan
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-021: restructure-dsl-layering-and-exports
-- `Siphon.DSL` is gone. `Siphon.jl` includes the `src/dsl/*.jl` files directly in dependency order: types → expressions → codegen → templates → builder → matrix_helpers → bayesian → optimization. It then includes `src/ekf_{spec,codegen,optim}.jl`, which were moved out of `src/dsl/` to sit with the EKF core.
-- `Siphon.jl` now has the only import block and the only export list.
-- New unexported `AbstractMatrixExpr` is the supertype of `MatrixExpr` and `CovMatrixExpr`. It types `matrix_exprs` and `build_from_expr`, and replaces the duck-typed `_is_matrix_expr`.
-- The `Expr` element branch (runtime `eval`) is deleted.
+CHUNK-022: unify-dsl-conventions (core part; the template keyword migration was split off into the new CHUNK-040).
+- `FreeParam(name, lower, upper, init)` now uses `SSMParameter`'s argument order, and every field is optional. In `custom_ssm`/`custom_ekf`, unset bounds mean ±Inf, and an unset init is a default inside the bounds, flagged `default_init`. `@P`/`const P` are removed.
+- `SSMParameter` rejects an init on a finite bound and `lower ≥ upper`. A repeated parameter name must carry identical settings (`_add_param!`).
+- `custom_ssm` accepts `I` (sized from `a1`, `Z` and `R`) and `Diagonal`. `identity_mat`, `zeros_mat`, `ones_mat` and `diag_fixed` are removed; `companion_mat` is renamed `companion_free`; `cov_free(…; init_sd)`.
+- Names: `<prefix>_sd_i` replaces `<prefix>_σ_i`. DNS uses `var_obs_i`/`var_obs` and `var_L/S/C`.
+- New exported `AbstractSSMSpec` (supertype of `SSMSpec`/`EKFSpec`) carries introspection and transformations, and the EKF copies are gone. `custom_ekf` checks the measurement length against `H`.
 
 ## Key decisions / shim choices
-- No shims. The conversion guide has a new section, "Module layout".
-- The export list is unchanged. `build_kfparms`, `build_initial_state` and `param_index` stay unexported (`Siphon.name`); CHUNK-031 should declare them public.
-- `MeasurementExpr` is **not** under `AbstractMatrixExpr`. It builds an EKF measurement, not a matrix, and shares no interface with the other two. This is recorded as a divergence in the chunk Notes.
-- Optimization is imported explicitly (`Optimization`, `OptimizationFunction`, `OptimizationProblem`, `OptimizationOptimJL: Optim`). TransformVariables is still imported whole.
+- Author's answers are in Decisions under CHUNK-022: optional-field `FreeParam` for template keywords; keep the `var_` prefix; split the chunk.
+- No shims. The conversion guide has new sections "Free parameters and matrix helpers" and "Parameter names".
+- `parse_param_spec` (the NamedTuple form) now falls back to `_default_init` when the template default lies outside user bounds. This is a stopgap until CHUNK-040 removes `parse_param_spec`.
 
 ## State of the codebase
-- Files modified:
-  - src: Siphon.jl, dsl/{types,expressions,codegen,templates,builder,matrix_helpers,bayesian,optimization}.jl, em_spec.jl, inplace.jl, predict.jl
-  - moved: ekf_spec.jl, ekf_codegen.jl, ekf_optim.jl
-  - deleted: dsl/dsl.jl
-  - test: dsl_tests.jl, partial_missing_tests.jl, dns_marss_validation_tests.jl
-  - docs: api/{dsl,ekf,optimization,matrix_helpers}.md, tutorials/ekf.md, conversion_guide.md
-  - DESIGN_REVIEW_PLAN.md
-  - local CLAUDE.md (untracked) tree updated
-- Test suite: full `Pkg.test()` passes (Aqua 10/10). The new testsets pass: "matrix expressions share a supertype" (7) and "single export list" (2).
+- Files modified: src/{Siphon.jl, ekf_codegen.jl, ekf_spec.jl}, src/dsl/{types,builder,matrix_helpers,templates,codegen,bayesian,expressions}.jl; tests (dsl, ekf, em, arma, dns_marss_validation); docs (conversion_guide, custom_models, arma_models, ekf, estimation_methods, transformations, api/{dsl,matrix_helpers}); examples/dns_estimation_dsl.jl; DESIGN_REVIEW_PLAN.md
+- Test suite: full `Pkg.test()` passes (Aqua 10/10).
 - Ambiguity count: 0 (no change).
-- Staged but uncommitted: partly. `git mv`/`git rm` staged the moves and the deletion; the rest is unstaged.
+- Staged but uncommitted: no (all changes unstaged).
 
 ## Cluster status
-- dsl: 1 of 3 complete (CHUNK-022 and CHUNK-023 remain).
+- dsl: 2 of 4 complete (CHUNK-040 and CHUNK-023 remain).
 
 ## Next chunk
-CHUNK-022: unify-dsl-conventions. Carry out the CHUNK-005 decisions:
-- drop `identity_mat`/`zeros_mat`/`ones_mat`/`diag_fixed`;
-- make `FreeParam`/Real the only free/fixed convention, with the `SSMParameter` argument order;
-- drop `@P`;
-- name variances, standard deviations and correlations `*_var`/`*_sd`/`*_corr`;
-- fix the listed small bugs;
-- give `SSMSpec`/`EKFSpec` an abstract supertype.
+CHUNK-040: migrate-template-keywords. Every template keyword becomes `Real` (fixed) or `FreeParam` (free; unset name/bounds/init come from the template). Groups take one value or a vector. All `*_init` keywords, `ParamSpec` and `parse_param_spec` go.
 
 ## Watch out for
-- The package-level structure changed (a submodule was removed), so Revise can't apply it. Restart the MCP session before loading.
-- Test-only deps (CSV, DataFrames) aren't in the project env. Individual test files can't be `include`d in the MCP session, so use `Pkg.test()`.
-- The stale `src/api/*.md` copies still say `Siphon.DSL.`; CHUNK-032 deletes them.
-- `benchmark/em_benchmark.jl` doesn't run (it uses the deleted `em_ssm_diagonal` and `Siphon.DSL`); this is in Open Questions.
-- CHUNK-022 must keep `SSMParameter.default_init` (see Open Questions).
+- `FreeParam` already supports `nothing` fields. CHUNK-040 needs a resolver that fills them from template defaults; don't reuse `SSMParameter(::FreeParam)`, which assumes unbounded defaults.
+- Templates still push parameters directly (guarded by `param_set`) rather than through `_add_param!`.
+- `CovMatrixExpr`'s internal field is still called `σ_param_names`.
+- `docs/src/index.md` still uses nonexistent `local_level(var_obs_init=…)` keywords (Open Questions, CHUNK-032); CHUNK-040 changes those keywords again.

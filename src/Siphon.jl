@@ -95,18 +95,17 @@ export EKFWorkspace
 export predicted_observations, measurement_jacobians
 
 # Model specification
-export SSMParameter, SSMSpec, FixedValue, ParameterRef, SSMMatrixSpec
+export AbstractSSMSpec, SSMParameter, SSMSpec, FixedValue, ParameterRef, SSMMatrixSpec
 export param_names, n_params, initial_values, param_bounds
 export uses_exact_diffuse
 export build_linear_state_space, objective_function, ssm_loglik
 export local_level, local_linear_trend, ar1, arma, dynamic_factor, dns_model
-export custom_ssm, FreeParam, @P
+export custom_ssm, FreeParam
 
 # Matrix helpers
-export diag_free, scalar_free, diag_fixed
-export identity_mat, zeros_mat, ones_mat
+export diag_free, scalar_free
 export lower_triangular_free, symmetric_free
-export selection_mat, companion_mat
+export selection_mat, companion_free
 export cov_free, CovFree, CovMatrixExpr
 export block_diag
 

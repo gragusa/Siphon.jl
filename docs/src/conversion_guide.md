@@ -416,3 +416,39 @@ in `Siphon` itself, with the same exported names.
 | `Siphon.DSL.build_kfparms`, `Siphon.DSL.build_initial_state`, `Siphon.DSL.param_index` | `Siphon.build_kfparms`, `Siphon.build_initial_state`, `Siphon.param_index` (not exported) |
 | A matrix element given as an `Expr` in an `SSMMatrixSpec` | a `MatrixExpr` for the whole matrix |
 | Any object with `params`, `builder` and `dims` fields passed as a matrix to `custom_ssm` | a `MatrixExpr` |
+
+## Free parameters and matrix helpers
+
+`FreeParam` takes its arguments in the same order as `SSMParameter`, and every
+field is optional. A parameter's starting value must lie strictly inside its
+bounds. A name used in several cells must have the same settings each time.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `FreeParam(name, init, lower, upper)` | `FreeParam(name, lower, upper, init)`, or the keyword form |
+| `FreeParam(:v; lower = 0.0)` started at `0.0` (on the bound) | starts at `1.0`; a default inside the bounds |
+| `@P(:x, 1.0)`, `Siphon.P` | `FreeParam(:x; init = 1.0)` |
+| The same name with different settings in two cells (the first one won) | `ArgumentError` |
+| `SSMParameter(:x; lower = 0.0)` (init `0.0`) | init `1.0`, marked as a default |
+| `identity_mat(n)` | `I` in `custom_ssm`, or `Matrix(1.0I, n, n)` |
+| `zeros_mat(m, n)`, `ones_mat(m, n)` | `zeros(m, n)`, `ones(m, n)` |
+| `diag_fixed(v)`, `diag_fixed(x, n)` | `Diagonal(v)`, `Diagonal(fill(x, n))` |
+| `companion_mat(n, prefix)` | `companion_free(n, prefix)` |
+| `cov_free(n, prefix; init_σ)`, `CovFree.init_σ` | `cov_free(n, prefix; init_sd)`, `CovFree.init_sd` |
+
+## Parameter names
+
+Variances keep the `var_` prefix. Standard deviations and correlation
+parameters of a full covariance are named `<prefix>_sd_<i>` and `<prefix>_corr_<i>`.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `cov_free(n, :Q)`: `Q_σ_1`, … | `Q_sd_1`, … |
+| `dynamic_factor(…; correlated_errors = true)`: `H_σ_1`, … | `H_sd_1`, … |
+| `dns_model(…; Q_structure = :full)`: `Q_σ_L`, `Q_σ_S`, `Q_σ_C` | `Q_sd_L`, `Q_sd_S`, `Q_sd_C` |
+| `dns_model(…; Q_structure = :diagonal)`: `Q_L`, `Q_S`, `Q_C` | `var_L`, `var_S`, `var_C` |
+| `dns_model(…; H_structure = :diagonal)`: `H_1`, … | `var_obs_1`, … |
+| `dns_model(…; H_structure = :scalar)`: `H` | `var_obs` |
+
+`SSMSpec` and `EKFSpec` now share the supertype `AbstractSSMSpec`. In
+`custom_ekf`, the measurement's output length must match the size of `H`.

@@ -368,7 +368,7 @@ end
 
     # ---- DSL spec via block_diag ----
     T_dsl = block_diag(
-        companion_mat(2, :φ),
+        companion_free(2, :φ),
         FreeParam(:ρ; init = 0.5, lower = -0.99, upper = 0.99)
     )
     H_dsl = block_diag(
@@ -381,7 +381,7 @@ end
     )
 
     # ---- Manual spec, cell by cell ----
-    # companion_mat(2, :φ) puts FreeParam(:φ_1, init=0.5) at (1,1) and
+    # companion_free(2, :φ) puts FreeParam(:φ_1, init=0.5) at (1,1) and
     # FreeParam(:φ_2, init=0.25) at (2,1) (init/i convention), with a 1.0
     # on the superdiagonal and zeros everywhere else.
     T_manual = Any[FreeParam(:φ_1, init = 0.5, lower = -Inf, upper = Inf) 1.0 0.0;

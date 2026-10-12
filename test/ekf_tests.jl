@@ -398,6 +398,18 @@ end
     @test allocs < 256
 end
 
+@testset "custom_ekf checks the measurement length against H" begin
+    s = _ekf_test_linear_setup()
+    kw = (measurement = EKFTestLinearMeasurement(s.Z), T = I, R = I,
+        Q = diag_free(s.m, :var_q), a1 = zeros(s.m), P1 = 10.0I)
+    spec = custom_ekf(; kw..., H = diag_free(s.p, :var_h))
+    @test spec isa AbstractSSMSpec
+    @test spec.n_obs == s.p
+    @test_throws "the measurement returns $(s.p) values but H is" custom_ekf(; kw...,
+        H = diag_free(s.p + 1, :var_h))
+    @test_throws "cannot size `I`" custom_ekf(; kw..., H = I)
+end
+
 @testset "EKF DSL — EKFSpec introspection and codegen" begin
     s = _ekf_test_linear_setup()
 
@@ -407,7 +419,7 @@ end
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
@@ -441,7 +453,7 @@ end
         Z = s.Z,
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
@@ -453,7 +465,7 @@ end
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
@@ -552,7 +564,7 @@ end
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(p_obs, :σh2; init = σh_true^2, lower = 1e-10),
         T = diag_free(m_state, :ψ; init = 0.9, lower = -0.999, upper = 0.999),
-        R = identity_mat(m_state),
+        R = Matrix(1.0I, m_state, m_state),
         Q = diag_free(m_state, :σq2; init = 0.04, lower = 1e-10),
         a1 = zeros(m_state),
         P1 = 1.0 .* Matrix(I, m_state, m_state)

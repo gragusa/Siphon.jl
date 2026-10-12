@@ -23,7 +23,7 @@ Returns (θ_constrained::NamedTuple, logjac::Real).
 
 Uses TransformVariables.jl for the transformation.
 """
-function transform_to_constrained(spec::SSMSpec, θ_u::AbstractVector)
+function transform_to_constrained(spec::AbstractSSMSpec, θ_u::AbstractVector)
     t = build_transformation(spec)
     θ_nt, logjac = TransformVariables.transform_and_logjac(t, θ_u)
     (θ_nt, logjac)
@@ -35,7 +35,7 @@ end
 Transform from constrained NamedTuple to unconstrained ℝⁿ.
 Inverse of `transform_to_constrained`.
 """
-function transform_to_unconstrained(spec::SSMSpec, θ_nt::NamedTuple)
+function transform_to_unconstrained(spec::AbstractSSMSpec, θ_nt::NamedTuple)
     t = build_transformation(spec)
     TransformVariables.inverse(t, θ_nt)
 end
@@ -46,7 +46,7 @@ end
 Transform from constrained vector to unconstrained ℝⁿ.
 First converts vector to NamedTuple, then inverts.
 """
-function transform_to_unconstrained(spec::SSMSpec, θ_c::AbstractVector)
+function transform_to_unconstrained(spec::AbstractSSMSpec, θ_c::AbstractVector)
     # Convert vector to NamedTuple
     names = Tuple(p.name for p in spec.params)
     θ_nt = NamedTuple{names}(Tuple(θ_c))

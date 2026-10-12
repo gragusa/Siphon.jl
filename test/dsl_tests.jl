@@ -168,13 +168,69 @@ end
     @test mat[1].init == 5.0
 end
 
-@testset "identity_mat and zeros_mat" begin
-    I3 = identity_mat(3)
-    @test I3 == Matrix(1.0I, 3, 3)
+@testset "custom_ssm accepts I and Diagonal" begin
+    spec = custom_ssm(Z = [1.0 0.0], H = Diagonal([2.0]), T = [1.0 1.0; 0.0 1.0],
+        R = I, Q = diag_free([:var_level, :var_slope]), a1 = zeros(2), P1 = 1e7I)
+    @test spec.n_shocks == 2
+    θ = (var_level = 1.0, var_slope = 2.0)
+    kf = Siphon.build_kfparms(spec, θ)
+    @test kf.R == Matrix(1.0I, 2, 2)
+    @test kf.H == [2.0;;]
+    @test Siphon.build_initial_state(spec, θ)[2] == 1e7 * Matrix(1.0I, 2, 2)
+    # Q = I takes its size from the columns of R
+    spec = custom_ssm(Z = [1.0 0.0], H = [1.0], T = I, R = [1.0; 0.0;;], Q = I,
+        a1 = zeros(2), P1 = I)
+    @test spec.n_shocks == 1
+end
 
-    Z = zeros_mat(2, 3)
-    @test size(Z) == (2, 3)
-    @test all(Z .== 0.0)
+@testset "FreeParam fields and defaults" begin
+    # Positional order matches SSMParameter(name, lower, upper, init)
+    fp = FreeParam(:ρ, -1, 1, 0.5)
+    @test (fp.name, fp.lower, fp.upper, fp.init) == (:ρ, -1.0, 1.0, 0.5)
+    @test FreeParam().name === nothing && FreeParam().init === nothing
+    @test !isdefined(Siphon, :P) && !isdefined(Siphon, Symbol("@P"))
+
+    # An unset init lies strictly inside the bounds and is flagged as a default
+    p = SSMParameter(FreeParam(:v; lower = 0.0))
+    @test p.init == 1.0 && p.default_init
+    @test SSMParameter(FreeParam(:ρ; lower = -1, upper = 1)).init == 0.0
+    @test SSMParameter(FreeParam(:u; upper = 2.0)).init == 1.0
+    @test SSMParameter(FreeParam(:x)).init == 0.0
+    @test !SSMParameter(FreeParam(:v; lower = 0.0, init = 3.0)).default_init
+
+    @test_throws "strictly inside the bounds" FreeParam(:v; lower = 0.0, init = 0.0)
+    @test_throws "strictly inside the bounds" SSMParameter(:v; lower = 0.0, init = 0.0)
+    @test_throws "must be below upper bound" FreeParam(:v; lower = 1.0, upper = 1.0)
+
+    base = (H = [1.0], T = [1.0], R = [1.0], Q = [1.0], a1 = [0.0], P1 = [1.0])
+    @test_throws "needs a name" custom_ssm(; Z = [FreeParam(; init = 1.0)], base...)
+
+    # A repeated name is one shared parameter, and its settings must agree
+    shared = custom_ssm(;
+        base..., Z = [FreeParam(:a; init = 1.0) FreeParam(:a; init = 1.0)],
+        T = I, R = I, Q = I, a1 = zeros(2), P1 = I)
+    @test param_names(shared) == [:a]
+    @test_throws "declared twice with different settings" custom_ssm(; base...,
+        Z = [FreeParam(:a; init = 1.0) FreeParam(:a; init = 2.0)],
+        T = I, R = I, Q = I, a1 = zeros(2), P1 = I)
+    @test_throws "declared twice" custom_ssm(; base...,
+        Z = [FreeParam(:Q_sd_1; init = 1.0)], Q = cov_free(1, :Q; init_sd = 2.0))
+end
+
+@testset "cov_free names and init_sd" begin
+    spec = custom_ssm(
+        Z = [1.0 0.0], H = [1.0], T = I, R = I, Q = cov_free(2, :Q; init_sd = 2),
+        a1 = zeros(2), P1 = I)
+    @test param_names(spec) == [:Q_sd_1, :Q_sd_2, :Q_corr_1]
+    @test initial_values(spec)[1:2] == [2.0, 2.0]
+    @test_throws "init_sd must be positive" cov_free(2, :Q; init_sd = 0)
+end
+
+@testset "spec supertype" begin
+    @test local_level() isa AbstractSSMSpec
+    @test hasmethod(param_names, Tuple{AbstractSSMSpec})
+    @test dns_model([3, 12, 60]; Q_structure = :diagonal, H_structure = :scalar) |>
+          param_names == [:λ, :T_L, :T_S, :T_C, :var_obs, :var_L, :var_S, :var_C]
 end
 
 @testset "selection_mat" begin
@@ -186,8 +242,8 @@ end
     @test R[3, 2] == 0.0
 end
 
-@testset "companion_mat" begin
-    T = companion_mat(3, :φ)
+@testset "companion_free" begin
+    T = companion_free(3, :φ)
     @test size(T) == (3, 3)
     @test T[1, 1] isa FreeParam
     @test T[1, 1].name == :φ_1
@@ -276,7 +332,7 @@ end
         Z = [1.0 1.0],
         H = [FreeParam(:h; init = 1.0, lower = 0.0)],
         T = T,
-        R = identity_mat(2),
+        R = I,
         Q = Q,
         a1 = [0.0, 0.0],
         P1 = [10.0 0.0; 0.0 10.0],
@@ -321,10 +377,10 @@ end
         T = [FreeParam(:φ_L, init = 0.9, lower = 0.0, upper = 0.9999) 0.0 0.0;
              0.0 FreeParam(:φ_S, init = 0.9, lower = 0.0, upper = 0.9999) 0.0;
              0.0 0.0 FreeParam(:φ_C, init = 0.9, lower = 0.0, upper = 0.9999)],
-        R = identity_mat(3),
+        R = I,
         Q = diag_free([:var_L, :var_S, :var_C], init = 0.01),
         a1 = [0.0, 0.0, 0.0],
-        P1 = 1e6 * identity_mat(3)
+        P1 = 1e6I
     )
 
     @test :λ in param_names(spec)
@@ -1060,8 +1116,8 @@ end
 
     # A cov_free initial covariance is built from its parameters
     cs = custom_ssm(Z = [1.0], H = [1.0], T = [1.0], R = [1.0], Q = [1.0],
-        a1 = [0.0], P1 = cov_free(1, :P1; init_σ = 30.0))
-    @test Siphon.build_initial_state(cs, (P1_σ_1 = 30.0,))[2] ≈ [900.0;;]
+        a1 = [0.0], P1 = cov_free(1, :P1; init_sd = 30.0))
+    @test Siphon.build_initial_state(cs, (P1_sd_1 = 30.0,))[2] ≈ [900.0;;]
 end
 
 @testset "optimize_ssm_with_stderr uses the delta method" begin

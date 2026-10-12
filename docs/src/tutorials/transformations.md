@@ -132,7 +132,7 @@ Q = cov_free(2, :Q)  # 2×2 PD covariance matrix
 ```
 
 This creates:
-- **Standard deviation parameters**: `Q_σ_1`, `Q_σ_2` (positive, use exp transform)
+- **Standard deviation parameters**: `Q_sd_1`, `Q_sd_2` (positive, use exp transform)
 - **Correlation parameters**: `Q_corr_1` (unconstrained, maps to valid correlation)
 
 The matrix is reconstructed as:

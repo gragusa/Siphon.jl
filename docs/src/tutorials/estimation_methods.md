@@ -100,7 +100,7 @@ spec = dns_model(maturities;
 )
 
 println("Parameters: ", param_names(spec))
-# [:λ, :T_L, :T_S, :T_C, :Q_L, :Q_S, :Q_C, :H_1, ..., :H_8]
+# [:λ, :T_L, :T_S, :T_C, :var_obs_1, ..., :var_obs_8, :var_L, :var_S, :var_C]
 
 # Estimate via MLE (gradient-based optimization)
 result_mle = optimize_ssm(spec, yields; maxiters=500)
