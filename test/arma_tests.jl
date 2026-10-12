@@ -248,11 +248,7 @@ end
     @testset "system_matrices accessor" begin
         mats = system_matrices(model)
 
-        @test haskey(pairs(mats), :Z)
-        @test haskey(pairs(mats), :H)
-        @test haskey(pairs(mats), :T)
-        @test haskey(pairs(mats), :R)
-        @test haskey(pairs(mats), :Q)
+        @test mats isa KFParms
 
         # Should match individual accessors
         @test mats.Z == obs_matrix(model)

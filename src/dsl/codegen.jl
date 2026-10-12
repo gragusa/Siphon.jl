@@ -48,27 +48,22 @@ end
 
 Convert a parameter's bounds to a TransformVariables scalar transformation.
 
-Note: For semi-infinite intervals `[a, ∞)` where `a >= 0`, we use `asℝ₊` (exp transform).
-Small positive lower bounds like 1e-6 are treated as zero since they are typically
-numerical safeguards rather than meaningful constraints.
+- `(-∞, ∞)`: identity
+- `[0, ∞)`: `exp`
+- `[a, ∞)` or `(-∞, b]`: shifted `exp`, so the bound holds for every finite `a`, `b`
+- `[a, b]`: scaled logistic
 """
 function _param_to_transform(p::SSMParameter)
     if p.lower == -Inf && p.upper == Inf
-        # Unbounded
         asℝ
-    elseif p.lower >= 0.0 && p.upper == Inf
-        # Positive (common for standard deviations, variances)
-        # Use exp transform - works for any non-negative lower bound
+    elseif p.lower == 0.0 && p.upper == Inf
         asℝ₊
-    elseif p.lower == -Inf && p.upper < Inf
-        # Upper bounded
-        as(Real, -Inf, p.upper)
-    elseif p.lower > -Inf && p.upper < Inf
-        # Bounded interval [a, b] with a < b
-        as(Real, p.lower, p.upper)
     else
-        # Fallback to unbounded
-        asℝ
+        # TransformVariables needs its own `∞` for an open end: a Float64 `Inf`
+        # builds a logistic of infinite width.
+        lo = p.lower == -Inf ? -TransformVariables.∞ : p.lower
+        hi = p.upper == Inf ? TransformVariables.∞ : p.upper
+        as(Real, lo, hi)
     end
 end
 
@@ -310,12 +305,30 @@ end
     build_initial_state(spec::SSMSpec, θ::NamedTuple)
 
 Build initial state (a1, P1) from specification and NamedTuple parameters.
+For an exact diffuse spec, `P1` is the finite part `P1_star`; see
+`build_diffuse_covariance` for the diffuse part.
 """
 function build_initial_state(spec::SSMSpec, θ::NamedTuple)
     T = _eltype(θ)
     a1 = T[evaluate_element(elem, θ) for elem in spec.a1]
-    P1 = build_matrix(spec.P1, θ)
+    P1 = build_matrix_or_expr(:P1, spec, θ)
     (a1, P1)
+end
+
+"""
+    build_diffuse_covariance(spec::SSMSpec, θ) -> Union{Nothing, Matrix}
+
+The diffuse part `P1_inf` of the initial state covariance, or `nothing` when
+the spec does not use exact diffuse initialisation.
+"""
+function build_diffuse_covariance(spec::SSMSpec, θ::NamedTuple)
+    spec.P1_inf === nothing ? nothing : build_matrix(spec.P1_inf, θ)
+end
+
+function build_diffuse_covariance(spec::SSMSpec, theta::AbstractVector)
+    spec.P1_inf === nothing && return nothing
+    param_map = Dict{Symbol, Int}(p.name => i for (i, p) in enumerate(spec.params))
+    return build_matrix(spec.P1_inf, theta, param_map)
 end
 
 # ============================================
@@ -437,7 +450,7 @@ function build_initial_state(spec::SSMSpec, theta::AbstractVector{T}) where {T}
     param_map = Dict{Symbol, Int}(p.name => i for (i, p) in enumerate(spec.params))
 
     a1 = T[evaluate_element(elem, theta, param_map) for elem in spec.a1]
-    P1 = build_matrix(spec.P1, theta, param_map)
+    P1 = build_matrix_or_expr(:P1, spec, theta, param_map)
 
     (a1, P1)
 end
@@ -463,7 +476,10 @@ Accepts either a Vector or NamedTuple of parameters.
 Returns a NamedTuple with:
 - `p`: KFParms struct with system matrices (Z, H, T, R, Q)
 - `a1`: Initial state mean vector
-- `P1`: Initial state covariance matrix
+- `P1`: Initial state covariance matrix (the finite part `P1_star` under exact
+  diffuse initialisation)
+- `P1_inf`: Diffuse part of the initial covariance, or `nothing` when the spec
+  does not use exact diffuse initialisation
 """
 function build_linear_state_space(
         spec::SSMSpec,
@@ -473,16 +489,29 @@ function build_linear_state_space(
 )
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
+    P1_inf = build_diffuse_covariance(spec, θ)
 
-    if use_static
+    # The exact diffuse filter has no StaticArrays specialisation
+    if use_static && P1_inf === nothing
         # Convert to StaticArrays if dimensions are small
         p = KFParms_static(kfparms.Z, kfparms.H, kfparms.T, kfparms.R, kfparms.Q)
         a1_out = to_static_if_small(a1)
         P1_out = to_static_if_small(P1)
-        return (p = p, a1 = a1_out, P1 = P1_out)
+        return (p = p, a1 = a1_out, P1 = P1_out, P1_inf = P1_inf)
     else
-        return (p = kfparms, a1 = a1, P1 = P1)
+        return (p = kfparms, a1 = a1, P1 = P1, P1_inf = P1_inf)
     end
+end
+
+# Log-likelihood and filter for the output of `build_linear_state_space`,
+# using the exact diffuse filter when the model has a diffuse part.
+function _ss_loglik(ss, y)
+    ss.P1_inf === nothing ? kalman_loglik(ss.p, y, ss.a1, ss.P1) :
+    kalman_loglik(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+end
+function _ss_filter(ss, y)
+    ss.P1_inf === nothing ? kalman_filter(ss.p, y, ss.a1, ss.P1) :
+    kalman_filter(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
 end
 
 """
@@ -494,11 +523,10 @@ Returns a callable that computes -loglik for a given parameter vector theta.
 Uses the AD-compatible kalman_loglik function.
 """
 function objective_function(spec::SSMSpec, y)
+    y = _nan_obs(y)
     function negloglik(theta)
-        kfparms = build_kfparms(spec, theta)
-        a1, P1 = build_initial_state(spec, theta)
-        ll = kalman_loglik(kfparms, y, a1, P1)
-        return -ll
+        ss = build_linear_state_space(spec, theta, y; use_static = false)
+        return -_ss_loglik(ss, y)
     end
     return negloglik
 end
@@ -511,9 +539,18 @@ Compute log-likelihood directly from spec and NamedTuple parameters.
 This is the recommended high-level API for likelihood evaluation.
 """
 function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
-    kfparms = build_kfparms(spec, θ)
-    a1, P1 = build_initial_state(spec, θ)
-    kalman_loglik(kfparms, y, a1, P1)
+    _spec_loglik(spec, θ, _nan_obs(y), false)
+end
+
+"""
+    _spec_loglik(spec, θ::NamedTuple, y, use_static::Bool)
+
+Log-likelihood of `y` under `spec` at constrained parameters `θ`. The single
+evaluation path shared by maximum likelihood and the log-density.
+"""
+function _spec_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
+    ss = build_linear_state_space(spec, θ, y; use_static = use_static)
+    return _ss_loglik(ss, y)
 end
 
 # Alias for consistency

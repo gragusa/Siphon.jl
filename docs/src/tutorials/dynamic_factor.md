@@ -71,13 +71,24 @@ f = factors(model)              # k × n smoothed factors
 
 ### State Dimension
 
-The state vector stacks current and lagged factors (and errors if r > 0):
+The state vector stacks current and lagged factors:
 
 ```math
-\alpha_t = [f_t', f_{t-1}', \ldots, f_{t-s+1}', e_t', e_{t-1}', \ldots, e_{t-r+1}']'
+\alpha_t = [f_t', f_{t-1}', \ldots, f_{t-s+1}']'
 ```
 
-where ``s = \max(q, p+1)``. State dimension: ``m = k \times s + N \times r``.
+where ``s = \max(q, p+r+1)``. State dimension: ``m = k \times s``.
+
+With AR errors (``r > 0``) the idiosyncratic errors are not states. The model is
+estimated on the quasi-differenced data
+
+```math
+\tilde x_t = x_t - \delta_1 x_{t-1} - \cdots - \delta_r x_{t-r}
+  = \lambda(L)\,(1 - \delta(L)L)\, f_t + v_t,
+```
+
+so the log-likelihood is conditional on the first ``r`` observations, and the EM
+alternates the loadings, ``\delta`` and the idiosyncratic variances.
 
 ## DSL Approach: dynamic_factor Template
 
@@ -338,11 +349,12 @@ println("  φ_2_1 = ", round(result.θ.φ_2_1, digits=3), " (true: 0.7)")
 # Extract smoothed factors
 ss = build_linear_state_space(spec, result.θ, y)
 filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
+f_hat = smoothed_states(smooth)
 
 println("\nCorrelation with true factors:")
-println("  Factor 1: ", round(cor(smooth.alpha[1, :], f[1, :]), digits=3))
-println("  Factor 2: ", round(cor(smooth.alpha[2, :], f[2, :]), digits=3))
+println("  Factor 1: ", round(cor(f_hat[1, :], f[1, :]), digits=3))
+println("  Factor 2: ", round(cor(f_hat[2, :], f[2, :]), digits=3))
 ```
 
 ## Forecasting
@@ -351,11 +363,11 @@ println("  Factor 2: ", round(cor(smooth.alpha[2, :], f[2, :]), digits=3))
 # Forecast h steps ahead
 fc = forecast(model, 12)  # 12-step forecast
 
-# Access forecast components
-fc.obs_mean      # N × h forecasted observations
-fc.obs_cov       # N × N × h forecast covariances
-fc.factor_mean   # k × h forecasted factors
-fc.factor_cov    # k × k × h factor forecast covariances
+forecast_observations(fc)            # N × h forecasted observations
+forecast_observations_cov(fc)        # N × N × h forecast covariances
+forecast_states(fc)[1:k, :]          # k × h forecasted factors (the first k states)
+forecast_states_cov(fc)[1:k, 1:k, :] # k × k × h factor forecast covariances
+lower, upper = forecast_interval(fc, 0.95)
 ```
 
 ## Tips and Best Practices

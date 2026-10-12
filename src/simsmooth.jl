@@ -214,8 +214,8 @@ which has the mean of `α̂` and the covariance of the conditional distribution.
 `ws` must already carry the model parameters and initial conditions. It is left
 holding the filter and smoother results for `y⁺`, not for `y`, so a caller that
 needs the smoothed mean of the real data should keep the `smoothed` copy this
-function makes rather than reading `ws` afterwards. Only the means are computed:
-`ws.Vs` is left holding whatever an earlier pass wrote and must not be read.
+function makes rather than reading `ws` afterwards. Only the means are computed, so
+`smoothed_states_cov(ws)` throws afterwards.
 
 # Arguments
 - `out`: destination, `m × n`
@@ -236,6 +236,7 @@ function simulation_smoother!(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
         rng::Random.AbstractRNG = Random.default_rng(),
         smoothed::Union{Nothing, AbstractMatrix} = nothing) where {T}
+    y = _nan_obs(y)
     m, p, n = sws.state_dim, sws.obs_dim, sws.n_times
     size(y) == (p, n) || throw(DimensionMismatch(
         "observations are $(size(y)) but the workspace expects ($p, $n)"))
@@ -244,8 +245,8 @@ function simulation_smoother!(
 
     # α̂: smoothed states of the real data.
     if smoothed === nothing
-        filter_and_smooth!(ws, y; crosscov = false, covariances = false)
-        copyto!(sws.α_hat, ws.αs)
+        kalman_filter_and_smooth!(ws, y; covariances = false)
+        copyto!(sws.α_hat, smoothed_states(ws))
     else
         size(smoothed) == (m, n) || throw(DimensionMismatch(
             "smoothed states are $(size(smoothed)) but the state path is ($m, $n)"))
@@ -262,11 +263,12 @@ function simulation_smoother!(
     _simulate_path!(sws, ws, rng, sws.obs_pattern)
 
     # α̂⁺: smoothed states of the synthetic data.
-    filter_and_smooth!(ws, sws.y_plus; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(ws, sws.y_plus; covariances = false)
+    α_hat_plus = smoothed_states(ws)
 
     for t in 1:n, i in 1:m
 
-        out[i, t] = sws.α_hat[i, t] - ws.αs[i, t] + sws.α_plus[i, t]
+        out[i, t] = sws.α_hat[i, t] - α_hat_plus[i, t] + sws.α_plus[i, t]
     end
 
     return out
@@ -293,12 +295,13 @@ function simulation_smoother(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
         rng::Random.AbstractRNG = Random.default_rng(),
         n_draws::Integer = 1) where {T}
+    y = _nan_obs(y)
     n_draws >= 1 || throw(ArgumentError("n_draws must be at least 1, got $n_draws"))
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)
 
-    filter_and_smooth!(ws, y; crosscov = false, covariances = false)
-    α_hat = copy(ws.αs)
+    kalman_filter_and_smooth!(ws, y; covariances = false)
+    α_hat = copy(smoothed_states(ws))
 
     if n_draws == 1
         out = Matrix{T}(undef, m, n)

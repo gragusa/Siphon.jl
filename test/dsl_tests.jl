@@ -5,7 +5,12 @@ Tests for the DSL module: templates, custom_ssm, matrix helpers, MatrixExpr, and
 using Test
 using Siphon
 using LinearAlgebra
-using Statistics: cor
+using Statistics: cor, var
+using SpecialFunctions: gamma
+using Random
+using ForwardDiff
+using CSV
+using DataFrames
 
 # ============================================
 # SSMParameter and SSMSpec Tests
@@ -470,6 +475,13 @@ end
     @test ll_at_mean > ll_away
 end
 
+@testset "InverseGammaPrior" begin
+    prior = InverseGammaPrior(2.0, 1.0, (:σ,))
+    # θ holds σ; the density is that of σ² ~ InverseGamma(α, β)
+    σ = 0.7
+    @test prior((σ = σ,)) ≈ 2.0 * log(1.0) - log(gamma(2.0)) - 3.0 * log(σ^2) - 1.0 / σ^2
+end
+
 @testset "CompositePrior" begin
     # Using NamedTuple-based priors
     p1 = NormalPrior((x = 0.0,), (x = 1.0,))
@@ -559,12 +571,12 @@ end
     ll_matrix = kalman_loglik(kfparms, y, a1, P1)
 
     # Scalar version
-    ll_scalar = kalman_loglik_scalar(1.0, 100.0, 1.0, 1.0, 50.0, 100.0, 1000.0, vec(y))
+    ll_scalar = kalman_loglik(KFParms(1.0, 100.0, 1.0, 1.0, 50.0), vec(y), 100.0, 1000.0)
 
     @test ll_matrix ≈ ll_scalar rtol=1e-10
 end
 
-@testset "kalman_loglik_scalar" begin
+@testset "kalman_loglik on a scalar KFParms" begin
     Z = 1.0
     H = 100.0
     T = 1.0
@@ -575,7 +587,7 @@ end
 
     y = randn(50) .* 10 .+ 100
 
-    ll = kalman_loglik_scalar(Z, H, T, R, Q, a1, P1, y)
+    ll = kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)
     @test isfinite(ll)
     @test ll < 0
 end
@@ -623,9 +635,9 @@ end
     result = kalman_filter(p, y, a1, P1)
 
     # Run smoother
-    smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
 
     @test size(alpha_smooth) == (1, 30)
     @test size(V_smooth) == (1, 1, 30)
@@ -662,9 +674,9 @@ end
 
     # Run filter and smoother
     result = kalman_filter(p, y, a1, P1)
-    smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
 
     # The last smoothed value should match D&K closely (t=100: 798.4)
     # since by then the initialization effect has dissipated
@@ -703,8 +715,7 @@ end
         Q_new = [θ[2];;]
         p_new = Siphon.KFParms(Z, H_new, T, R, Q_new)
         result = kalman_filter(p_new, y, a1, P1)
-        smooth = kalman_smoother(Z, T, result.at, result.Pt, result.vt, result.Ft)
-        return sum(smooth.alpha)
+        return sum(smoothed_states(kalman_smoother(result)))
     end
 
     θ = [100.0, 50.0]
@@ -726,20 +737,16 @@ end
     p = Siphon.KFParms(Z, H, T, R, Q)
     y = randn(1, 30) .* 10 .+ 100
 
-    result = kalman_filter_and_smooth(p, y, a1, P1)
+    filt, smooth = kalman_filter_and_smooth(p, y, a1, P1)
 
-    @test haskey(result, :loglik)
-    @test haskey(result, :a_filtered)
-    @test haskey(result, :P_filtered)
-    @test haskey(result, :alpha_smooth)
-    @test haskey(result, :V_smooth)
-
-    @test isfinite(result.loglik)
-    @test size(result.alpha_smooth) == (1, 30)
-    @test all(result.V_smooth[1, 1, :] .> 0)
+    @test isfinite(loglikelihood(filt))
+    @test size(smoothed_states(smooth)) == (1, 30)
+    @test all(smoothed_states_cov(smooth)[1, 1, :] .> 0)
+    @test crosslag_covs(last(kalman_filter_and_smooth(p, y, a1, P1; crosscov = true))) ≈
+          crosslag_covs(kalman_smoother(filt; crosscov = true))
 end
 
-@testset "kalman_smoother_scalar" begin
+@testset "kalman_smoother on a scalar KFParms" begin
     Z = 1.0
     H = 100.0
     T = 1.0
@@ -751,18 +758,12 @@ end
     y = randn(30) .* 10 .+ 100
 
     # Run scalar filter
-    result_scalar = Siphon.kalman_filter_scalar(Z, H, T, R, Q, a1, P1, y)
+    result_scalar = kalman_filter(KFParms(Z, H, T, R, Q), y, a1, P1)
 
-    # Run scalar smoother
-    alpha_smooth,
-    V_smooth = kalman_smoother_scalar(
-        Z,
-        T,
-        result_scalar.at,
-        result_scalar.Pt,
-        result_scalar.vt,
-        result_scalar.Ft
-    )
+    # Run smoother on the scalar result
+    smooth_scalar = kalman_smoother(result_scalar)
+    alpha_smooth = vec(smoothed_states(smooth_scalar))
+    V_smooth = vec(smoothed_states_cov(smooth_scalar))
 
     @test length(alpha_smooth) == 30
     @test length(V_smooth) == 30
@@ -780,9 +781,9 @@ end
 
     p = Siphon.KFParms(Z_m, H_m, T_m, R_m, Q_m)
     result = kalman_filter(p, y_m, a1_m, P1_m)
-    smooth_m = kalman_smoother(Z_m, T_m, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth_m = smooth_m.alpha
-    V_smooth_m = smooth_m.V
+    smooth_m = kalman_smoother(result)
+    alpha_smooth_m = smoothed_states(smooth_m)
+    V_smooth_m = smoothed_states_cov(smooth_m)
 
     @test isapprox(alpha_smooth, vec(alpha_smooth_m), rtol = 1e-10)
     @test isapprox(V_smooth, vec(V_smooth_m[1, 1, :]), rtol = 1e-10)
@@ -849,13 +850,13 @@ end
 
     model = StateSpaceModel(spec, θ, n)
 
-    # Filter should not be valid before calling kalman_filter!
-    @test model.filter_valid == false
+    # The filter accessors throw before kalman_filter! has run
+    @test_throws "kalman_filter!(model, y)" filtered_states(model)
 
     ll = kalman_filter!(model, y)
 
     @test isfinite(ll)
-    @test model.filter_valid == true
+    @test size(filtered_states(model)) == (1, n)
     @test loglikelihood(model) ≈ ll
 
     # Access filtered states
@@ -910,10 +911,10 @@ end
     θ_vec = [θ.var_obs, θ.var_level]
     ss = build_linear_state_space(spec, θ_vec, y)
     filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-    smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+    smooth = kalman_smoother(filt)
 
     @test ll_new ≈ filt.loglik rtol=1e-10
-    @test alpha_new ≈ smooth.alpha rtol=1e-10
+    @test alpha_new ≈ smoothed_states(smooth) rtol=1e-10
 end
 
 @testset "StateSpaceModel with local_linear_trend" begin
@@ -940,11 +941,11 @@ end
 
     # Wrong observation dimension
     y_wrong = randn(2, n)
-    @test_throws AssertionError kalman_filter!(model, y_wrong)
+    @test_throws DimensionMismatch kalman_filter!(model, y_wrong)
 
     # Wrong time dimension
     y_wrong_t = randn(1, 50)
-    @test_throws AssertionError kalman_filter!(model, y_wrong_t)
+    @test_throws DimensionMismatch kalman_filter!(model, y_wrong_t)
 end
 
 @testset "StateSpaceModel parameter vector length validation" begin
@@ -953,4 +954,150 @@ end
     n = 100
 
     @test_throws ArgumentError StateSpaceModel(spec, θ_wrong, n)
+end
+
+# ============================================
+# Maximum likelihood and parameter bounds
+# ============================================
+
+@testset "optimize_ssm maximises the log-likelihood" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level()
+
+    res = optimize_ssm(spec, y; θ0 = (var_obs = 1e4, var_level = 1e4))
+    # Durbin & Koopman (2012), Nile data
+    @test res.θ.var_obs ≈ 15099.0 rtol = 1e-3
+    @test res.θ.var_level ≈ 1469.1 rtol = 1e-3
+    @test res.loglik ≈ ssm_loglik(spec, res.θ, y)
+    @test res.loglik ≈ -641.5856 atol = 1e-3
+
+    # θ0 as a NamedTuple is matched by name, in any order, and may be partial
+    res2 = optimize_ssm(spec, y; θ0 = (var_level = 1e4, var_obs = 1e4))
+    @test res2.θ.var_obs ≈ res.θ.var_obs rtol = 1e-4
+    res3 = optimize_ssm(spec, y; θ0 = (var_obs = 1e4,))
+    @test res3.loglik ≈ res.loglik atol = 1e-4
+    @test_throws ArgumentError optimize_ssm(spec, y; θ0 = (σ_obs = 1.0,))
+end
+
+@testset "default starting values match the data's scale" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+
+    # Template variances start at 1.0. Without rescaling, L-BFGS stops at a
+    # degenerate optimum on the Nile data (var_obs → 0, loglik ≈ −656).
+    res = optimize_ssm(local_level(), y)
+    @test res.loglik ≈ -641.5856 atol = 1e-3
+    model = fit!(MLE(), StateSpaceModel(local_level(), size(y, 2)), y)
+    @test model.loglik ≈ -641.5856 atol = 1e-3
+
+    # Only template defaults are flagged; inits the user gives are not
+    @test all(p -> p.default_init, local_level().params)
+    @test [p.default_init for p in local_level(var_obs = (init = 5.0,)).params] ==
+          [false, true]
+    @test local_level(var_obs = (lower = 1.0,)).params[1].default_init
+    @test last(arma(1, 0).params).default_init
+    @test !last(arma(1, 0; var_init = 3.0).params).default_init
+    @test !SSMParameter(:x; init = 1.0, lower = 0.0).default_init
+
+    # A user-given init is used as given; a defaulted one is rescaled
+    init = Siphon.DSL._initial_constrained(local_level(var_obs = (init = 5.0,)), nothing, y)
+    @test init[1] == 5.0
+    @test init[2] ≈ var(diff(vec(y)))
+    # Defaults keep the template's ratios between variances
+    init = Siphon.DSL._initial_constrained(local_linear_trend(), (var_slope = 2.0,), y)
+    @test init[2] / init[1] ≈ 0.01
+    @test init[3] == 2.0
+
+    # On a trending series the scale comes from differences, not levels
+    rng = Random.Xoshiro(1)
+    n = 200
+    μ = cumsum(cumsum(0.5 .+ 0.1 .* randn(rng, n)) .+ 2 .* randn(rng, n))
+    yt = reshape(1000 .+ μ .+ 5 .* randn(rng, n), 1, :)
+    spec = local_linear_trend()
+    ref = optimize_ssm(spec, yt; θ0 = (var_obs = 25.0, var_level = 4.0, var_slope = 0.01))
+    @test optimize_ssm(spec, yt).loglik ≈ ref.loglik atol = 1e-3
+end
+
+@testset "exact diffuse initialisation through a spec" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level(diffuse = :exact)
+    θ = (var_obs = 15099.0, var_level = 1469.1)
+    p = KFParms([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.1;;])
+    exact = kalman_loglik(p, y, [0.0], zeros(1, 1), ones(1, 1))
+
+    ss = build_linear_state_space(spec, θ, y)
+    @test ss.P1_inf == ones(1, 1)
+    @test build_linear_state_space(local_level(), θ, y).P1_inf === nothing
+
+    # Every spec-based path uses the diffuse filter. KFAS gives −632.55.
+    @test ssm_loglik(spec, θ, y) ≈ exact
+    @test ssm_loglik(spec, θ, y) ≈ -632.55 atol = 0.01
+    @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ exact
+    @test objective_function(spec, y)([15099.0, 1469.1]) ≈ -exact
+    filt = kalman_filter(p, y, [0.0], zeros(1, 1), ones(1, 1))
+    @test predict(spec, θ, y) ≈ predicted_observations(filt)
+    @test forecast(spec, θ, y, 2).yhat ≈ fill(filt.att[1, end], 1, 2)
+    @test size(forecast_paths(spec, θ, y, 3, 4)) == (1, 3, 4)
+    @test optimize_ssm(spec, y).loglik ≈ -632.5456 atol = 1e-3
+    @test logdensity(SSMLogDensity(spec, y), transform_to_unconstrained(spec, collect(θ))) ≈
+          exact +
+          transform_to_constrained(spec, transform_to_unconstrained(spec, collect(θ)))[2]
+
+    # StateSpaceModel: filtering and MLE run; EM and smoothing reject it
+    model = StateSpaceModel(spec, θ, size(y, 2))
+    @test kalman_loglik(model, y) ≈ exact
+    @test kalman_filter!(model, y) ≈ exact
+    @test_throws ArgumentError smoothed_states(model)
+    @test fit!(MLE(), StateSpaceModel(spec, size(y, 2)), y).loglik ≈ -632.5456 atol = 1e-3
+    @test_throws ArgumentError fit!(EM(), StateSpaceModel(spec, size(y, 2)), y)
+
+    # arma accepts the same diffuse options as the other templates
+    @test uses_exact_diffuse(arma(1, 1; diffuse = :exact))
+    @test !uses_exact_diffuse(arma(1, 1))
+    θa = (φ1 = 0.5, θ1 = 0.2, var = 1.0)
+    @test Siphon.DSL.build_initial_state(arma(1, 1; diffuse = false), θa)[2] == 1e4 * I(2)
+
+    # A cov_free initial covariance is built from its parameters
+    cs = custom_ssm(Z = [1.0], H = [1.0], T = [1.0], R = [1.0], Q = [1.0],
+        a1 = [0.0], P1 = cov_free(1, :P1; init_σ = 30.0))
+    @test Siphon.DSL.build_initial_state(cs, (P1_σ_1 = 30.0,))[2] ≈ [900.0;;]
+end
+
+@testset "optimize_ssm_with_stderr uses the delta method" begin
+    nile = CSV.read(joinpath(@__DIR__, "Nile.csv"), DataFrame; header = false)
+    y = reshape(Float64.(nile[!, 1]), 1, :)
+    spec = local_level()
+    res = optimize_ssm_with_stderr(spec, y; θ0 = (var_obs = 1e4, var_level = 1e4))
+
+    # At an interior optimum the delta-method covariance equals the inverse
+    # Hessian taken directly in the constrained parameters.
+    names = Tuple(param_names(spec))
+    Hc = ForwardDiff.hessian(
+        v -> -ssm_loglik(spec, NamedTuple{names}(Tuple(v)), y), collect(res.θ))
+    @test res.vcov ≈ inv(Hc) rtol = 1e-3
+    @test res.stderr ≈ sqrt.(diag(inv(Hc))) rtol = 1e-3
+end
+
+@testset "parameter bounds survive the transform" begin
+    spec = custom_ssm(
+        Z = [1.0],
+        H = [FreeParam(:x, init = 2.0, lower = 1.0)],
+        T = [FreeParam(:z, init = 0.5, lower = -1.0)],
+        R = [1.0],
+        Q = [FreeParam(:w, init = 0.5, upper = 3.0)],
+        a1 = [0.0],
+        P1 = [1e7]
+    )
+    for u in ([-20.0, -50.0, 50.0], [20.0, 5.0, -5.0])
+        θc, _ = transform_to_constrained(spec, u)
+        @test θc.x >= 1.0
+        @test θc.z >= -1.0
+        @test θc.w <= 3.0
+    end
+    # Round trip
+    θ0 = initial_values(spec)
+    θc, _ = transform_to_constrained(spec, transform_to_unconstrained(spec, θ0))
+    @test collect(θc) ≈ θ0
 end

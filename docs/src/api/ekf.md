@@ -28,16 +28,20 @@ Siphon.FiniteDiffJacobian
 ```@docs
 Siphon.EKFParms
 Siphon.EKFFilterResult
-Siphon.ekf_loglik
-Siphon.ekf_filter
 ```
+
+The extended Kalman filter is selected by passing an `EKFParms` to the generic
+functions: `kalman_loglik(p, y, a1, P1)` and `kalman_filter(p, y, a1, P1)`, documented
+on the [Core Functions](core.md) page.
 
 ### Accessors on `EKFFilterResult`
 
 ```@docs
-Siphon.predicted_observations
 Siphon.measurement_jacobians
 ```
+
+`predicted_observations(r)` returns the predicted measurements `h(aₜ, t)`; see the
+[Core Functions](core.md) page.
 
 The standard accessors (`predicted_states`, `filtered_states`, `prediction_errors`,
 etc.) also work on `EKFFilterResult`.
@@ -46,10 +50,11 @@ etc.) also work on `EKFFilterResult`.
 
 ```@docs
 Siphon.EKFWorkspace
-Siphon.ekf_filter!
-Siphon.ekf_smoother!
-Siphon.ekf_filter_and_smooth!
 ```
+
+An `EKFWorkspace` runs with the same in-place functions as a `KalmanWorkspace`:
+`kalman_filter!(ws, y)`, `kalman_smoother!(ws; crosscov)` and
+`kalman_filter_and_smooth!(ws, y; crosscov)`.
 
 ## DSL
 
@@ -66,5 +71,7 @@ Siphon.DSL.build_nonlinear_state_space
 
 ```@docs
 Siphon.DSL.EKFLogDensity
-Siphon.DSL.optimize_ekf
 ```
+
+`ssm_loglik(spec, θ, y)` and `optimize_ssm(spec, y)` accept an `EKFSpec` as well as an
+`SSMSpec`; see [Optimization](optimization.md).

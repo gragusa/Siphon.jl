@@ -84,9 +84,9 @@ end
     for block in (0, s.nser), rr in (false, true)
 
         ws = _explosive_workspace(s; block = block, rank_revealing = rr)
-        @test filter_and_smooth!(ws, s.y) isa Real
+        @test kalman_filter_and_smooth!(ws, s.y) isa Real
 
-        Ptt = variances_filtered_states(ws)
+        Ptt = filtered_states_cov(ws)
         @test maximum(abs, Ptt) < 1.0e-10
 
         for t in 1:(s.n)

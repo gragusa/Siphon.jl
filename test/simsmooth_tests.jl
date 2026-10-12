@@ -175,7 +175,7 @@ end
 @testset "simulation smoother — draws average to the smoothed mean" begin
     s = _simsmooth_setup()
     ws = KalmanWorkspace(s.Z, s.H, s.Tm, s.R, s.Q, s.a1, s.P1, s.n)
-    filter_and_smooth!(ws, s.y; crosscov = false)
+    kalman_filter_and_smooth!(ws, s.y)
     α_hat = copy(smoothed_states(ws))
 
     mu, _ = _draw_moments(ws, s.y, 40_000, 5)
@@ -301,7 +301,7 @@ end
     ws = KalmanWorkspace(s.Z, s.H, s.Tm, s.R, s.Q, s.a1, s.P1, s.n)
     sws = SimulationSmootherWorkspace(ws)
     Q2 = 9.0 * s.Q
-    Siphon.update_Q!(ws, Q2)
+    Siphon.set_Q!(ws, Q2)
     refresh_factors!(sws, ws)
     @test sws.Q_factor.L * sws.Q_factor.L' ≈ Q2 atol = 1e-10
 end

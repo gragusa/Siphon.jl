@@ -15,7 +15,7 @@ Pre-allocated workspace for in-place Kalman filter and smoother operations.
 - `KalmanWorkspace{T}` struct with all storage
 - `kalman_filter!` - in-place filter with missing data handling
 - `kalman_smoother!` - in-place RTS smoother with cross-lag covariances
-- `filter_and_smooth!` - combined operation
+- `kalman_filter_and_smooth!` - combined operation
 
 ## EMWorkspace (lines ~890-1400)
 EM algorithm infrastructure:
@@ -100,7 +100,8 @@ When a period is partially observed the filter works on the reduced system forme
 by those rows, so `vt`, `Ft`, `Ft_L` and `Kt` carry pₜ-sized blocks in their
 leading rows and columns for that period; entries beyond pₜ are `NaN` for `vt` and
 `Ft` and zero for `Ft_L` and `Kt`. Use `observed_rows(ws, t)` to recover which
-original row each leading position corresponds to.
+original row each leading position corresponds to. The accessors `prediction_errors`,
+`prediction_errors_cov` and `kalman_gains` return copies in series positions.
 
 ## Smoother storage
 - `αs`: Smoothed states E[αₜ|y₁:ₙ] (m × n)
@@ -114,7 +115,7 @@ original row each leading position corresponds to.
 - `loglik`: Log-likelihood value
 - `n_obs_valid`: Count of non-missing observations
 """
-mutable struct KalmanWorkspace{T <: Real}
+mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Dimensions
     obs_dim::Int      # p
     state_dim::Int    # m
@@ -188,6 +189,14 @@ mutable struct KalmanWorkspace{T <: Real}
     rank_rtol::T
     support_rtol::T
     Ft_rank::Vector{Int}   # n: rank of Fₜ used in the measurement update
+
+    # Run status: _NOT_RUN before the first filter run and while a run is in progress,
+    # 0 after a successful one, and t > 0 when the last run stopped in period t on a
+    # non-positive-definite F.
+    status::Int
+    smoothed::Bool        # the smoother has run on the current filter output
+    smoothed_cov::Bool    # ... and filled Vs
+    crosscov::Bool        # ... and filled Pcross
 end
 
 """
@@ -209,58 +218,58 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         r,
         n,
 
-        # Parameters (uninitialized, must call set_params!)
-        Matrix{T}(undef, p, m),      # Z
-        Matrix{T}(undef, p, p),      # H
-        Matrix{T}(undef, m, m),      # Tmat
-        Matrix{T}(undef, m, r),      # R
-        Matrix{T}(undef, r, r),      # Q
-        Vector{T}(undef, m),         # a1
-        Matrix{T}(undef, m, m),      # P1
+        # Parameters (zero until set_params! is called)
+        zeros(T, p, m),      # Z
+        zeros(T, p, p),      # H
+        zeros(T, m, m),      # Tmat
+        zeros(T, m, r),      # R
+        zeros(T, r, r),      # Q
+        zeros(T, m),         # a1
+        zeros(T, m, m),      # P1
 
         # Precomputed
-        Matrix{T}(undef, m, m),      # RQR
+        zeros(T, m, m),      # RQR
 
         # Filter storage
-        Matrix{T}(undef, m, n),      # at
-        Array{T, 3}(undef, m, m, n),  # Pt
-        Matrix{T}(undef, m, n),      # att
-        Array{T, 3}(undef, m, m, n),  # Ptt
-        Matrix{T}(undef, p, n),      # vt
-        Array{T, 3}(undef, p, p, n),  # Ft
-        Array{T, 3}(undef, p, p, n),  # Ft_L
-        Array{T, 3}(undef, m, p, n),  # Kt
-        BitVector(undef, n),         # missing_mask
-        BitMatrix(undef, p, n),      # observed_mask
-        Vector{Int}(undef, n),       # n_observed
-        Matrix{Int}(undef, p, n),    # obs_rows
+        zeros(T, m, n),      # at
+        zeros(T, m, m, n),  # Pt
+        zeros(T, m, n),      # att
+        zeros(T, m, m, n),  # Ptt
+        zeros(T, p, n),      # vt
+        zeros(T, p, p, n),  # Ft
+        zeros(T, p, p, n),  # Ft_L
+        zeros(T, m, p, n),  # Kt
+        falses(n),         # missing_mask
+        falses(p, n),      # observed_mask
+        zeros(Int, n),       # n_observed
+        zeros(Int, p, n),    # obs_rows
 
         # Smoother storage
-        Matrix{T}(undef, m, n),      # αs
-        Array{T, 3}(undef, m, m, n),  # Vs
-        Array{T, 3}(undef, m, m, max(n-1, 1)),  # Pcross
+        zeros(T, m, n),      # αs
+        zeros(T, m, m, n),  # Vs
+        zeros(T, m, m, max(n-1, 1)),  # Pcross
 
         # Scratch space
-        Matrix{T}(undef, m, m),      # tmp_mm1
-        Matrix{T}(undef, m, m),      # tmp_mm2
-        Matrix{T}(undef, m, m),      # tmp_mm3
-        Matrix{T}(undef, p, p),      # tmp_pp1
-        Matrix{T}(undef, p, p),      # tmp_pp2
-        Matrix{T}(undef, m, p),      # tmp_mp
-        Matrix{T}(undef, p, m),      # tmp_pm
-        Matrix{T}(undef, p, m),      # tmp_pm2
-        Matrix{T}(undef, p, m),      # tmp_pm3
-        Matrix{T}(undef, m, r),      # tmp_mr
-        Vector{T}(undef, m),         # tmp_m1
-        Vector{T}(undef, m),         # tmp_m2
-        Vector{T}(undef, p),         # tmp_p1
-        Vector{T}(undef, p),         # tmp_p2
+        zeros(T, m, m),      # tmp_mm1
+        zeros(T, m, m),      # tmp_mm2
+        zeros(T, m, m),      # tmp_mm3
+        zeros(T, p, p),      # tmp_pp1
+        zeros(T, p, p),      # tmp_pp2
+        zeros(T, m, p),      # tmp_mp
+        zeros(T, p, m),      # tmp_pm
+        zeros(T, p, m),      # tmp_pm2
+        zeros(T, p, m),      # tmp_pm3
+        zeros(T, m, r),      # tmp_mr
+        zeros(T, m),         # tmp_m1
+        zeros(T, m),         # tmp_m2
+        zeros(T, p),         # tmp_p1
+        zeros(T, p),         # tmp_p2
 
         # Smoother scratch
-        Vector{T}(undef, m),         # r_smooth
-        Matrix{T}(undef, m, m),      # N_smooth
-        Matrix{T}(undef, m, m),      # L_smooth
-        Matrix{T}(undef, m, m),      # J_smooth
+        zeros(T, m),         # r_smooth
+        zeros(T, m, m),      # N_smooth
+        zeros(T, m, m),      # L_smooth
+        zeros(T, m, m),      # J_smooth
 
         # Scalars
         zero(T),                     # loglik
@@ -272,7 +281,11 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         false,                       # rank_revealing
         sqrt(eps(T)),                # rank_rtol
         sqrt(eps(T)),                # support_rtol
-        zeros(Int, n)                # Ft_rank
+        zeros(Int, n),               # Ft_rank
+        _NOT_RUN,                    # status
+        false,                       # smoothed
+        false,                       # smoothed_cov
+        false                        # crosscov
     )
 end
 
@@ -317,86 +330,26 @@ end
 # Accessor methods for KalmanWorkspace
 # ============================================
 
-"""
-    predicted_states(ws::KalmanWorkspace) -> Matrix
-
-Return predicted state means E[αₜ | y₁:ₜ₋₁] (m × n).
-"""
-predicted_states(ws::KalmanWorkspace) = ws.at
+# The shared accessors are in accessors.jl.
+system_matrices(ws::KalmanWorkspace) = KFParms(ws.Z, ws.H, ws.Tmat, ws.R, ws.Q)
 
 """
-    variances_predicted_states(ws::KalmanWorkspace) -> Array{T,3}
+    KalmanFilterResult(ws::KalmanWorkspace) -> KalmanFilterResult
 
-Return predicted state covariances Var[αₜ | y₁:ₜ₋₁] (m × m × n).
-"""
-variances_predicted_states(ws::KalmanWorkspace) = ws.Pt
+Copy the filter output of `ws`, with its system matrices, into a `KalmanFilterResult`.
+Later runs on `ws` don't change the result, which supports everything a result of
+`kalman_filter` does, such as `kalman_smoother(result)`.
 
+Throws an `ArgumentError` if no filter has run on `ws`. After a failed run the result is
+a failed result: its log-likelihood is `-Inf` and its state accessors throw.
 """
-    filtered_states(ws::KalmanWorkspace) -> Matrix
-
-Return filtered state means E[αₜ | y₁:ₜ] (m × n).
-"""
-filtered_states(ws::KalmanWorkspace) = ws.att
-
-"""
-    variances_filtered_states(ws::KalmanWorkspace) -> Array{T,3}
-
-Return filtered state covariances Var[αₜ | y₁:ₜ] (m × m × n).
-"""
-variances_filtered_states(ws::KalmanWorkspace) = ws.Ptt
-
-"""
-    smoothed_states(ws::KalmanWorkspace) -> Matrix
-
-Return smoothed state means E[αₜ | y₁:ₙ] (m × n).
-Must call `kalman_smoother!(ws)` first.
-"""
-smoothed_states(ws::KalmanWorkspace) = ws.αs
-
-"""
-    variances_smoothed_states(ws::KalmanWorkspace) -> Array{T,3}
-
-Return smoothed state covariances Var[αₜ | y₁:ₙ] (m × m × n).
-Must call `kalman_smoother!(ws)` first.
-"""
-variances_smoothed_states(ws::KalmanWorkspace) = ws.Vs
-
-"""
-    prediction_errors(ws::KalmanWorkspace) -> Matrix
-
-Return prediction errors (innovations) vₜ = yₜ - Z*aₜ (p × n).
-NaN for missing observations.
-"""
-prediction_errors(ws::KalmanWorkspace) = ws.vt
-
-"""
-    variances_prediction_errors(ws::KalmanWorkspace) -> Array{T,3}
-
-Return innovation covariances Var[yₜ | y₁:ₜ₋₁] (p × p × n).
-"""
-variances_prediction_errors(ws::KalmanWorkspace) = ws.Ft
-
-"""
-    kalman_gains(ws::KalmanWorkspace) -> Array{T,3}
-
-Return Kalman gains Kₜ (m × p × n). Zero for missing observations.
-"""
-kalman_gains(ws::KalmanWorkspace) = ws.Kt
-
-"""
-    loglikelihood(ws::KalmanWorkspace) -> Real
-
-Return log-likelihood of non-missing observations.
-"""
-loglikelihood(ws::KalmanWorkspace) = ws.loglik
-
-"""
-    missing_mask(ws::KalmanWorkspace) -> BitVector
-
-Return a BitVector that is true for each period in which no row was observed.
-For periods that are partially observed, see [`observed_mask`](@ref).
-"""
-missing_mask(ws::KalmanWorkspace) = ws.missing_mask
+function KalmanFilterResult(ws::KalmanWorkspace)
+    ws.status == _NOT_RUN && _require_output(ws, :KalmanFilterResult)
+    p = KFParms(copy(ws.Z), copy(ws.H), copy(ws.Tmat), copy(ws.R), copy(ws.Q))
+    return KalmanFilterResult(p, ws.loglik, copy(ws.at), copy(ws.Pt), copy(ws.att),
+        copy(ws.Ptt), copy(ws.vt), copy(ws.Ft), copy(ws.Kt), copy(ws.missing_mask),
+        copy(ws.observed_mask), ws.status)
+end
 
 """
     observed_mask(ws::KalmanWorkspace) -> BitMatrix
@@ -404,7 +357,7 @@ missing_mask(ws::KalmanWorkspace) = ws.missing_mask
 Return the `p × n` mask that is true where an individual observation was present.
 `missing_mask(ws)[t]` is true exactly when column `t` of this mask is all false.
 """
-observed_mask(ws::KalmanWorkspace) = ws.observed_mask
+observed_mask(ws::KalmanWorkspace) = _require_output(ws, :observed_mask).observed_mask
 
 """
     set_companion_structure!(ws::KalmanWorkspace, block::Integer) -> ws
@@ -473,11 +426,11 @@ companion_block(ws::KalmanWorkspace) = ws.companion_block
 Declare whether the measurement update factors the innovation covariance `Fₜ`
 with a rank-revealing method instead of a Cholesky decomposition.
 
-With `on = false`, the default, `Fₜ` is assumed positive definite and a
-`cholesky!` that meets a nonpositive pivot raises. With `on = true` the filter
-takes a symmetric eigendecomposition of `Fₜ`, keeps the eigenvalues above
-`rank_rtol` times the largest, and updates on that range: a singular `Fₜ` is then
-a supported case rather than an error. `Fₜ` is singular whenever the state
+With `on = false`, the default, `Fₜ` is assumed positive definite, and a period
+where its Cholesky factorization fails ends the run with a log-likelihood of
+`-Inf`. With `on = true` the filter takes a symmetric eigendecomposition of `Fₜ`,
+keeps the eigenvalues above `rank_rtol` times the largest, and updates on that
+range: a singular `Fₜ` is then a supported case rather than a failure. `Fₜ` is singular whenever the state
 covariance is rank-deficient in the observed directions and the observation noise
 does not fill them in — a state space driven by fewer shocks than states and
 observed without measurement error, for instance.
@@ -534,7 +487,7 @@ On the Cholesky path this is the number of observed rows in the period, and 0
 where nothing is observed. On the rank-revealing path it is the numerical rank of
 `Fₜ`, which is the number of directions the period's observation informs.
 """
-innovation_ranks(ws::KalmanWorkspace) = ws.Ft_rank
+innovation_ranks(ws::KalmanWorkspace) = _require_output(ws, :innovation_ranks).Ft_rank
 
 """
     InnovationSupportError <: Exception
@@ -584,6 +537,7 @@ the leading rows and columns of their slices, so position `k` of those blocks
 corresponds to row `observed_rows(ws, t)[k]` of the full observation vector.
 """
 function observed_rows(ws::KalmanWorkspace, t::Integer)
+    _require_output(ws, :observed_rows)
     1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
     return view(ws.obs_rows, 1:ws.n_observed[t], t)
 end
@@ -594,6 +548,7 @@ end
 Return the number of rows observed in period `t`.
 """
 function n_observed(ws::KalmanWorkspace, t::Integer)
+    _require_output(ws, :n_observed)
     1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
     return ws.n_observed[t]
 end
@@ -631,6 +586,7 @@ function set_params!(
         R::AbstractMatrix,
         Q::AbstractMatrix
 )
+    _check_params(ws, "set_params!"; Z, H, Tmat, R, Q)
     copyto!(ws.Z, Z)
     copyto!(ws.H, H)
     copyto!(ws.Tmat, Tmat)
@@ -638,6 +594,30 @@ function set_params!(
     copyto!(ws.Q, Q)
     _update_RQR!(ws)
     return ws
+end
+
+# Check each system matrix that is not `nothing` against the workspace dimensions.
+function _check_params(ws, caller; Z = nothing, H = nothing, Tmat = nothing, R = nothing,
+        Q = nothing)
+    p, m, r = ws.obs_dim, ws.state_dim, ws.shock_dim
+    Z === nothing || _check_size(caller, "Z", Z, (p, m))
+    H === nothing || _check_size(caller, "H", H, (p, p))
+    Tmat === nothing || _check_size(caller, "T", Tmat, (m, m))
+    R === nothing || _check_size(caller, "R", R, (m, r))
+    Q === nothing || _check_size(caller, "Q", Q, (r, r))
+    return nothing
+end
+
+function _check_initial(ws, caller, a1, P1)
+    m = ws.state_dim
+    _check_size(caller, "a1", a1, (m,))
+    _check_size(caller, "P1", P1, (m, m))
+    return nothing
+end
+
+# Throw unless `y` is p × n for a workspace with p observables and n periods.
+function _check_obs(ws, caller, y::AbstractMatrix)
+    _check_size(caller, "y", y, (ws.obs_dim, ws.n_times))
 end
 
 """
@@ -674,6 +654,7 @@ end
 Set initial state mean and covariance.
 """
 function set_initial!(ws::KalmanWorkspace, a1::AbstractVector, P1::AbstractMatrix)
+    _check_initial(ws, "set_initial!", a1, P1)
     copyto!(ws.a1, a1)
     copyto!(ws.P1, P1)
     return ws
@@ -689,18 +670,19 @@ function update_params!(
         ws::KalmanWorkspace;
         Z::Union{Nothing, AbstractMatrix} = nothing,
         H::Union{Nothing, AbstractMatrix} = nothing,
-        Tmat::Union{Nothing, AbstractMatrix} = nothing,
+        T::Union{Nothing, AbstractMatrix} = nothing,
         R::Union{Nothing, AbstractMatrix} = nothing,
         Q::Union{Nothing, AbstractMatrix} = nothing
 )
+    _check_params(ws, "update_params!"; Z, H, Tmat = T, R, Q)
     if Z !== nothing
         copyto!(ws.Z, Z)
     end
     if H !== nothing
         copyto!(ws.H, H)
     end
-    if Tmat !== nothing
-        copyto!(ws.Tmat, Tmat)
+    if T !== nothing
+        copyto!(ws.Tmat, T)
     end
 
     update_RQR = false
@@ -720,18 +702,34 @@ function update_params!(
     return ws
 end
 
-# Individual parameter updaters for fine-grained control
-update_Z!(ws::KalmanWorkspace, Z::AbstractMatrix) = (copyto!(ws.Z, Z); ws)
-update_H!(ws::KalmanWorkspace, H::AbstractMatrix) = (copyto!(ws.H, H); ws)
-update_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix) = (copyto!(ws.Tmat, Tmat); ws)
+# Single-matrix setters. The EM M-step functions are `update_Z!(kf_ws, em_ws, n)` etc.
+function set_Z!(ws::KalmanWorkspace, Z::AbstractMatrix)
+    _check_params(ws, "set_Z!"; Z)
+    copyto!(ws.Z, Z)
+    return ws
+end
 
-function update_R!(ws::KalmanWorkspace, R::AbstractMatrix)
+function set_H!(ws::KalmanWorkspace, H::AbstractMatrix)
+    _check_params(ws, "set_H!"; H)
+    copyto!(ws.H, H)
+    return ws
+end
+
+function set_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix)
+    _check_params(ws, "set_T!"; Tmat)
+    copyto!(ws.Tmat, Tmat)
+    return ws
+end
+
+function set_R!(ws::KalmanWorkspace, R::AbstractMatrix)
+    _check_params(ws, "set_R!"; R)
     copyto!(ws.R, R)
     _update_RQR!(ws)
     return ws
 end
 
-function update_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
+function set_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
+    _check_params(ws, "set_Q!"; Q)
     copyto!(ws.Q, Q)
     _update_RQR!(ws)
     return ws
@@ -796,7 +794,9 @@ Run Kalman filter in-place, storing results in workspace.
 - `y`: Observations (p × n matrix), missing values as NaN
 
 # Returns
-- `loglik`: Log-likelihood of non-missing observations
+- `loglik`: Log-likelihood of non-missing observations. It is `-Inf` when an innovation
+  covariance is not positive definite; the filter stops at that period and the
+  workspace accessors then throw.
 
 # Stored Results
 Access via: `predicted_states(ws)`, `filtered_states(ws)`, etc.
@@ -815,16 +815,22 @@ That factorization allocates, unlike the rest of the pass. An observation whose
 innovation leaves the range of `Fₜ` raises `InnovationSupportError`.
 """
 function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
 
-    @assert size(y) == (p, n) "Observation matrix size mismatch"
+    _check_obs(ws, "kalman_filter!", y)
 
     block = _check_companion(ws)
 
-    # Reset scalars
+    # Reset scalars. The status stays _NOT_RUN until the run completes, so an exception
+    # thrown part way through leaves no output that the accessors would return.
+    ws.status = _NOT_RUN
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
     ws.n_obs_rows = 0
+    ws.smoothed = false
+    ws.smoothed_cov = false
+    ws.crosscov = false
 
     # Working state/covariance held in scratch space (tmp_m1 / tmp_mm1).
     a_curr = ws.tmp_m1
@@ -983,7 +989,12 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
                 # Cholesky on Symmetric(:L) reads only the lower triangle, so we
                 # do not need to symmetrize Fr first.
-                cholF = cholesky!(Symmetric(Fr, :L))
+                cholF = cholesky!(Symmetric(Fr, :L); check = false)
+                if !issuccess(cholF)
+                    ws.status = t
+                    ws.loglik = T(-Inf)
+                    return ws.loglik
+                end
                 L_lower = LowerTriangular(cholF.factors)
 
                 # Store lower triangle of L; zero the rest for clean reuse.
@@ -1062,6 +1073,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     # The Gaussian constant counts every observed scalar, which is Σₜ pₜ rather
     # than p times the number of periods carrying any observation.
     ws.loglik += -ws.n_obs_rows * log2pi / 2
+    ws.status = 0
     return ws.loglik
 end
 
@@ -1104,16 +1116,18 @@ function _apply_Finv!(
 end
 
 """
-    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=true, covariances::Bool=true)
+    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=false, covariances::Bool=true)
 
 Run RTS smoother in-place using filter results stored in workspace.
 
 # Arguments
-- `ws`: Workspace with filter results (must call `kalman_filter!` first)
-- `crosscov`: If true, compute cross-lag covariances for EM (default: true)
+- `ws`: Workspace with filter results (must call `kalman_filter!` first; throws an
+  `ArgumentError` if the filter has not run or failed)
+- `crosscov`: If true, also compute the cross-lag covariances, which EM needs
+  (default: false)
 - `covariances`: If true, compute smoothed covariances (default: true). When
-  false, only the smoothed means are produced and `Vs` is left holding whatever
-  the previous pass wrote; `crosscov` must then also be false.
+  false, only the smoothed means are produced, `smoothed_states_cov(ws)` throws
+  until a smoother run computes them, and `crosscov` must also be false.
 
 # Stored Results
 - `αs`: Smoothed states E[αₜ|y₁:ₙ]
@@ -1131,16 +1145,22 @@ evaluated as `T' rₜ - Zₜ'(Kₜ' rₜ)` so that the `m × m` matrix `Lₜ` is
 formed. What remains is `O(m²)` per period instead of `O(m³)`.
 """
 function kalman_smoother!(
-        ws::KalmanWorkspace{T}; crosscov::Bool = true,
+        ws::KalmanWorkspace{T}; crosscov::Bool = false,
         covariances::Bool = true) where {T}
+    !covariances && crosscov &&
+        throw(ArgumentError(
+            "crosscov=true requires covariances=true: the cross-lag covariance " *
+            "is built from the smoothed covariance"))
+    _require_output(ws, :kalman_smoother!)
     m, n = ws.state_dim, ws.n_times
     p = ws.obs_dim
 
     if !covariances
-        crosscov && throw(ArgumentError(
-            "crosscov=true requires covariances=true: the cross-lag covariance " *
-            "is built from the smoothed covariance"))
-        return _kalman_smoother_mean!(ws)
+        _kalman_smoother_mean!(ws)
+        ws.smoothed = true
+        ws.smoothed_cov = false
+        ws.crosscov = false
+        return nothing
     end
 
     # Initialize smoother recursion: r = 0, N = 0
@@ -1324,6 +1344,9 @@ function kalman_smoother!(
         end
     end
 
+    ws.smoothed = true
+    ws.smoothed_cov = true
+    ws.crosscov = crosscov
     return nothing
 end
 
@@ -1388,40 +1411,34 @@ end
 # ============================================
 
 """
-    filter_and_smooth!(ws, y; crosscov=true, covariances=true) -> loglik
+    kalman_filter_and_smooth!(ws, y::AbstractMatrix; crosscov=false, covariances=true) -> loglik
 
 Run filter and smoother in one call.
 
 # Arguments
 - `ws`: Pre-allocated workspace
 - `y`: Observations (p × n)
-- `crosscov`: Compute cross-lag covariances (default: true)
-- `covariances`: Compute smoothed covariances (default: true). See
-  `kalman_smoother!` for what is skipped when this is false.
+
+Keywords are passed to `kalman_smoother!`:
+- `crosscov`: Also compute the cross-lag covariances (default: false)
+- `covariances`: Compute smoothed covariances (default: true; `KalmanWorkspace`
+  only). See `kalman_smoother!` for what is skipped when this is false.
 
 # Returns
-- `loglik`: Log-likelihood
+- `loglik`: Log-likelihood. When the filter fails it is `-Inf` and the smoother is
+  skipped.
 """
-function filter_and_smooth!(
-        ws::KalmanWorkspace, y::AbstractMatrix; crosscov::Bool = true,
-        covariances::Bool = true)
+function kalman_filter_and_smooth!(ws::AbstractFilterWorkspace, y::AbstractMatrix;
+        kwargs...)
+    y = _nan_obs(y)
     loglik = kalman_filter!(ws, y)
-    kalman_smoother!(ws; crosscov = crosscov, covariances = covariances)
+    _run_status(ws) == 0 && kalman_smoother!(ws; kwargs...)
     return loglik
 end
 
 # ============================================
 # Additional Accessors (aliases and new ones)
 # ============================================
-
-"""Return cross-lag covariances Cov[αₜ₊₁,αₜ|y₁:ₙ] as view."""
-crosslag_covs(ws::KalmanWorkspace) = ws.Pcross
-
-"""Return innovations yₜ - Z*aₜ as view (alias for prediction_errors)."""
-innovations(ws::KalmanWorkspace) = ws.vt
-
-"""Return innovation covariances as view (alias for variances_prediction_errors)."""
-innovation_covs(ws::KalmanWorkspace) = ws.Ft
 
 """
 Return the stored factors of Ft as a view.
@@ -1431,10 +1448,12 @@ covariance in its leading `n_observed[t]` rows and columns. On the rank-revealin
 path it instead holds `G`, with `Fₜ⁺ = G G'`, in its leading
 `n_observed[t] × innovation_ranks(ws)[t]` block; see [`set_rank_revealing!`](@ref).
 """
-cholesky_factors(ws::KalmanWorkspace) = ws.Ft_L
+cholesky_factors(ws::KalmanWorkspace) = _require_output(ws, :cholesky_factors).Ft_L
+
+_has_smoothed_cov(ws::KalmanWorkspace) = ws.smoothed_cov
 
 """Return count of non-missing observations."""
-n_valid_obs(ws::KalmanWorkspace) = ws.n_obs_valid
+n_valid_obs(ws::KalmanWorkspace) = _require_output(ws, :n_valid_obs).n_obs_valid
 
 # ============================================
 # Dimension accessors
@@ -1460,7 +1479,7 @@ Extends `KalmanWorkspace` with additional storage for the diffuse period:
 - `Pinf`: Current diffuse covariance (working storage)
 - `Pstar`: Current finite covariance (working storage)
 - `Finf`: Diffuse innovation covariance Z*Pinf*Z'
-- `diffuse_flags`: Track which step type was used (1=Finf invertible, 0=singular, -1=missing)
+- `diffuse_flags`: Track which step type was used (1=Finf invertible, 2=Finf singular but nonzero, 0=Finf zero, -1=missing)
 - `d`: Length of diffuse period (updated during filtering)
 - `diffuse_ended`: Flag indicating if diffuse period has ended
 
@@ -1469,15 +1488,14 @@ Extends `KalmanWorkspace` with additional storage for the diffuse period:
 ws = DiffuseKalmanWorkspace{Float64}(p, m, r, n)
 set_params!(ws, Z, H, T, R, Q)
 set_initial_diffuse!(ws, a1, P1_star, P1_inf)
-kalman_filter_diffuse!(ws, y)
+kalman_filter!(ws, y)
 ```
 
 # See Also
 - `KalmanWorkspace`: Standard filter workspace
-- `kalman_filter_diffuse!`: In-place diffuse filter
-- `kalman_filter_diffuse`: Pure functional version
+- `kalman_filter(p, y, a1, P1_star, P1_inf)`: Pure functional version
 """
-mutable struct DiffuseKalmanWorkspace{T <: Real}
+mutable struct DiffuseKalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Embed standard workspace (for shared functionality)
     base::KalmanWorkspace{T}
 
@@ -1521,23 +1539,23 @@ function DiffuseKalmanWorkspace{T}(
     DiffuseKalmanWorkspace{T}(
         base,
         # Diffuse initialization
-        Matrix{T}(undef, m, m),  # P1_star
-        Matrix{T}(undef, m, m),  # P1_inf
+        zeros(T, m, m),  # P1_star
+        zeros(T, m, m),  # P1_inf
         # Diffuse working storage
-        Matrix{T}(undef, m, m),  # Pinf
-        Matrix{T}(undef, m, m),  # Pstar
-        Matrix{T}(undef, p, p),  # Finf
-        Matrix{T}(undef, p, p),  # Finf_inv
+        zeros(T, m, m),  # Pinf
+        zeros(T, m, m),  # Pstar
+        zeros(T, p, p),  # Finf
+        zeros(T, p, p),  # Finf_inv
         # Diffuse tracking
-        Vector{Int}(undef, n),   # diffuse_flags (preallocate max)
+        zeros(Int, n),   # diffuse_flags (preallocate max)
         0,                       # d
         false,                   # diffuse_ended
         T(tol),                  # tol
         # Additional scratch
-        Matrix{T}(undef, m, m),  # tmp_mm_diff1
-        Matrix{T}(undef, m, m),  # tmp_mm_diff2
-        Matrix{T}(undef, m, p),  # tmp_mp_diff
-        Matrix{T}(undef, p, p)   # tmp_pp_diff
+        zeros(T, m, m),  # tmp_mm_diff1
+        zeros(T, m, m),  # tmp_mm_diff2
+        zeros(T, m, p),  # tmp_mp_diff
+        zeros(T, p, p)   # tmp_pp_diff
     )
 end
 
@@ -1604,6 +1622,8 @@ function set_initial_diffuse!(
         P1_star::AbstractMatrix,
         P1_inf::AbstractMatrix
 )
+    _check_initial(ws.base, "set_initial_diffuse!", a1, P1_star)
+    _check_size("set_initial_diffuse!", "P1_inf", P1_inf, size(ws.P1_inf))
     copyto!(ws.base.a1, a1)
     copyto!(ws.P1_star, P1_star)
     copyto!(ws.P1_inf, P1_inf)
@@ -1612,37 +1632,34 @@ function set_initial_diffuse!(
     return ws
 end
 
-# Delegate accessors to base
+# The filter output lives in the base workspace; the shared accessors read it from there.
+_filter_store(ws::DiffuseKalmanWorkspace) = ws.base
+system_matrices(ws::DiffuseKalmanWorkspace) = system_matrices(ws.base)
+
 obs_dim(ws::DiffuseKalmanWorkspace) = ws.base.obs_dim
 state_dim(ws::DiffuseKalmanWorkspace) = ws.base.state_dim
 shock_dim(ws::DiffuseKalmanWorkspace) = ws.base.shock_dim
 n_times(ws::DiffuseKalmanWorkspace) = ws.base.n_times
 
-predicted_states(ws::DiffuseKalmanWorkspace) = ws.base.at
-variances_predicted_states(ws::DiffuseKalmanWorkspace) = ws.base.Pt
-filtered_states(ws::DiffuseKalmanWorkspace) = ws.base.att
-variances_filtered_states(ws::DiffuseKalmanWorkspace) = ws.base.Ptt
-smoothed_states(ws::DiffuseKalmanWorkspace) = ws.base.αs
-variances_smoothed_states(ws::DiffuseKalmanWorkspace) = ws.base.Vs
-prediction_errors(ws::DiffuseKalmanWorkspace) = ws.base.vt
-variances_prediction_errors(ws::DiffuseKalmanWorkspace) = ws.base.Ft
-kalman_gains(ws::DiffuseKalmanWorkspace) = ws.base.Kt
-loglikelihood(ws::DiffuseKalmanWorkspace) = ws.base.loglik
-missing_mask(ws::DiffuseKalmanWorkspace) = ws.base.missing_mask
+observed_mask(ws::DiffuseKalmanWorkspace) = observed_mask(ws.base)
+observed_rows(ws::DiffuseKalmanWorkspace, t::Integer) = observed_rows(ws.base, t)
 
 """
     diffuse_period(ws::DiffuseKalmanWorkspace) -> Int
 
 Return the number of observations in the diffuse period.
 """
-diffuse_period(ws::DiffuseKalmanWorkspace) = ws.d
+diffuse_period(ws::DiffuseKalmanWorkspace) = (_require_output(ws, :diffuse_period); ws.d)
 
 """
     diffuse_flags(ws::DiffuseKalmanWorkspace) -> Vector{Int}
 
 Return flags for diffuse period steps (view of first d elements).
 """
-diffuse_flags(ws::DiffuseKalmanWorkspace) = view(ws.diffuse_flags, 1:ws.d)
+function diffuse_flags(ws::DiffuseKalmanWorkspace)
+    _require_output(ws, :diffuse_flags)
+    return view(ws.diffuse_flags, 1:ws.d)
+end
 
 # ============================================
 # In-place diffuse Kalman filter
@@ -1682,9 +1699,11 @@ Uses tmp as scratch space.
 end
 
 """
-    kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix) -> loglik
+    kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix) -> loglik
 
-Run Kalman filter with exact diffuse initialization in-place.
+Run Kalman filter with exact diffuse initialization in-place. The workspace type
+selects it: a `DiffuseKalmanWorkspace` holds the diffuse part `P1_inf` of the initial
+covariance, while a `KalmanWorkspace` runs the ordinary filter.
 
 # Arguments
 - `ws`: Pre-allocated diffuse workspace (must call `set_initial_diffuse!` first)
@@ -1699,13 +1718,23 @@ The filter runs in two phases:
 2. Non-diffuse period: Standard Kalman filter recursion
 
 Only observations after the diffuse period contribute to the log-likelihood.
+
+NaN marks a missing value, one element at a time. In a partially observed period
+both phases run on the reduced system formed by the observed rows, and `vt`, `Ft`,
+`Ft_L` and `Kt` hold pₜ-sized blocks in their leading rows and columns, as in
+[`kalman_filter!`](@ref) on a `KalmanWorkspace`.
+
+A diffuse-period step where `Finf = Z_t Pinf Z_t'` is singular but nonzero (more
+observed rows than diffuse directions they load on) is processed one row at a time
+(Koopman & Durbin 2000). A non-diagonal `H` is decorrelated first with its unit LDL
+factor.
 """
-function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
+function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     base = ws.base
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
-    @assert size(y) == (p, n) "Observation matrix size mismatch"
-    _require_no_partial_periods(y, "kalman_filter_diffuse!")
+    _check_obs(base, "kalman_filter!", y)
     base.rank_revealing && throw(ArgumentError(
         "the rank-revealing measurement update is implemented for " *
         "KalmanWorkspace only; clear it with set_rank_revealing!(ws.base, false) " *
@@ -1715,6 +1744,9 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
     base.loglik = zero(T)
     base.n_obs_valid = 0
     base.n_obs_rows = 0
+    base.smoothed = false
+    base.smoothed_cov = false
+    base.crosscov = false
     ws.d = 0
     ws.diffuse_ended = false
 
@@ -1726,21 +1758,22 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
 
     log2pi = log(T(2π))
     tol = ws.tol
+    Tt = transpose(base.Tmat)
 
     @inbounds for t in 1:n
-        # Store predicted state
-        for i in 1:m
-            base.at[i, t] = a_curr[i]
-        end
-        # Store predicted covariance (Pstar is the finite part)
-        for j in 1:m, i in 1:m
-
-            base.Pt[i, j, t] = ws.Pstar[i, j]
-        end
+        # Store predicted state and covariance (Pstar is the finite part)
+        copyto!(view(base.at, :, t), a_curr)
+        copyto!(view(base.Pt, :, :, t), ws.Pstar)
 
         y_t = view(y, :, t)
+        obs_rows_t = view(base.obs_rows, :, t)
+        pt = _observed_rows!(obs_rows_t, y_t)
+        base.n_observed[t] = pt
+        for i in 1:p
+            base.observed_mask[i, t] = !isnan(y_t[i])
+        end
 
-        if _has_missing(y_t)
+        if pt == 0
             base.missing_mask[t] = true
 
             # Store NaN for innovation
@@ -1757,53 +1790,30 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
                 base.Ft_L[i, j, t] = zero(T)
             end
 
-            for j in 1:p, i in 1:m
+            fill!(view(base.Kt, :, :, t), zero(T))
+            copyto!(view(base.att, :, t), a_curr)
+            copyto!(view(base.Ptt, :, :, t), ws.Pstar)
 
-                base.Kt[i, j, t] = zero(T)
-            end
+            mul!(base.tmp_m2, base.Tmat, a_curr)
+            copyto!(a_curr, base.tmp_m2)
 
-            for i in 1:m
-                base.att[i, t] = a_curr[i]
-            end
+            # Pstar = T * Pstar * T' + RQR
+            mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
+            mul!(base.tmp_mm3, base.tmp_mm2, Tt)
             for j in 1:m, i in 1:m
 
-                base.Ptt[i, j, t] = ws.Pstar[i, j]
+                ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
             end
 
-            if ws.diffuse_ended
-                # Standard propagation
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                copyto!(a_curr, base.tmp_m2)
-
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, base.Tmat')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
-            else
-                # Track diffuse period
+            if !ws.diffuse_ended
                 ws.d += 1
                 ws.diffuse_flags[ws.d] = -1  # missing
 
-                # Diffuse propagation
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                copyto!(a_curr, base.tmp_m2)
-
                 # Pinf = T * Pinf * T'
                 mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff1, base.tmp_mm2, base.Tmat')
+                mul!(ws.tmp_mm_diff1, base.tmp_mm2, Tt)
                 copyto!(ws.Pinf, ws.tmp_mm_diff1)
 
-                # Pstar = T * Pstar * T' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, base.Tmat')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
-
-                # Check convergence
                 if norm(ws.Pinf) <= tol
                     ws.diffuse_ended = true
                 end
@@ -1812,336 +1822,247 @@ function kalman_filter_diffuse!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix
         end
 
         base.missing_mask[t] = false
+        rows = view(obs_rows_t, 1:pt)
 
-        if ws.diffuse_ended
-            # === Standard Kalman filter step ===
+        # Both phases run on the reduced system (Z_t, H_t, y_t) formed by the
+        # observed rows, using the leading pt rows and columns of every p-shaped
+        # buffer. When pt == p this is the fully observed recursion.
+        Zr = view(base.tmp_pm, 1:pt, :)          # Z_t (pt×m)
+        for j in 1:m, (k, i) in pairs(rows)
+
+            Zr[k, j] = base.Z[i, j]
+        end
+        Hr = view(base.tmp_pp2, 1:pt, 1:pt)      # H_t (pt×pt)
+        for (l, j) in pairs(rows), (k, i) in pairs(rows)
+
+            Hr[k, l] = base.H[i, j]
+        end
+
+        # Innovation: v = y_t - Z_t * a
+        v_full = view(base.vt, :, t)
+        fill!(v_full, T(NaN))
+        v_t = view(v_full, 1:pt)
+        tmp_p1r = view(base.tmp_p1, 1:pt)
+        mul!(tmp_p1r, Zr, a_curr)
+        for (k, i) in pairs(rows)
+            v_t[k] = y_t[i] - tmp_p1r[k]
+        end
+
+        Ft_view = view(base.Ft, :, :, t)
+        fill!(Ft_view, T(NaN))
+        fill!(view(base.Ft_L, :, :, t), zero(T))
+        K_full = view(base.Kt, :, :, t)
+        fill!(K_full, zero(T))
+        K_t = view(K_full, :, 1:pt)
+
+        ZrP = view(base.tmp_pm2, 1:pt, :)        # Z_t * P (pt×m)
+        tmp_p2r = view(base.tmp_p2, 1:pt)
+        att_view = view(base.att, :, t)
+        Ptt_view = view(base.Ptt, :, :, t)
+
+        # During the diffuse period, check whether Finf = Z_t * Pinf * Z_t' is
+        # invertible.
+        flag = 0
+        if !ws.diffuse_ended
+            ws.d += 1
+            Finf = view(ws.Finf, 1:pt, 1:pt)
+            Finf_inv = view(ws.Finf_inv, 1:pt, 1:pt)
+            mul!(ZrP, Zr, ws.Pinf)
+            mul!(Finf, ZrP, transpose(Zr))
+            flag = _diffuse_step_flag(Finf, tol)
+            flag == 1 &&
+                _safe_inverse_inplace!(Finf_inv, Finf, view(ws.tmp_pp_diff, 1:pt, 1:pt), tol)
+            ws.diffuse_flags[ws.d] = flag
+        end
+
+        if flag == 2
+            # === Finf singular but nonzero: process the rows one at a time ===
+            # The filtered finite covariance is built in Ptt and the diffuse one in
+            # Pinf; G is the gain with a_filt = a + G v.
+            Zs = ZrP
+            copyto!(Zs, Zr)
+            copyto!(tmp_p2r, v_t)
+            copyto!(Ptt_view, ws.Pstar)
+            G = view(ws.tmp_mp_diff, :, 1:pt)
+            (ll, nrows, ok) = _univariate_diffuse_update!(
+                base.tmp_m2, G, Ptt_view, ws.Pinf, Zs, tmp_p2r, view(base.tmp_p1, 1:pt),
+                Hr, view(ws.tmp_pp_diff, 1:pt, 1:pt),
+                view(base.tmp_mp, :, 1), view(base.tmp_mp, :, 2), tol)
+            if !ok
+                base.status = t
+                base.loglik = T(-Inf)
+                return base.loglik
+            end
+            base.loglik += ll
+            base.n_obs_rows += nrows
+            nrows > 0 && (base.n_obs_valid += 1)
+
+            for i in 1:m
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
+            end
+            mul!(K_t, base.Tmat, G)
+            copyto!(view(Ft_view, 1:pt, 1:pt), view(ws.Finf, 1:pt, 1:pt))
+
+            # Predict next: a = T a_filt, Pinf = T Pinf_filt T',
+            # Pstar = T Pstar_filt T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
+            mul!(ws.Pinf, base.tmp_mm2, Tt)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
+            for j in 1:m, i in 1:m
+
+                ws.Pstar[i, j] += base.RQR[i, j]
+            end
+        elseif flag == 1
+            # === Finf invertible: exact diffuse update, no likelihood term ===
+            # Durbin & Koopman (2012, §5.2). With A = Pinf * Z_t' * Finf^{-1},
+            # the filtered state and the finite part of its covariance are the
+            # κ → ∞ limits of the update with P = κ Pinf + Pstar:
+            #   a_filt     = a + A v
+            #   Pstar_filt = Pstar - A Mstar' - Mstar A' + A Fstar A'
+            #   Pinf_filt  = Pinf - A Minf'
+            # where Minf = Pinf Z_t' and Mstar = Pstar Z_t'. Predicting each
+            # through T gives the K⁽⁰⁾/K⁽¹⁾ recursion.
+            Minf = view(base.tmp_mp, :, 1:pt)
+            mul!(Minf, ws.Pinf, transpose(Zr))
+            A = view(ws.tmp_mp_diff, :, 1:pt)
+            mul!(A, Minf, Finf_inv)
+
+            # a_filt = a + A v
+            mul!(base.tmp_m2, A, v_t)
+            for i in 1:m
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
+            end
+
+            # Kinf = K⁽⁰⁾ = T A, stored as the gain during the diffuse period,
+            # with Finf as the innovation covariance.
+            mul!(K_t, base.Tmat, A)
+            copyto!(view(Ft_view, 1:pt, 1:pt), Finf)
+
+            # Pinf = T (Pinf - A Minf') T'
+            copyto!(ws.tmp_mm_diff1, ws.Pinf)
+            mul!(ws.tmp_mm_diff1, A, transpose(Minf), -one(T), one(T))
+            mul!(base.tmp_mm2, base.Tmat, ws.tmp_mm_diff1)
+            mul!(ws.Pinf, base.tmp_mm2, Tt)
+
+            # Fstar = Z_t * Pstar * Z_t' + H_t
+            Fstar = view(ws.tmp_pp_diff, 1:pt, 1:pt)
+            mul!(ZrP, Zr, ws.Pstar)
+            mul!(Fstar, ZrP, transpose(Zr))
+            Fstar .+= Hr
+
+            # Pstar_filt = Pstar - A Mstar' - Mstar A' + A Fstar A'
+            Mstar = Minf                              # Minf is no longer needed
+            mul!(Mstar, ws.Pstar, transpose(Zr))
+            copyto!(Ptt_view, ws.Pstar)
+            mul!(Ptt_view, A, transpose(Mstar), -one(T), one(T))
+            mul!(Ptt_view, Mstar, transpose(A), -one(T), one(T))
+            AF = Mstar                                # Mstar is no longer needed
+            mul!(AF, A, Fstar)
+            mul!(Ptt_view, AF, transpose(A), one(T), one(T))
+
+            # Predict next: a = T * a_filt, Pstar = T * Pstar_filt * T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
+            for j in 1:m, i in 1:m
+
+                ws.Pstar[i, j] += base.RQR[i, j]
+            end
+        else
+            # === Standard update on Pstar ===
+            # Used after the diffuse period and, during it, whenever Finf is
+            # zero; the period then contributes to the likelihood.
             base.n_obs_valid += 1
+            base.n_obs_rows += pt
 
-            # Innovation: v = y - Z * a
-            mul!(base.tmp_p1, base.Z, a_curr)
-            for i in 1:p
-                base.vt[i, t] = y_t[i] - base.tmp_p1[i]
+            # F = Z_t * Pstar * Z_t' + H_t
+            mul!(ZrP, Zr, ws.Pstar)
+            Fr = view(base.tmp_pp1, 1:pt, 1:pt)
+            mul!(Fr, ZrP, transpose(Zr))
+            for l in 1:pt, k in 1:pt
+
+                Fr[k, l] += Hr[k, l]
+                Ft_view[k, l] = Fr[k, l]
             end
 
-            # F = Z * Pstar * Z' + H
-            mul!(base.tmp_pm, base.Z, ws.Pstar)
-            mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-            for j in 1:p, i in 1:p
-
-                base.tmp_pp1[i, j] += base.H[i, j]
-                base.Ft[i, j, t] = base.tmp_pp1[i, j]
+            # Cholesky on Symmetric(:L) reads only the lower triangle.
+            cholF = cholesky!(Symmetric(Fr, :L); check = false)
+            if !issuccess(cholF)
+                base.status = t
+                base.loglik = T(-Inf)
+                return base.loglik
             end
+            L_lower = LowerTriangular(cholF.factors)
+            for j in 1:pt, i in j:pt
 
-            # Symmetrize and Cholesky
-            for j in 1:p, i in 1:(j - 1)
-
-                avg = (base.tmp_pp1[i, j] + base.tmp_pp1[j, i]) / 2
-                base.tmp_pp1[i, j] = avg
-                base.tmp_pp1[j, i] = avg
-            end
-            chol = cholesky!(Symmetric(base.tmp_pp1, :L))
-
-            for j in 1:p, i in 1:p
-
-                base.Ft_L[i, j, t] = i >= j ? chol.L[i, j] : zero(T)
+                base.Ft_L[i, j, t] = L_lower[i, j]
             end
 
             # Log-likelihood
             logdetF = zero(T)
-            for i in 1:p
-                logdetF += 2 * log(chol.L[i, i])
+            for i in 1:pt
+                logdetF += 2 * log(L_lower[i, i])
             end
-
-            v_t = view(base.vt, :, t)
-            copyto!(base.tmp_p2, v_t)
-            ldiv!(LowerTriangular(chol.L), base.tmp_p2)
+            copyto!(tmp_p2r, v_t)
+            ldiv!(L_lower, tmp_p2r)                  # L^{-1} v
             quad_form = zero(T)
-            for i in 1:p
-                quad_form += base.tmp_p2[i]^2
+            for i in 1:pt
+                quad_form += tmp_p2r[i]^2
             end
             base.loglik += -T(0.5) * (logdetF + quad_form)
 
-            # Kalman gain K = T * Pstar * Z' * F^{-1}
-            mul!(base.tmp_mp, ws.Pstar, base.Z')
-            K_t = view(base.Kt, :, :, t)
-            mul!(K_t, base.Tmat, base.tmp_mp)
-            L_lower = LowerTriangular(chol.factors)
-            rdiv!(K_t, L_lower')
-            rdiv!(K_t, L_lower)
+            # M = Pstar * Z_t' * F^{-1} (m×pt)
+            Mr = view(base.tmp_mp, :, 1:pt)
+            mul!(Mr, ws.Pstar, transpose(Zr))
+            rdiv!(Mr, L_lower')
+            rdiv!(Mr, L_lower)
 
-            # Filtered state
-            ldiv!(L_lower', base.tmp_p2)  # tmp_p2 = F^{-1} * v
-            mul!(base.tmp_m2, base.tmp_mp, base.tmp_p2)
+            # K_t = T * M
+            mul!(K_t, base.Tmat, Mr)
+
+            # a_filt = a + M * v
+            mul!(base.tmp_m2, Mr, v_t)
             for i in 1:m
-                base.att[i, t] = a_curr[i] + base.tmp_m2[i]
+                att_view[i] = a_curr[i] + base.tmp_m2[i]
             end
 
-            # Filtered covariance
-            mul!(base.tmp_pm, base.Z, ws.Pstar)
-            ldiv!(L_lower, base.tmp_pm)
-            ldiv!(L_lower', base.tmp_pm)
-            mul!(base.tmp_mp, ws.Pstar, base.Z')
-            mul!(base.tmp_mm2, base.tmp_mp, base.tmp_pm)
+            # P_filt = Pstar - M * (Z_t * Pstar)
+            mul!(base.tmp_mm2, Mr, ZrP)
             for j in 1:m, i in 1:m
 
-                base.Ptt[i, j, t] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
+                Ptt_view[i, j] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
             end
 
-            # Predict next
-            a_filt = view(base.att, :, t)
-            P_filt = view(base.Ptt, :, :, t)
-            mul!(a_curr, base.Tmat, a_filt)
-            mul!(base.tmp_mm2, base.Tmat, P_filt)
-            mul!(ws.Pstar, base.tmp_mm2, base.Tmat')
+            # Predict next: a = T * a_filt, Pstar = T * P_filt * T' + RQR
+            mul!(a_curr, base.Tmat, att_view)
+            mul!(base.tmp_mm2, base.Tmat, Ptt_view)
+            mul!(ws.Pstar, base.tmp_mm2, Tt)
             for j in 1:m, i in 1:m
 
                 ws.Pstar[i, j] += base.RQR[i, j]
             end
 
-        else
-            # === Diffuse filter step ===
-            ws.d += 1
-
-            # Innovation: v = y - Z * a
-            mul!(base.tmp_p1, base.Z, a_curr)
-            for i in 1:p
-                base.vt[i, t] = y_t[i] - base.tmp_p1[i]
-            end
-            v_t = view(base.vt, :, t)
-
-            # Finf = Z * Pinf * Z'
-            mul!(base.tmp_pm, base.Z, ws.Pinf)
-            mul!(ws.Finf, base.tmp_pm, base.Z')
-
-            # Check if Finf is invertible
-            flag = _safe_inverse_inplace!(ws.Finf_inv, ws.Finf, ws.tmp_pp_diff, tol)
-            ws.diffuse_flags[ws.d] = flag
-
-            if flag == 1
-                # === Finf invertible: exact diffuse update ===
-
-                # Kinf = T * Pinf * Z' * Finf^{-1}
-                mul!(base.tmp_mp, ws.Pinf, base.Z')        # tmp_mp = Pinf * Z'
-                mul!(ws.tmp_mp_diff, base.Tmat, base.tmp_mp)  # Kinf = T * Pinf * Z'
-                # Kinf = Kinf * Finf_inv
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.Finf_inv)
-                # Store as Kinf in base.tmp_mp, copy to ws.tmp_mp_diff
-                copyto!(ws.tmp_mp_diff, base.tmp_mp)  # Kinf
-
-                # Linf = T - Kinf * Z
-                mul!(ws.tmp_mm_diff1, ws.tmp_mp_diff, base.Z)
-                for j in 1:m, i in 1:m
-
-                    ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
-                end
-                # tmp_mm_diff1 = Linf
-
-                # Fstar = Z * Pstar * Z' + H
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(ws.tmp_pp_diff, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    ws.tmp_pp_diff[i, j] += base.H[i, j]
-                end
-                # tmp_pp_diff = Fstar
-
-                # Kstar = (T * Pstar * Z' + Kinf * Fstar) * Finf^{-1}
-                # K1 = T * Pstar * Z' (m × p)
-                mul!(base.tmp_mp, ws.Pstar, base.Z')            # tmp_mp = Pstar * Z' (m × p)
-                K_t = view(base.Kt, :, :, t)
-                mul!(K_t, base.Tmat, base.tmp_mp)               # K_t = T * Pstar * Z' (m × p)
-
-                # K2 = Kinf * Fstar (m × p)
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.tmp_pp_diff)  # tmp_mp = Kinf * Fstar
-
-                # Kstar = (K1 + K2) * Finf_inv
-                for j in 1:p, i in 1:m
-
-                    K_t[i, j] += base.tmp_mp[i, j]  # K1 + K2
-                end
-                mul!(base.tmp_mp, K_t, ws.Finf_inv)
-                copyto!(K_t, base.tmp_mp)  # Kstar in Kt storage
-
-                # Store Finf as F
-                for j in 1:p, i in 1:p
-
-                    base.Ft[i, j, t] = ws.Finf[i, j]
-                    base.Ft_L[i, j, t] = zero(T)  # No valid Cholesky during diffuse
-                end
-
-                # Filtered state: a_filt = a + Pinf * Z' * Finf^{-1} * v
-                mul!(base.tmp_mp, ws.Pinf, base.Z')  # Pinf * Z'
-                mul!(base.tmp_m2, base.tmp_mp, ws.Finf_inv * v_t)
-                for i in 1:m
-                    base.att[i, t] = a_curr[i] + base.tmp_m2[i]
-                end
-
-                # Filtered covariance (approximation during diffuse)
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    base.tmp_pp1[i, j] += base.H[i, j]
-                end
-                # Use Fstar for filtered cov
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                # Simple approximation: P_filt ≈ Pstar
-                for j in 1:m, i in 1:m
-
-                    base.Ptt[i, j, t] = ws.Pstar[i, j]
-                end
-
-                # State prediction: a = T * a + Kinf * v
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                mul!(base.tmp_m1, ws.tmp_mp_diff, v_t)  # Kinf * v
-                for i in 1:m
-                    a_curr[i] = base.tmp_m2[i] + base.tmp_m1[i]
-                end
-
-                # Covariance updates
-                # Pinf' = T * Pinf * Linf'
+            if !ws.diffuse_ended
+                # Pinf = T * Pinf * T'
                 mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff2, base.tmp_mm2, ws.tmp_mm_diff1')
+                mul!(ws.tmp_mm_diff2, base.tmp_mm2, Tt)
                 copyto!(ws.Pinf, ws.tmp_mm_diff2)
-
-                # Pstar' = T * Pstar * Linf' + Kinf * Finf * Kstar' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')  # T*Pstar*Linf'
-
-                # Kinf * Finf * Kstar'
-                mul!(base.tmp_mp, ws.tmp_mp_diff, ws.Finf)  # Kinf * Finf
-                mul!(ws.tmp_mm_diff2, base.tmp_mp, K_t')    # * Kstar'
-
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + ws.tmp_mm_diff2[i, j] +
-                                     base.RQR[i, j]
-                end
-
-                # No likelihood contribution when Finf invertible
-
-            else
-                # === Finf singular: use Fstar-based update ===
-
-                # Fstar = Z * Pstar * Z' + H
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                mul!(base.tmp_pp1, base.tmp_pm, base.Z')
-                for j in 1:p, i in 1:p
-
-                    base.tmp_pp1[i, j] += base.H[i, j]
-                    base.Ft[i, j, t] = base.tmp_pp1[i, j]
-                end
-
-                # Symmetrize and Cholesky
-                for j in 1:p, i in 1:(j - 1)
-
-                    avg = (base.tmp_pp1[i, j] + base.tmp_pp1[j, i]) / 2
-                    base.tmp_pp1[i, j] = avg
-                    base.tmp_pp1[j, i] = avg
-                end
-                chol = cholesky!(Symmetric(base.tmp_pp1, :L))
-
-                for j in 1:p, i in 1:p
-
-                    base.Ft_L[i, j, t] = i >= j ? chol.L[i, j] : zero(T)
-                end
-
-                # This observation contributes to likelihood
-                base.n_obs_valid += 1
-                logdetF = zero(T)
-                for i in 1:p
-                    logdetF += 2 * log(chol.L[i, i])
-                end
-                copyto!(base.tmp_p2, v_t)
-                ldiv!(LowerTriangular(chol.L), base.tmp_p2)
-                quad_form = zero(T)
-                for i in 1:p
-                    quad_form += base.tmp_p2[i]^2
-                end
-                base.loglik += -T(0.5) * (logdetF + quad_form)
-
-                # Kstar = T * Pstar * Z' * Fstar^{-1}
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                K_t = view(base.Kt, :, :, t)
-                mul!(K_t, base.Tmat, base.tmp_mp)
-                L_lower = LowerTriangular(chol.factors)
-                rdiv!(K_t, L_lower')
-                rdiv!(K_t, L_lower)
-
-                # Lstar = T - Kstar * Z
-                mul!(ws.tmp_mm_diff1, K_t, base.Z)
-                for j in 1:m, i in 1:m
-
-                    ws.tmp_mm_diff1[i, j] = base.Tmat[i, j] - ws.tmp_mm_diff1[i, j]
-                end
-
-                # Filtered state
-                ldiv!(L_lower', base.tmp_p2)
-                mul!(base.tmp_m2, base.tmp_mp, base.tmp_p2)
-                for i in 1:m
-                    base.att[i, t] = a_curr[i] + base.tmp_m2[i]
-                end
-
-                # Filtered covariance
-                mul!(base.tmp_pm, base.Z, ws.Pstar)
-                ldiv!(L_lower, base.tmp_pm)
-                ldiv!(L_lower', base.tmp_pm)
-                mul!(base.tmp_mp, ws.Pstar, base.Z')
-                mul!(base.tmp_mm2, base.tmp_mp, base.tmp_pm)
-                for j in 1:m, i in 1:m
-
-                    base.Ptt[i, j, t] = ws.Pstar[i, j] - base.tmp_mm2[i, j]
-                end
-
-                # State prediction: a = T * a + Kstar * v
-                mul!(base.tmp_m2, base.Tmat, a_curr)
-                mul!(base.tmp_m1, K_t, v_t)
-                for i in 1:m
-                    a_curr[i] = base.tmp_m2[i] + base.tmp_m1[i]
-                end
-
-                # Covariance updates
-                # Pinf' = T * Pinf * T'
-                mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
-                mul!(ws.tmp_mm_diff2, base.tmp_mm2, base.Tmat')
-                copyto!(ws.Pinf, ws.tmp_mm_diff2)
-
-                # Pstar' = T * Pstar * Lstar' + RQR
-                mul!(base.tmp_mm2, base.Tmat, ws.Pstar)
-                mul!(base.tmp_mm3, base.tmp_mm2, ws.tmp_mm_diff1')
-                for j in 1:m, i in 1:m
-
-                    ws.Pstar[i, j] = base.tmp_mm3[i, j] + base.RQR[i, j]
-                end
             end
+        end
 
-            # Check if diffuse period ends
-            if norm(ws.Pinf) <= tol
-                ws.diffuse_ended = true
-            end
+        # Check if diffuse period ends
+        if !ws.diffuse_ended && norm(ws.Pinf) <= tol
+            ws.diffuse_ended = true
         end
     end
 
-    # Add constant term
-    base.loglik += -p * base.n_obs_valid * log2pi / 2
+    # The Gaussian constant counts every observed scalar that contributed.
+    base.loglik += -base.n_obs_rows * log2pi / 2
+    base.status = 0
 
     return base.loglik
-end
-
-# Unified API: kalman_filter! dispatches on workspace type
-"""
-    kalman_filter!(ws::DiffuseKalmanWorkspace, y) -> loglik
-
-Run in-place Kalman filter with exact diffuse initialization.
-
-This is the unified API: the workspace type determines whether to use
-standard or exact diffuse initialization. Use `DiffuseKalmanWorkspace`
-for exact diffuse, `KalmanWorkspace` for standard initialization.
-
-See also: [`kalman_filter!`](@ref) (standard version with KalmanWorkspace)
-"""
-function kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix)
-    kalman_filter_diffuse!(ws, y)
 end
 
 # ============================================
@@ -2277,13 +2198,16 @@ end
     compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix)
 
 Compute sufficient statistics from smoothed states for M-step.
-Assumes kalman_smoother!(kf_ws; crosscov=true) has been called.
+Requires `kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
+output, and throws an `ArgumentError` otherwise.
 """
 function compute_sufficient_stats!(
         em_ws::EMWorkspace{T},
         kf_ws::KalmanWorkspace{T},
         y::AbstractMatrix
 ) where {T}
+    # Checks that the smoother has run with the cross-lag covariances.
+    crosslag_covs(kf_ws)
     p, m, n = em_ws.obs_dim, em_ws.state_dim, em_ws.n_times
 
     # Reset sufficient statistics
@@ -2389,10 +2313,18 @@ end
 M-step update for observation matrix Z.
 Z_new = S_yα * S_αα^{-1}
 
-Only updates elements where em_ws.Z_free is true.
+Only updates elements where em_ws.Z_free is true. When some cells are fixed,
+the update is the restricted MLE, row by row: with `J` the free and `F` the
+fixed columns of row `i`,
+
+    Z[i, J] = (S_yα[i, J] - Z[i, F] S_αα[F, J]) * inv(S_αα[J, J]).
+
+This is exact when `H` is diagonal or all rows share the same free columns.
 """
 function update_Z!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
+
+    all(em_ws.Z_free) || return _update_Z_restricted!(kf_ws, em_ws)
 
     # Compute S_αα^{-1} (use only valid observations portion)
     # tmp_mm1 = S_αα
@@ -2427,6 +2359,46 @@ function update_Z!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
 
         if em_ws.Z_free[i, j]
             kf_ws.Z[i, j] = em_ws.tmp_pm[i, j]
+        end
+    end
+
+    return nothing
+end
+
+# Restricted row-wise Z update for a partially free Z (see update_Z!). Rows that
+# share the previous row's free pattern reuse its Cholesky factor.
+function _update_Z_restricted!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
+    p, m = em_ws.obs_dim, em_ws.state_dim
+    S_αα, S_yα, Z = em_ws.S_αα, em_ws.S_yα, kf_ws.Z
+
+    J = Int[]
+    chol = nothing
+    rhs = T[]
+    @inbounds for i in 1:p
+        free_i = view(em_ws.Z_free, i, :)
+        any(free_i) || continue
+        if chol === nothing || !(length(J) == count(free_i) && all(j -> free_i[j], J))
+            J = findall(free_i)
+            S_JJ = S_αα[J, J]
+            for d in eachindex(J)
+                S_JJ[d, d] += T(1e-10)
+            end
+            chol = cholesky!(Symmetric(S_JJ, :L))
+            rhs = Vector{T}(undef, length(J))
+        end
+        # rhs = S_yα[i, J] - Z[i, F] S_αα[F, J]
+        for (jj, j) in enumerate(J)
+            s = S_yα[i, j]
+            for f in 1:m
+                if !free_i[f] && !iszero(Z[i, f])
+                    s -= Z[i, f] * S_αα[f, j]
+                end
+            end
+            rhs[jj] = s
+        end
+        ldiv!(chol, rhs)
+        for (jj, j) in enumerate(J)
+            Z[i, j] = rhs[jj]
         end
     end
 
@@ -2804,7 +2776,7 @@ end
 
 """
     em_estimate!(kf_ws::KalmanWorkspace, em_ws::EMWorkspace, y::AbstractMatrix;
-                 maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false,
+                 maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false, warn::Bool=true,
                  estimate_Z::Bool=true, estimate_H::Bool=true,
                  estimate_T::Bool=true, estimate_Q::Bool=true,
                  estimate_initial::Bool=true) -> EMResult
@@ -2820,6 +2792,7 @@ Run EM algorithm to estimate state-space model parameters.
 - `maxiter`: Maximum number of EM iterations (default: 500)
 - `tol`: Convergence tolerance for log-likelihood change (default: 1e-6)
 - `verbose`: Print progress (default: false)
+- `warn`: Emit a warning when EM stops without converging (default: true)
 - `estimate_Z`: Update observation matrix Z (default: true)
 - `estimate_H`: Update observation covariance H (default: true)
 - `estimate_T`: Update transition matrix T (default: true)
@@ -2848,8 +2821,10 @@ function em_estimate!(
         estimate_initial::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
-        min_degen_iter::Int = 50
+        min_degen_iter::Int = 50,
+        warn::Bool = true
 ) where {T}
+    y = _nan_obs(y)
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
     converged = false
@@ -2859,9 +2834,12 @@ function em_estimate!(
         iter = i
 
         # E-step: Filter and smooth
-        filter_and_smooth!(kf_ws, y)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
         ll = kf_ws.loglik
         loglik_history[i] = ll
+
+        # A failed filter leaves nothing to compute the sufficient statistics from.
+        kf_ws.status == 0 || break
 
         # Check convergence
         if i > 1
@@ -2922,9 +2900,12 @@ function em_estimate!(
     # holds filter+smoother results consistent with the current parameters.
     # Only re-run when we exhausted maxiter without converging (params were
     # just updated and the workspace is stale).
-    if !converged
-        filter_and_smooth!(kf_ws, y)
+    failed_at = kf_ws.status
+    if !converged && failed_at == 0
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
+        failed_at = kf_ws.status
     end
+    warn && _warn_em(converged, iter, failed_at, tol)
 
     return EMResult{T}(
         converged,
@@ -2938,14 +2919,30 @@ function em_estimate!(
     )
 end
 
+# Warn that an EM run stopped without converging. `failed_at` is the period in
+# which the last filter run failed, or 0.
+function _warn_em(converged::Bool, iter::Integer, failed_at::Integer, tol::Real)
+    converged && return nothing
+    if failed_at > 0
+        @warn "EM stopped at iteration $iter: $(_failure_message(failed_at)). " *
+              "Try other starting values. Pass `warn = false` to silence this warning."
+    else
+        @warn "EM did not converge in $iter iterations (relative change in the " *
+              "log-likelihood still above tol = $tol). Increase `maxiter` or pass " *
+              "`warn = false` to silence this warning."
+    end
+    return nothing
+end
+
 # `_try_degenerate!(kf_ws, em_ws, y; degen_lim, what)` — internal helper for
 # the `allow_degen` opt-in path of `em_estimate!`. Mirrors MARSS's
 # `degen.test`: for each diagonal cell of `H` (when `what === :H`) or `Q`
 # (when `what === :Q`) whose current value is below `degen_lim`, tentatively
-# zero the cell, run `filter_and_smooth!`, and commit the freeze iff loglik
+# zero the cell, run `kalman_filter_and_smooth!`, and commit the freeze iff loglik
 # is finite and does not decrease beyond `√eps`. On a failed freeze the prior
-# value is restored and the smoother is re-run so the workspace stays
-# consistent. Returns the number of cells frozen by this call.
+# value is restored. When any trial ran, the filter and smoother are re-run at
+# the end so the workspace matches the committed parameters. Returns the number
+# of cells frozen by this call.
 function _try_degenerate!(
         kf_ws::KalmanWorkspace{T},
         em_ws::EMWorkspace{T},
@@ -2955,6 +2952,7 @@ function _try_degenerate!(
 ) where {T}
     em_ws.H_diag_only || return 0   # only meaningful for diagonal H/Q
     n_frozen = 0
+    n_trials = 0
     ll_old = kf_ws.loglik
     isfinite(ll_old) || return 0
     threshold = T(degen_lim)
@@ -2967,17 +2965,13 @@ function _try_degenerate!(
             h_save = kf_ws.H[i, i]
             h_save < threshold || continue
             kf_ws.H[i, i] = zero(T)
-            try
-                filter_and_smooth!(kf_ws, y)
-                ll_new = kf_ws.loglik
-                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
-                    em_ws.H_zero[i] = true
-                    ll_old = ll_new
-                    n_frozen += 1
-                else
-                    kf_ws.H[i, i] = h_save
-                end
-            catch
+            n_trials += 1
+            ll_new = kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
+            if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                em_ws.H_zero[i] = true
+                ll_old = ll_new
+                n_frozen += 1
+            else
                 kf_ws.H[i, i] = h_save
             end
         end
@@ -2997,19 +2991,13 @@ function _try_degenerate!(
                 end
             end
             _update_RQR!(kf_ws)
-            try
-                filter_and_smooth!(kf_ws, y)
-                ll_new = kf_ws.loglik
-                if isfinite(ll_new) && ll_new >= ll_old - eps_tol
-                    em_ws.Q_zero[i] = true
-                    ll_old = ll_new
-                    n_frozen += 1
-                else
-                    kf_ws.Q[i, :] .= row_save
-                    kf_ws.Q[:, i] .= col_save
-                    _update_RQR!(kf_ws)
-                end
-            catch
+            n_trials += 1
+            ll_new = kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
+            if isfinite(ll_new) && ll_new >= ll_old - eps_tol
+                em_ws.Q_zero[i] = true
+                ll_old = ll_new
+                n_frozen += 1
+            else
                 kf_ws.Q[i, :] .= row_save
                 kf_ws.Q[:, i] .= col_save
                 _update_RQR!(kf_ws)
@@ -3019,10 +3007,10 @@ function _try_degenerate!(
         throw(ArgumentError("`what` must be :H or :Q, got $what"))
     end
 
-    # Re-sync the workspace if anything was frozen so subsequent M-step calls
-    # see the up-to-date sufficient statistics.
-    if n_frozen > 0
-        filter_and_smooth!(kf_ws, y)
+    # Re-sync the workspace with the committed parameters so subsequent M-step
+    # calls see the up-to-date sufficient statistics.
+    if n_trials > 0
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
     end
 
     return n_frozen
@@ -3172,6 +3160,38 @@ Subtypes:
 """
 abstract type AbstractStateSpaceModel end
 
+# Every model stores `fitted`, `converged`, `iterations` and `loglik`.
+_fit_hint(::AbstractStateSpaceModel) = "fit!(MLE(), model, y) or fit!(EM(), model, y)"
+
+function _require_fitted(model::AbstractStateSpaceModel)
+    model.fitted ||
+        throw(ArgumentError("Model not fitted. Call $(_fit_hint(model)) first."))
+    return nothing
+end
+
+"""
+    isfitted(model::AbstractStateSpaceModel) -> Bool
+
+Return whether the model has been fitted (or built with known parameters).
+"""
+isfitted(model::AbstractStateSpaceModel) = model.fitted
+
+"""
+    isconverged(model::AbstractStateSpaceModel) -> Bool
+
+Return whether the estimation converged. Throws if the model is not fitted.
+"""
+isconverged(model::AbstractStateSpaceModel) = (_require_fitted(model); model.converged)
+
+"""
+    niterations(model::AbstractStateSpaceModel) -> Int
+
+Return the number of estimation iterations. Throws if the model is not fitted.
+"""
+niterations(model::AbstractStateSpaceModel) = (_require_fitted(model); model.iterations)
+
+loglikelihood(model::AbstractStateSpaceModel) = (_require_fitted(model); model.loglik)
+
 # ============================================
 # StateSpaceModel
 # ============================================
@@ -3247,7 +3267,9 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     Ft::Array{T, 3}          # Innovation covariances (p × p × n)
     Kt::Array{T, 3}          # Kalman gains (m × p × n)
     missing_mask::BitVector
-    filter_valid::Bool
+    observed_mask::BitMatrix  # p × n: true where y[i,t] is observed
+    # _NOT_RUN, 0 after a successful filter run, or the period where it failed
+    filter_status::Int
 
     # Smoother cache (lazily computed)
     smoother_computed::Bool
@@ -3288,18 +3310,19 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     n = n_times
 
     # Pre-allocate filter storage
-    at = Matrix{T}(undef, m, n)
-    Pt = Array{T, 3}(undef, m, m, n)
-    att = Matrix{T}(undef, m, n)
-    Ptt = Array{T, 3}(undef, m, m, n)
-    vt = Matrix{T}(undef, p, n)
-    Ft = Array{T, 3}(undef, p, p, n)
-    Kt = Array{T, 3}(undef, m, p, n)
-    missing_mask = BitVector(undef, n)
+    at = zeros(T, m, n)
+    Pt = zeros(T, m, m, n)
+    att = zeros(T, m, n)
+    Ptt = zeros(T, m, m, n)
+    vt = zeros(T, p, n)
+    Ft = zeros(T, p, p, n)
+    Kt = zeros(T, m, p, n)
+    missing_mask = falses(n)
+    observed_mask = falses(p, n)
 
     # Smoother storage (allocated but not valid until computed)
-    smoothed_alpha = Matrix{T}(undef, m, n)
-    smoothed_V = Array{T, 3}(undef, m, m, n)
+    smoothed_alpha = zeros(T, m, n)
+    smoothed_V = zeros(T, m, m, n)
 
     # Parameter storage
     n_params = length(spec.params)
@@ -3350,7 +3373,8 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         Ft,
         Kt,
         missing_mask,
-        false,
+        observed_mask,
+        _NOT_RUN,  # filter_status
         false,
         smoothed_alpha,
         smoothed_V,
@@ -3451,8 +3475,13 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     copyto!(model.Ft, filt.Ft)
     copyto!(model.Kt, filt.Kt)
     copyto!(model.missing_mask, filt.missing_mask)
-    model.filter_valid = true
+    _store_observed_mask!(model.observed_mask, filt)
+    model.filter_status = filt.failed_at
     return nothing
+end
+
+function _store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult})
+    copyto!(mask, filt.observed_mask)
 end
 
 """Copy filter results from KalmanWorkspace to model."""
@@ -3468,7 +3497,8 @@ function _ssm_copy_from_workspace!(model::StateSpaceModel, kf_ws::KalmanWorkspac
     for t in 1:model.n_times
         model.missing_mask[t] = kf_ws.missing_mask[t]
     end
-    model.filter_valid = true
+    copyto!(model.observed_mask, kf_ws.observed_mask)
+    model.filter_status = kf_ws.status
     return nothing
 end
 
@@ -3476,34 +3506,14 @@ end
 # StateSpaceModel Status Accessors
 # ============================================
 
-"""Check if model has been fitted."""
-isfitted(model::StateSpaceModel) = model.fitted
+"""
+    parameters(model::StateSpaceModel) -> NamedTuple
 
-"""Check if estimation converged. Throws if not fitted."""
-function isconverged(model::StateSpaceModel)
-    model.fitted || throw(
-        ArgumentError(
-        "Model not fitted. Call fit!(MLE(), model, y) or fit!(EM(), model, y) first.",
-    ),
-    )
-    return model.converged
-end
-
-"""Return log-likelihood at fitted parameters. Throws if not fitted."""
-function loglikelihood(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    return model.loglik
-end
-
-"""Return number of iterations. Throws if not fitted."""
-function niterations(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    return model.iterations
-end
-
-"""Return fitted parameters as NamedTuple. Throws if not fitted."""
+Return the fitted parameters θ as a NamedTuple keyed by parameter name. Throws if the
+model is not fitted.
+"""
 function parameters(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted."))
+    _require_fitted(model)
     return _ssm_get_theta_namedtuple(model)
 end
 
@@ -3559,41 +3569,45 @@ end
 # StateSpaceModel Filter Accessors
 # ============================================
 
-"""Return filtered states E[αₜ|y₁:ₜ] (m × n). Throws if not fitted."""
-function filtered_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call fit! first."))
-    return model.att
+function _require_filter(model::StateSpaceModel)
+    status = model.filter_status
+    status == 0 && return nothing
+    status == _NOT_RUN && throw(ArgumentError(
+        "Filter not run. Call fit!(MLE(), model, y), fit!(EM(), model, y) or " *
+        "kalman_filter!(model, y) first."))
+    throw(ArgumentError("At the model's parameters $(_failure_message(status))."))
 end
 
-"""Return filtered state covariances Var[αₜ|y₁:ₜ] (m × m × n). Throws if not fitted."""
-function filtered_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Ptt
+# Throw unless `y` is n_obs × n_times for `model`.
+function _check_model_obs(model::StateSpaceModel, caller, y::AbstractMatrix)
+    _check_size(caller, "y", y, (model.spec.n_obs, model.n_times))
 end
 
-"""Return predicted states E[αₜ|y₁:ₜ₋₁] (m × n). Throws if not fitted."""
-function predicted_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.at
+# A model built with known parameters has no log-likelihood until its filter has run.
+function loglikelihood(model::StateSpaceModel)
+    _require_fitted(model)
+    model.filter_status == _NOT_RUN && _require_filter(model)
+    return model.loglik
 end
 
-"""Return predicted state covariances Var[αₜ|y₁:ₜ₋₁] (m × m × n). Throws if not fitted."""
-function predicted_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Pt
-end
-
-"""Return prediction errors / innovations yₜ - E[yₜ|y₁:ₜ₋₁] (p × n). Throws if not fitted."""
+filtered_states(model::StateSpaceModel) = (_require_filter(model); model.att)
+filtered_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Ptt)
+predicted_states(model::StateSpaceModel) = (_require_filter(model); model.at)
+predicted_states_cov(model::StateSpaceModel) = (_require_filter(model); model.Pt)
 function prediction_errors(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.vt
+    _require_filter(model)
+    return _unpack_innovations(model.vt, model.observed_mask)
 end
-
-"""Return innovation covariances Var[yₜ|y₁:ₜ₋₁] (p × p × n). Throws if not fitted."""
 function prediction_errors_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
-    return model.Ft
+    _require_filter(model)
+    return _unpack_innovation_covs(model.Ft, model.observed_mask)
 end
+function kalman_gains(model::StateSpaceModel)
+    _require_filter(model)
+    return _unpack_gains(model.Kt, model.observed_mask)
+end
+missing_mask(model::StateSpaceModel) = (_require_filter(model); model.missing_mask)
+observed_mask(model::StateSpaceModel) = (_require_filter(model); model.observed_mask)
 
 # ============================================
 # StateSpaceModel Smoother (Lazy Computation)
@@ -3601,19 +3615,23 @@ end
 
 """Compute smoother and cache results."""
 function _ssm_compute_smoother!(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+    _require_filter(model)
+    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
+        "Smoothing is not available for exact diffuse initialisation (diffuse = :exact). " *
+        "Use approximate diffuse initialisation (diffuse = true) to smooth."))
 
     # Get system matrices at fitted parameters
     theta_nt = _ssm_get_theta_namedtuple(model)
     kfparms = Siphon.build_kfparms(model.spec, theta_nt)
 
     # Run smoother using stored filter results
-    alpha,
-    V = Siphon.kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft)
+    sm = _kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
+        missing_mask = model.missing_mask, observed_mask = model.observed_mask,
+        Ptt = model.Ptt)
 
     # Cache results
-    copyto!(model.smoothed_alpha, alpha)
-    copyto!(model.smoothed_V, V)
+    copyto!(model.smoothed_alpha, sm.αs)
+    copyto!(model.smoothed_V, sm.Vs)
     model.smoother_computed = true
     return nothing
 end
@@ -3626,7 +3644,7 @@ Return smoothed states E[αₜ|y₁:ₙ] (m × n).
 Computes smoother on first call and caches the result.
 """
 function smoothed_states(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call fit! first."))
+    _require_filter(model)
     if !model.smoother_computed
         _ssm_compute_smoother!(model)
     end
@@ -3641,7 +3659,7 @@ Return smoothed state covariances Var[αₜ|y₁:ₙ] (m × m × n).
 Computes smoother on first call and caches the result.
 """
 function smoothed_states_cov(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+    _require_filter(model)
     if !model.smoother_computed
         _ssm_compute_smoother!(model)
     end
@@ -3653,99 +3671,43 @@ end
 # ============================================
 
 """
-    obs_matrix(model::StateSpaceModel)
+    system_matrices(model::StateSpaceModel) -> KFParms
 
-Return observation matrix Z (p × m) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function obs_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.Z
-end
-
-"""
-    obs_cov(model::StateSpaceModel)
-
-Return observation noise covariance H (p × p) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function obs_cov(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.H
-end
-
-"""
-    transition_matrix(model::StateSpaceModel)
-
-Return state transition matrix T (m × m) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function transition_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.T
-end
-
-"""
-    selection_matrix(model::StateSpaceModel)
-
-Return state noise selection matrix R (m × r) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function selection_matrix(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.R
-end
-
-"""
-    state_cov(model::StateSpaceModel)
-
-Return state noise covariance Q (r × r) at fitted parameters.
-
-Throws if model is not fitted.
-"""
-function state_cov(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return kfparms.Q
-end
-
-"""
-    system_matrices(model::StateSpaceModel)
-
-Return all system matrices as a NamedTuple (Z, H, T, R, Q) at fitted parameters.
-
-This is more efficient than calling individual accessors when multiple matrices are needed.
+Return the system matrices at the fitted parameters as a `KFParms` (fields `Z`, `H`,
+`T`, `R`, `Q`). Throws if the model is not fitted.
 
 # Example
 ```julia
-mats = system_matrices(model)
-mats.Z  # observation matrix
-mats.H  # observation covariance
-mats.T  # transition matrix
-mats.R  # selection matrix
-mats.Q  # state covariance
+p = system_matrices(model)
+p.Z  # observation matrix
+filt = kalman_filter(p, y, initial_state(model), initial_state_cov(model))
 ```
-
-Throws if model is not fitted.
 """
 function system_matrices(model::StateSpaceModel)
-    model.fitted || throw(ArgumentError("Model not fitted. Call fit! first."))
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-    return (Z = kfparms.Z, H = kfparms.H, T = kfparms.T, R = kfparms.R, Q = kfparms.Q)
+    _require_fitted(model)
+    return Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
+end
+
+"""
+    initial_state(model::StateSpaceModel) -> Vector
+
+Return the initial state mean a₁ at the fitted parameters. Throws if the model is not
+fitted.
+"""
+function initial_state(model::StateSpaceModel)
+    _require_fitted(model)
+    return first(Siphon.build_initial_state(model.spec, _ssm_get_theta_namedtuple(model)))
+end
+
+"""
+    initial_state_cov(model::StateSpaceModel) -> Matrix
+
+Return the initial state covariance P₁ at the fitted parameters; under exact diffuse
+initialisation, its finite part P₁*. Throws if the model is not fitted.
+"""
+function initial_state_cov(model::StateSpaceModel)
+    _require_fitted(model)
+    return last(Siphon.build_initial_state(model.spec, _ssm_get_theta_namedtuple(model)))
 end
 
 # ============================================
@@ -3773,18 +3735,17 @@ ll = kalman_loglik(model, y)
 ```
 """
 function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "kalman_loglik", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
 
-    return Siphon.kalman_loglik(ss.p, y, ss.a1, ss.P1)
+    return DSL._ss_loglik(ss, y)
 end
 
 """
@@ -3800,7 +3761,8 @@ Run Kalman filter and store results in model.
 Log-likelihood value (Float64)
 
 # Side Effects
-- Sets `model.filter_valid = true`
+- Records the filter status; if an innovation covariance is not positive definite
+  the log-likelihood is `-Inf` and the filter accessors throw
 - Stores filtered/predicted states and covariances
 - Updates `model.loglik`
 
@@ -3814,18 +3776,17 @@ att = filtered_states(model)
 ```
 """
 function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
 
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    _check_model_obs(model, "kalman_filter!", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
     use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
 
-    filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
+    filt = DSL._ss_filter(ss, y)
 
     # Store results
     _ssm_store_filter_results!(model, filt)
@@ -3860,7 +3821,7 @@ kalman_smoother!(model)
 ```
 """
 function kalman_smoother!(model::StateSpaceModel)
-    model.filter_valid || throw(ArgumentError("Filter not run. Call kalman_filter! first."))
+    _require_filter(model)
 
     # Use existing internal function
     _ssm_compute_smoother!(model)
@@ -3930,9 +3891,8 @@ function fit!(
         verbose::Bool = false,
         kwargs...
 ) where {T}
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
+    y = _nan_obs(y)
+    _check_model_obs(model, "fit!(MLE(), ...)", y)
 
     use_static = _resolve_static_choice(
         static, static_threshold,
@@ -3947,7 +3907,7 @@ function fit!(
     # Run full filter to get filter results
     theta_nt = _ssm_get_theta_namedtuple(model)
     ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
-    filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
+    filt = DSL._ss_filter(ss, y)
 
     # Copy filter results to model storage
     _ssm_store_filter_results!(model, filt)
@@ -3992,6 +3952,8 @@ Automatically selects backend based on dimensions:
 - `maxiter::Int=500`: Maximum EM iterations
 - `tol::Real=1e-6`: Convergence tolerance (relative change in log-likelihood)
 - `verbose::Bool=false`: Print progress
+- `warn::Bool=true`: Warn when EM stops without converging, either at `maxiter` or
+  because the filter failed at the current parameters
 
 # Returns
 The fitted `model` (same object, mutated)
@@ -4014,14 +3976,18 @@ function fit!(
         maxiter::Int = 500,
         tol::Real = 1e-6,
         verbose::Bool = false,
+        warn::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
         min_degen_iter::Int = 50
 ) where {T}
-    p_obs, n = size(y)
-    @assert n == model.n_times "Observation length $n != model.n_times $(model.n_times)"
-    @assert p_obs == model.spec.n_obs "Observation dim $p_obs != spec.n_obs $(model.spec.n_obs)"
-    _require_no_partial_periods(y, "fit!(EM(), ...)")
+    y = _nan_obs(y)
+    _check_model_obs(model, "fit!(EM(), ...)", y)
+    _require_no_partial_periods(y, "fit!(EM(), ...)",
+        "Use fit!(MLE(), ...), which handles them.")
+    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
+        "fit!(EM(), ...) does not support exact diffuse initialisation (diffuse = :exact). " *
+        "Use fit!(MLE(), ...), or approximate diffuse initialisation (diffuse = true)."))
 
     # All models route through the in-place EM path. Benchmarks show the
     # in-place workspace beats the pure/static EM by 1.6–2.6× even on the
@@ -4031,14 +3997,13 @@ function fit!(
     # there is no n × iters multiplier to wash out the savings.
     _ssm_fit_em_inplace!(
         model, y;
-        maxiter = maxiter, tol = tol, verbose = verbose,
+        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
         allow_degen = allow_degen, degen_lim = degen_lim,
         min_degen_iter = min_degen_iter
     )
     model.backend = :em_inplace
 
     model.fitted = true
-    model.filter_valid = true
     model.smoother_computed = false
 
     return model
@@ -4051,6 +4016,7 @@ function _ssm_fit_em_inplace!(
         maxiter::Int,
         tol::Real,
         verbose::Bool,
+        warn::Bool = true,
         allow_degen::Bool = false,
         degen_lim::Real = 1e-4,
         min_degen_iter::Int = 50
@@ -4079,7 +4045,7 @@ function _ssm_fit_em_inplace!(
     # Run EM using existing em_estimate!
     em_result = em_estimate!(
         kf_ws, em_ws, y;
-        maxiter = maxiter, tol = tol, verbose = verbose,
+        maxiter = maxiter, tol = tol, verbose = verbose, warn = warn,
         allow_degen = allow_degen, degen_lim = degen_lim,
         min_degen_iter = min_degen_iter
     )
@@ -4724,22 +4690,22 @@ function _ssm_fit_em_static!(
         loglik_prev = loglik_curr
 
         # E-step: Run smoother with cross-covariances for M-step
-        smooth = Siphon.kalman_smoother(
+        smooth = _kalman_smoother(
             ss.p.Z,
             ss.p.T,
             filt.at,
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true
+            crosscov = true
         )
 
         # Compute sufficient statistics from smoother output
         stats = _compute_static_sufficient_stats(
             y,
-            smooth.alpha,
-            smooth.V,
-            smooth.P_crosslag,
+            smooth.αs,
+            smooth.Vs,
+            smooth.Pcross,
             filt.missing_mask
         )
 
@@ -4792,84 +4758,26 @@ end
 # ============================================
 
 """
-    forecast(model::StateSpaceModel, h::Int)
+    forecast(model::StateSpaceModel, h::Integer) -> ForecastResult
 
-Forecast h steps ahead from fitted model.
-
-Uses the filtered state at the last observation and iterates forward.
-
-# Arguments
-- `model`: Fitted StateSpaceModel
-- `h`: Forecast horizon
-
-# Returns
-NamedTuple with:
-- `yhat`: Forecasted observations (p × h)
-- `a`: Forecasted states (m × h)
-- `P`: Forecasted state covariances (m × m × h)
-- `F`: Forecasted observation covariances (p × p × h)
+Forecast the `h` periods after the sample from a fitted model, starting from the
+filtered state of the last period. See [`ForecastResult`](@ref).
 
 # Example
 ```julia
 model = StateSpaceModel(local_level(), 100)
 fit!(MLE(), model, y)
 fc = forecast(model, 10)
-fc.yhat  # 1 × 10 forecasts
+forecast_observations(fc)  # 1 × 10 forecasts of periods 101:110
 ```
 """
-function forecast(model::StateSpaceModel{T}, h::Int) where {T}
-    model.fitted || throw(ArgumentError("Model not fitted."))
-    model.filter_valid || throw(ArgumentError("Filter not run."))
+function forecast(model::StateSpaceModel, h::Integer)
+    _require_fitted(model)
+    _require_filter(model)
 
-    # Get system matrices at fitted parameters
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
-
-    # Get final filtered state
+    kfparms = Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
     n = model.n_times
-    a_final = model.att[:, n]
-    P_final = model.Ptt[:, :, n]
-
-    # Forecast forward
-    _ssm_forecast_from_state(kfparms, a_final, P_final, h)
-end
-
-"""Internal forecast helper."""
-function _ssm_forecast_from_state(
-        p::KFParms,
-        a::AbstractVector{T},
-        P::AbstractMatrix{T},
-        h::Int
-) where {T}
-    m = length(a)
-    obs_dim = size(p.Z, 1)
-
-    yhat = Matrix{T}(undef, obs_dim, h)
-    a_fc = Matrix{T}(undef, m, h)
-    P_fc = Array{T, 3}(undef, m, m, h)
-    F_fc = Array{T, 3}(undef, obs_dim, obs_dim, h)
-
-    # Compute RQR' once
-    RQR = p.R * p.Q * p.R'
-
-    # First step: predict from final filtered state
-    a_curr = p.T * a
-    P_curr = p.T * P * p.T' + RQR
-
-    for j in 1:h
-        a_fc[:, j] = a_curr
-        P_fc[:, :, j] = P_curr
-        yhat[:, j] = p.Z * a_curr
-        F_fc[:, :, j] = p.Z * P_curr * p.Z' + p.H
-
-        # Propagate for next step
-        if j < h
-            a_curr = p.T * a_curr
-            P_curr = p.T * P_curr * p.T' + RQR
-        end
-    end
-
-    return (yhat = yhat, a = a_fc, P = P_fc, F = F_fc)
+    return _forecast_from_filtered(kfparms, model.att[:, n], model.Ptt[:, :, n], n, h)
 end
 
 # ============================================
@@ -4892,9 +4800,15 @@ where:
     δ(L) = δ₁L + ... + δᵣLʳ       (AR idiosyncratic errors, common across i)
 
 State-space representation:
-    State vector: αₜ = [fₜ; fₜ₋₁; ...; fₜ₋ₛ₊₁; eₜ; eₜ₋₁; ...; eₜ₋ᵣ₊₁]
+    State vector: αₜ = [fₜ; fₜ₋₁; ...; fₜ₋ₛ₊₁], with s = max(q, p + r + 1)
 
-    where s = max(q, p) to accommodate both factor dynamics and dynamic loadings
+    With white-noise errors (r = 0) the observation equation is
+    Xₜ = λ(L) fₜ + vₜ. With AR errors (r > 0) it is quasi-differenced:
+
+        X̃ₜ = Xₜ - δ₁Xₜ₋₁ - ... - δᵣXₜ₋ᵣ = λ(L)(1 - δ(L)L) fₜ + vₜ,
+
+    so the observation noise is vₜ with H = diag(σ²_v) in both cases and the
+    errors eₜ are not states.
 
 Dimensions:
     N = number of observables
@@ -4903,10 +4817,7 @@ Dimensions:
     q = lags in Ψ(L) (factor VAR)
     r = lags in δ(L) (AR errors)
 
-    s = max(q, p+1) for factor block
-    m_f = k * s (factor state dimension)
-    m_e = N * r (error state dimension)
-    m = m_f + m_e (total state dimension)
+    m = k * s (state dimension)
 """
 struct DynamicFactorModelSpec
     n_obs::Int           # N: number of observables
@@ -4919,8 +4830,9 @@ end
 """
     DynamicFactorModelWorkspace{T}
 
-Internal workspace for DFM estimation with AR errors.
-Stores additional parameters and sufficient statistics for δ estimation.
+Internal workspace for DFM estimation: the model parameters in their natural
+form, plus the quasi-differenced data and sufficient statistics used when the
+idiosyncratic errors are autoregressive.
 """
 mutable struct DynamicFactorModelWorkspace{T <: Real}
     # Model specification
@@ -4933,11 +4845,7 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
     factor_lags::Int     # q
     error_lags::Int      # r
     n_times::Int         # n
-
-    # Derived dimensions
-    factor_state_dim::Int  # m_f = k * s where s = max(q, p+1)
-    error_state_dim::Int   # m_e = N * r
-    total_state_dim::Int   # m = m_f + m_e
+    state_dim::Int       # m = k * s, s = max(q, p + r + 1)
 
     # Parameter storage (separate from KalmanWorkspace for clarity)
     # Factor loadings: Λ[j] is N × k for lag j, j = 0, 1, ..., p
@@ -4955,13 +4863,10 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
     # Idiosyncratic innovation variances (diagonal)
     σ²_v::Vector{T}  # N × 1
 
-    # Sufficient statistics for AR error estimation
-    S_ee::Matrix{T}    # Σ E[eₜ eₜ' | Y] (N × N) - but we only need diagonal
-    S_ee_lag::Array{T, 3}  # Σ E[eₜ eₜ₋ⱼ' | Y] for j=1:r (N × N × r)
-
-    # Scratch space
-    tmp_nn::Matrix{T}   # N × N
-    tmp_kk::Matrix{T}   # k × k
+    # AR errors only (r > 0)
+    y_qd::Matrix{T}        # N × n: quasi-differenced data X̃ₜ, NaN where undefined
+    y_tail::Matrix{T}      # N × r: last r observations, for forecasting
+    S_cc::Array{T, 3}      # (r+1) × (r+1) × N: moments of (eᵢₜ, …, eᵢ,ₜ₋ᵣ)
 end
 
 """
@@ -4985,51 +4890,19 @@ function _setup_dfm(
     q = spec.factor_lags
     r = spec.error_lags
 
-    # Factor state needs to hold enough lags for both VAR and dynamic loadings
-    # fₜ, fₜ₋₁, ..., fₜ₋ₛ₊₁ where s = max(q, p+1)
-    # (p+1 because λ(L)fₜ = λ₀fₜ + λ₁fₜ₋₁ + ... + λₚfₜ₋ₚ needs fₜ₋ₚ)
-    s = max(q, p + 1)
-    s = max(s, 1)  # At least 1
-
-    m_f = k * s           # Factor state dimension
-    m_e = N * r           # Error state dimension (0 if r=0)
-    m = m_f + m_e         # Total state dimension
-
-    # Shock dimension: k factor shocks + N idiosyncratic shocks
-    n_shocks = k + N
+    # The state holds fₜ, …, fₜ₋ₛ₊₁: q lags for the VAR, and p + r + 1 for the
+    # quasi-differenced loadings λ(L)(1 - δ(L)L), which reach fₜ₋ₚ₋ᵣ.
+    s = max(q, p + r + 1)
+    m = k * s
 
     # ========================================
     # Build state-space matrices
     # ========================================
 
-    # State vector: αₜ = [fₜ; fₜ₋₁; ...; fₜ₋ₛ₊₁; eₜ; eₜ₋₁; ...; eₜ₋ᵣ₊₁]
-    #               = [factor_block; error_block]
-
-    # --- Observation equation: Xₜ = Z αₜ + noise ---
-    # Xₜ = Σⱼ₌₀ᵖ λⱼ fₜ₋ⱼ + eₜ
-    # Z = [Λ₀, Λ₁, ..., Λₚ, 0, ..., 0 | I_N, 0, ..., 0]
-    #      └─── factor block (N × m_f) ───┘  └─ error block (N × m_e) ─┘
-
+    # Observation equation: Z = Λ W(δ) is filled by sync_params_to_ssm! below;
+    # H = diag(σ²_v).
     Z = zeros(T, N, m)
-    # Factor loadings will be filled in later (Λⱼ at columns j*k+1:(j+1)*k)
-    # For now, random initialization for Λ₀
-    for j in 1:k, i in 1:N
-
-        Z[i, j] = randn(T) * T(0.1)
-    end
-    # Error block: eₜ is read from state (first N elements of error block)
-    if r > 0
-        for i in 1:N
-            Z[i, m_f + i] = one(T)
-        end
-    end
-
-    # H = 0 when r > 0 (errors are in state), or diagonal σ²_v when r = 0
-    if r > 0
-        H = zeros(T, N, N)  # Observation noise is 0, errors are in state
-    else
-        H = Matrix{T}(I, N, N)  # Diagonal idiosyncratic variances
-    end
+    H = Matrix{T}(I, N, N)
 
     # --- State equation: αₜ₊₁ = T αₜ + R ηₜ ---
     # Factor block: companion form for VAR(q)
@@ -5037,16 +4910,7 @@ function _setup_dfm(
     # [fₜ    ] = [I  0  ... 0  0 ... 0] [fₜ₋₁  ] + [0] ηₜ
     # [fₜ₋₁  ]   [0  I  ... 0  0 ... 0] [fₜ₋₂  ]   [0]
     # ...
-
-    # Error block: companion form for AR(r)
-    # [eₜ₊₁  ]   [δ₁I δ₂I ... δᵣI] [eₜ    ]   [I]
-    # [eₜ    ] = [I   0   ... 0  ] [eₜ₋₁  ] + [0] vₜ
-    # ...
-
     Tmat = zeros(T, m, m)
-
-    # Factor block: VAR companion form
-    # First k rows: Φ₁, Φ₂, ..., Φᵧ (rest zeros)
     for lag in 1:min(q, s)
         col_start = (lag - 1) * k + 1
         for i in 1:k
@@ -5054,7 +4918,6 @@ function _setup_dfm(
             Tmat[i, col_start + i - 1] = T(0.5) / lag
         end
     end
-    # Identity blocks for state augmentation
     for lag in 1:(s - 1)
         row_start = lag * k + 1
         col_start = (lag - 1) * k + 1
@@ -5063,66 +4926,23 @@ function _setup_dfm(
         end
     end
 
-    # Error block: AR companion form (if r > 0)
-    if r > 0
-        # First N rows of error block: δ₁I, δ₂I, ..., δᵣI
-        for lag in 1:r
-            col_start = m_f + (lag - 1) * N + 1
-            for i in 1:N
-                # Initialize with small AR coefficient
-                Tmat[m_f + i, col_start + i - 1] = T(0.3) / lag
-            end
-        end
-        # Identity blocks for error state augmentation
-        for lag in 1:(r - 1)
-            row_start = m_f + lag * N + 1
-            col_start = m_f + (lag - 1) * N + 1
-            for i in 1:N
-                Tmat[row_start + i - 1, col_start + i - 1] = one(T)
-            end
-        end
-    end
-
-    # R matrix: selects which states receive shocks
-    # Shocks: [ηₜ (k×1); vₜ (N×1)]
-    R = zeros(T, m, n_shocks)
-    # Factor shocks go to first k states
+    # Factor shocks enter the first k states.
+    R = zeros(T, m, k)
     for i in 1:k
         R[i, i] = one(T)
     end
-    # Idiosyncratic shocks go to first N states of error block (or nowhere if r=0)
-    if r > 0
-        for i in 1:N
-            R[m_f + i, k + i] = one(T)
-        end
-    end
-
-    # Q matrix: shock covariances
-    # [Σ_η  0  ]
-    # [0    Σ_v]  where Σ_v is diagonal
-    Q = zeros(T, n_shocks, n_shocks)
-    # Factor innovation covariance (initialize as identity)
-    for i in 1:k
-        Q[i, i] = T(0.1)
-    end
-    # Idiosyncratic innovation variances
-    for i in 1:N
-        Q[k + i, k + i] = one(T)
-    end
+    Q = Matrix{T}(I, k, k) * T(0.1)
 
     # Initial state
     a1 = zeros(T, m)
     P1 = Matrix{T}(I, m, m) * T(10.0)
 
-    # ========================================
-    # Create workspaces
-    # ========================================
-
     kf_ws = KalmanWorkspace(Z, H, Tmat, R, Q, a1, P1, n_times)
     em_ws = EMWorkspace(kf_ws)
 
-    # Set constraints for EM
-    # Z: factor loadings are free (columns 1:k*(p+1)), error selection is fixed
+    # EM constraints. With white-noise errors the loadings are the free cells of
+    # Z (columns of fₜ, …, fₜ₋ₚ); with AR errors Z = Λ W(δ) is not free cell by
+    # cell and the loadings have their own M-step (_update_dfm_ar!).
     fill!(em_ws.Z_free, false)
     for lag in 0:p
         col_start = lag * k + 1
@@ -5131,12 +4951,9 @@ function _setup_dfm(
             em_ws.Z_free[i, col_start + j - 1] = true
         end
     end
-
-    # H: depends on whether errors are in state
     em_ws.H_diag_only = true
 
     # T: factor VAR coefficients (first k rows, first k*q columns) are free
-    #    error AR coefficients are handled separately in DynamicFactorModelWorkspace
     fill!(em_ws.T_free, false)
     for i in 1:k
         for lag in 1:q
@@ -5147,23 +4964,18 @@ function _setup_dfm(
         end
     end
 
-    # Q: factor covariance is free, idiosyncratic variances handled separately
-    fill!(em_ws.Q_free, false)
-    for j in 1:k, i in 1:k
-
-        em_ws.Q_free[i, j] = true
-    end
+    # Q: the factor innovation covariance is free
+    fill!(em_ws.Q_free, true)
 
     # ========================================
     # Create DFM-specific workspace
     # ========================================
 
-    # Initialize parameter arrays
+    # Random initial contemporaneous loadings; lagged loadings start at zero.
     Λ = [zeros(T, N, k) for _ in 0:p]
-    # Copy initial loadings from Z
-    for lag in 0:p
-        col_start = lag * k + 1
-        Λ[lag + 1] .= Z[:, col_start:(col_start + k - 1)]
+    for j in 1:k, i in 1:N
+
+        Λ[1][i, j] = randn(T) * T(0.1)
     end
 
     Φ = [zeros(T, k, k) for _ in 1:q]
@@ -5175,10 +4987,8 @@ function _setup_dfm(
     Σ_η = Matrix{T}(I, k, k) * T(0.1)
 
     δ_vec = zeros(T, max(r, 1))
-    if r > 0
-        for lag in 1:r
-            δ_vec[lag] = T(0.3) / lag
-        end
+    for lag in 1:r
+        δ_vec[lag] = T(0.3) / lag
     end
 
     σ²_v = ones(T, N)
@@ -5191,21 +5001,39 @@ function _setup_dfm(
         q,
         r,
         n_times,
-        m_f,
-        m_e,
         m,
         Λ,
         Φ,
         Σ_η,
         δ_vec,
         σ²_v,
-        zeros(T, N, N),           # S_ee
-        zeros(T, N, N, max(r, 1)), # S_ee_lag
-        zeros(T, N, N),           # tmp_nn
-        zeros(T, k, k)            # tmp_kk
+        r > 0 ? fill(T(NaN), N, n_times) : Matrix{T}(undef, N, 0),  # y_qd
+        Matrix{T}(undef, N, r),                                     # y_tail
+        zeros(T, r + 1, r + 1, r > 0 ? N : 0)                       # S_cc
     )
+    sync_params_to_ssm!(kf_ws, dfm_ws)
 
     return kf_ws, em_ws, dfm_ws
+end
+
+"""
+    _dfm_composite_loadings!(Z, dfm_ws::DynamicFactorModelWorkspace)
+
+Fill `Z` (N × m) with the loadings of the observation equation on the factor
+state, `Λ W(δ)`: block column `c` (the loading on fₜ₋꜀) is `Σ_{a+b=c} Λₐ dᵦ`
+with `d₀ = 1` and `dᵦ = -δᵦ`. With white-noise errors this is
+`[Λ₀ … Λₚ 0 … 0]`.
+"""
+function _dfm_composite_loadings!(Z, dfm_ws::DynamicFactorModelWorkspace{T}) where {T}
+    k, p, r = dfm_ws.n_factors, dfm_ws.loading_lags, dfm_ws.error_lags
+    fill!(Z, zero(T))
+    for a in 0:p, b in 0:r
+
+        d = b == 0 ? one(T) : -dfm_ws.δ[b]
+        cols = ((a + b) * k + 1):((a + b + 1) * k)
+        view(Z, :, cols) .+= d .* dfm_ws.Λ[a + 1]
+    end
+    return Z
 end
 
 """
@@ -5217,27 +5045,11 @@ function sync_params_to_ssm!(
         kf_ws::KalmanWorkspace{T},
         dfm_ws::DynamicFactorModelWorkspace{T}
 ) where {T}
-    N, k,
-    p,
-    q,
-    r = dfm_ws.n_obs,
-    dfm_ws.n_factors,
-    dfm_ws.loading_lags,
-    dfm_ws.factor_lags,
-    dfm_ws.error_lags
-    m_f, m_e = dfm_ws.factor_state_dim, dfm_ws.error_state_dim
-    s = div(m_f, k)
+    N, k, q = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.factor_lags
 
-    # Update Z with factor loadings
-    for lag in 0:p
-        col_start = lag * k + 1
-        for j in 1:k, i in 1:N
+    _dfm_composite_loadings!(kf_ws.Z, dfm_ws)
 
-            kf_ws.Z[i, col_start + j - 1] = dfm_ws.Λ[lag + 1][i, j]
-        end
-    end
-
-    # Update T with factor VAR coefficients
+    # Factor VAR coefficients
     for lag in 1:q
         col_start = (lag - 1) * k + 1
         for j in 1:k, i in 1:k
@@ -5246,35 +5058,12 @@ function sync_params_to_ssm!(
         end
     end
 
-    # Update T with AR error coefficients
-    if r > 0
-        for lag in 1:r
-            col_start = m_f + (lag - 1) * N + 1
-            for i in 1:N
-                kf_ws.Tmat[m_f + i, col_start + i - 1] = dfm_ws.δ[lag]
-            end
-        end
-    end
+    kf_ws.Q .= dfm_ws.Σ_η
 
-    # Update Q with factor innovation covariance
-    for j in 1:k, i in 1:k
-
-        kf_ws.Q[i, j] = dfm_ws.Σ_η[i, j]
-    end
-
-    # Update Q with idiosyncratic variances
     for i in 1:N
-        kf_ws.Q[k + i, k + i] = dfm_ws.σ²_v[i]
+        kf_ws.H[i, i] = dfm_ws.σ²_v[i]
     end
 
-    # Update H (only used if r = 0)
-    if r == 0
-        for i in 1:N
-            kf_ws.H[i, i] = dfm_ws.σ²_v[i]
-        end
-    end
-
-    # Update RQR
     _update_RQR!(kf_ws)
 
     return nothing
@@ -5283,32 +5072,30 @@ end
 """
     sync_params_from_ssm!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace)
 
-Copy parameters from KalmanWorkspace back to DynamicFactorModelWorkspace after EM updates.
+Copy the factor VAR coefficients and factor innovation covariance, and with
+white-noise errors the loadings, from KalmanWorkspace back to
+DynamicFactorModelWorkspace after the EM updates.
+
+The idiosyncratic variances `σ²_v`, the AR coefficients `δ` and, with AR errors,
+the loadings are written directly into `dfm_ws` by the DFM M-step.
 """
 function sync_params_from_ssm!(
         dfm_ws::DynamicFactorModelWorkspace{T},
         kf_ws::KalmanWorkspace{T}
 ) where {T}
-    N, k,
-    p,
-    q,
-    r = dfm_ws.n_obs,
-    dfm_ws.n_factors,
-    dfm_ws.loading_lags,
-    dfm_ws.factor_lags,
-    dfm_ws.error_lags
-    m_f = dfm_ws.factor_state_dim
+    N, k, p, q, r = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.loading_lags,
+    dfm_ws.factor_lags, dfm_ws.error_lags
 
-    # Extract factor loadings from Z
-    for lag in 0:p
-        col_start = lag * k + 1
-        for j in 1:k, i in 1:N
+    if r == 0
+        for lag in 0:p
+            col_start = lag * k + 1
+            for j in 1:k, i in 1:N
 
-            dfm_ws.Λ[lag + 1][i, j] = kf_ws.Z[i, col_start + j - 1]
+                dfm_ws.Λ[lag + 1][i, j] = kf_ws.Z[i, col_start + j - 1]
+            end
         end
     end
 
-    # Extract factor VAR coefficients from T
     for lag in 1:q
         col_start = (lag - 1) * k + 1
         for j in 1:k, i in 1:k
@@ -5317,154 +5104,158 @@ function sync_params_from_ssm!(
         end
     end
 
-    # Extract factor innovation covariance from Q
-    for j in 1:k, i in 1:k
-
-        dfm_ws.Σ_η[i, j] = kf_ws.Q[i, j]
-    end
-
-    # Extract idiosyncratic variances from Q
-    for i in 1:N
-        dfm_ws.σ²_v[i] = kf_ws.Q[k + i, k + i]
-    end
+    dfm_ws.Σ_η .= kf_ws.Q
 
     return nothing
 end
 
 """
-    compute_error_sufficient_stats!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix)
+    _dfm_quasi_difference!(dfm_ws::DynamicFactorModelWorkspace, y::AbstractMatrix)
 
-Compute sufficient statistics for AR error parameter estimation.
-Extracts smoothed idiosyncratic errors and computes autocovariances.
+Store `X̃ₜ = Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ` in `dfm_ws.y_qd`. It is `NaN` for
+`t ≤ r` and wherever one of `Xₜ, …, Xₜ₋ᵣ` is missing, so the likelihood is
+conditional on the first `r` observations.
 """
-function compute_error_sufficient_stats!(
+function _dfm_quasi_difference!(dfm_ws::DynamicFactorModelWorkspace{T}, y::AbstractMatrix) where {T}
+    N, r, n = dfm_ws.n_obs, dfm_ws.error_lags, dfm_ws.n_times
+    y_qd, δ = dfm_ws.y_qd, dfm_ws.δ
+    @inbounds for t in 1:n
+        usable = t > r && all(l -> !any(isnan, view(y, :, t - l)), 0:r)
+        for i in 1:N
+            if usable
+                s = T(y[i, t])
+                for l in 1:r
+                    s -= δ[l] * y[i, t - l]
+                end
+                y_qd[i, t] = s
+            else
+                y_qd[i, t] = T(NaN)
+            end
+        end
+    end
+    return y_qd
+end
+
+"""
+    _update_dfm_ar!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace, y)
+
+M-step for the loadings, AR coefficients and idiosyncratic variances of a DFM
+with AR errors, run after the smoother on the quasi-differenced data. Three
+conditional maximisations (an ECM step), each increasing the expected
+complete-data log-likelihood, so the EM log-likelihood still increases:
+
+1. Loadings given `δ`. With `Λ = [Λ₀ … Λₚ]` and `Z = Λ W(δ)`, the observation
+   equation is `X̃ₜ = Λ (W αₜ) + vₜ`, a regression on `W αₜ`:
+   `Λ = S_yα W' (W S_αα W')⁻¹`, summed over the periods where `X̃ₜ` is defined.
+2. `δ` given `Λ` and `σ²`. The residual `X̃ₜ - Z αₜ` equals
+   `cₜ,₀ - Σₗ δₗ cₜ,ₗ` with `cₜ,ₗ = Xₜ₋ₗ - Λ Bₗ αₜ = eₜ₋ₗ`, where `Bₗ αₜ` stacks
+   `fₜ₋ₗ, …, fₜ₋ₗ₋ₚ`. With `S_cc[:, :, i] = Σₜ E[cᵢ cᵢ' | Y]`, `δ` is the weighted
+   least-squares solution `(Σᵢ S_cc[1:, 1:, i]/σ²ᵢ) \\ (Σᵢ S_cc[1:, 0, i]/σ²ᵢ)`
+   (indices from 0). If it is not stationary it is shrunk so the spectral
+   radius of the AR companion matrix is 0.99.
+3. `σ²ᵢ = (S_cc[0, 0, i] - 2δ'S_cc[1:, 0, i] + δ'S_cc[1:, 1:, i]δ) / n_valid`.
+"""
+function _update_dfm_ar!(
         dfm_ws::DynamicFactorModelWorkspace{T},
         kf_ws::KalmanWorkspace{T},
         y::AbstractMatrix
 ) where {T}
     N, k, p, r = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.loading_lags, dfm_ws.error_lags
-    n = dfm_ws.n_times
-    m_f = dfm_ws.factor_state_dim
+    m, n = dfm_ws.state_dim, dfm_ws.n_times
+    αs, Vs, y_qd = kf_ws.αs, kf_ws.Vs, dfm_ws.y_qd
+    valid = [!any(isnan, view(y_qd, :, t)) for t in 1:n]
+    n_valid = count(valid)
 
-    if r == 0
-        return  # No AR errors to estimate
+    # --- 1. Loadings ---
+    P = k * (p + 1)
+    W = zeros(T, P, m)
+    for a in 0:p, b in 0:r
+
+        d = b == 0 ? one(T) : -dfm_ws.δ[b]
+        for j in 1:k
+            W[a * k + j, (a + b) * k + j] += d
+        end
+    end
+    S_yα = zeros(T, N, m)
+    S_αα = zeros(T, m, m)
+    for t in 1:n
+        valid[t] || continue
+        a_t = view(αs, :, t)
+        mul!(S_yα, view(y_qd, :, t), a_t', one(T), one(T))
+        S_αα .+= view(Vs, :, :, t)
+        mul!(S_αα, a_t, a_t', one(T), one(T))
+    end
+    WSW = W * S_αα * W'
+    for i in 1:P
+        WSW[i, i] += T(1e-10)
+    end
+    Λall = (S_yα * W') / cholesky(Symmetric(WSW))
+    for a in 0:p
+        dfm_ws.Λ[a + 1] .= view(Λall, :, (a * k + 1):((a + 1) * k))
     end
 
-    # Reset sufficient statistics
-    fill!(dfm_ws.S_ee, zero(T))
-    fill!(dfm_ws.S_ee_lag, zero(T))
+    # --- 2. AR coefficients ---
+    # G[l + 1] = Λ Bₗ: the loadings of eₜ₋ₗ = Xₜ₋ₗ - G[l + 1] αₜ on the state.
+    G = [zeros(T, N, m) for _ in 0:r]
+    for l in 0:r, a in 0:p
 
-    # Extract smoothed errors from state
-    # State: [factor_block; error_block]
-    # Error at time t: αₜ[m_f+1:m_f+N]
-
-    @inbounds for t in 1:n
-        # Current error
-        e_t = view(kf_ws.αs, (m_f + 1):(m_f + N), t)
-        V_t = view(kf_ws.Vs, (m_f + 1):(m_f + N), (m_f + 1):(m_f + N), t)
-
-        # S_ee: Σ E[eₜ eₜ' | Y] - only diagonal needed
-        for i in 1:N
-            dfm_ws.S_ee[i, i] += V_t[i, i] + e_t[i]^2
+        view(G[l + 1], :, ((l + a) * k + 1):((l + a + 1) * k)) .= dfm_ws.Λ[a + 1]
+    end
+    S_cc = dfm_ws.S_cc
+    fill!(S_cc, zero(T))
+    μ = Matrix{T}(undef, N, r + 1)
+    U = [Matrix{T}(undef, m, N) for _ in 0:r]
+    for t in 1:n
+        valid[t] || continue
+        a_t = view(αs, :, t)
+        V_t = view(Vs, :, :, t)
+        for l in 0:r
+            mul!(view(μ, :, l + 1), G[l + 1], a_t)
+            for i in 1:N
+                μ[i, l + 1] = y[i, t - l] - μ[i, l + 1]
+            end
+            mul!(U[l + 1], V_t, G[l + 1]')
         end
+        @inbounds for i in 1:N, l2 in 0:r, l1 in 0:r
+            S_cc[l1 + 1, l2 + 1, i] += μ[i, l1 + 1] * μ[i, l2 + 1] +
+                                       dot(view(G[l1 + 1], i, :), view(U[l2 + 1], :, i))
+        end
+    end
 
-        # S_ee_lag[j]: Σ E[eₜ eₜ₋ⱼ' | Y] for j = 1:r
-        for lag in 1:r
-            if t > lag
-                e_tlag = view(kf_ws.αs, (m_f + 1):(m_f + N), t-lag)
-                # Cross-covariance from smoother (approximation: use state cross-cov)
-                # For simplicity, use E[eₜ]E[eₜ₋ⱼ]' (ignoring cross-variance term)
-                # A proper implementation would need Cov[αₜ, αₜ₋ⱼ | Y] for all lags
-                for i in 1:N
-                    dfm_ws.S_ee_lag[i, i, lag] += e_t[i] * e_tlag[i]
-                end
+    A = zeros(T, r, r)
+    b = zeros(T, r)
+    for i in 1:N
+        w = one(T) / dfm_ws.σ²_v[i]
+        for j in 1:r
+            b[j] += w * S_cc[j + 1, 1, i]
+            for l in 1:r
+                A[j, l] += w * S_cc[j + 1, l + 1, i]
             end
         end
     end
+    δ = Symmetric(A) \ b
 
-    return nothing
-end
-
-"""
-    update_ar_errors!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace)
-
-M-step update for AR error coefficients δ and innovation variances σ²_v.
-
-For AR(r) errors with common coefficients:
-    eᵢₜ = δ₁ eᵢ,ₜ₋₁ + ... + δᵣ eᵢ,ₜ₋ᵣ + vᵢₜ
-
-Estimates δ by pooled regression across all series.
-"""
-function update_ar_errors!(
-        dfm_ws::DynamicFactorModelWorkspace{T},
-        kf_ws::KalmanWorkspace{T}
-) where {T}
-    N, r = dfm_ws.n_obs, dfm_ws.error_lags
-    n = dfm_ws.n_times
-    m_f = dfm_ws.factor_state_dim
-
-    if r == 0
-        return  # No AR errors
+    # Spectral radius of the AR companion matrix; shrink δⱼ by c^j to rescale it.
+    C = zeros(T, r, r)
+    C[1, :] .= δ
+    for j in 2:r
+        C[j, j - 1] = one(T)
     end
-
-    # Pooled Yule-Walker estimation for common AR coefficients
-    # Solve: [γ(1)]     [γ(0)   γ(1)   ... γ(r-1)] [δ₁]
-    #        [γ(2)]  =  [γ(1)   γ(0)   ... γ(r-2)] [δ₂]
-    #        [...]      [...]                       [...]
-    #        [γ(r)]     [γ(r-1) γ(r-2) ... γ(0)  ] [δᵣ]
-    #
-    # where γ(j) = (1/N) Σᵢ E[eᵢₜ eᵢ,ₜ₋ⱼ] (pooled autocovariance)
-
-    # Compute pooled autocovariances
-    γ = zeros(T, r + 1)  # γ[1] = γ(0), γ[2] = γ(1), etc.
-
-    # γ(0) from S_ee diagonal
-    γ[1] = sum(diag(dfm_ws.S_ee)) / (N * (n - r))
-
-    # γ(j) from S_ee_lag
-    for lag in 1:r
-        γ[lag + 1] = sum(diag(view(dfm_ws.S_ee_lag, :, :, lag))) / (N * (n - r))
-    end
-
-    # Build Yule-Walker system
-    Γ = zeros(T, r, r)  # Toeplitz matrix of γ
-    for i in 1:r, j in 1:r
-
-        Γ[i, j] = γ[abs(i - j) + 1]
-    end
-
-    γ_vec = γ[2:(r + 1)]  # [γ(1), γ(2), ..., γ(r)]
-
-    # Solve for δ
-    # Add regularization for numerical stability
-    for i in 1:r
-        Γ[i, i] += T(1e-8)
-    end
-
-    δ_new = Γ \ γ_vec
-
-    # Ensure stationarity: check roots outside unit circle
-    # Simple check: sum of |δᵢ| < 1 (sufficient but not necessary)
-    δ_sum = sum(abs, δ_new)
-    if δ_sum >= one(T)
-        # Scale down to ensure stationarity
-        δ_new .*= T(0.95) / δ_sum
-    end
-
-    copyto!(dfm_ws.δ, δ_new)
-
-    # Update innovation variances
-    # σ²_v,i = E[eᵢₜ²] - 2 Σⱼ δⱼ E[eᵢₜ eᵢ,ₜ₋ⱼ] + Σⱼ Σₖ δⱼ δₖ E[eᵢ,ₜ₋ⱼ eᵢ,ₜ₋ₖ]
-    # Simplified: σ²_v,i ≈ γᵢ(0) - Σⱼ δⱼ γᵢ(j)
-
-    for i in 1:N
-        γ0_i = dfm_ws.S_ee[i, i] / (n - r)
-        sum_δγ = zero(T)
-        for lag in 1:r
-            γlag_i = dfm_ws.S_ee_lag[i, i, lag] / (n - r)
-            sum_δγ += dfm_ws.δ[lag] * γlag_i
+    ρ = maximum(abs, eigvals(C))
+    if ρ >= T(0.99)
+        c = T(0.99) / ρ
+        for j in 1:r
+            δ[j] *= c^j
         end
-        dfm_ws.σ²_v[i] = max(γ0_i - sum_δγ, T(1e-10))
+    end
+    copyto!(dfm_ws.δ, δ)
+
+    # --- 3. Idiosyncratic variances ---
+    for i in 1:N
+        Sxe = view(S_cc, 2:(r + 1), 1, i)
+        Sxx = view(S_cc, 2:(r + 1), 2:(r + 1), i)
+        s = S_cc[1, 1, i] - 2 * dot(δ, Sxe) + dot(δ, Sxx, δ)
+        dfm_ws.σ²_v[i] = max(s / n_valid, T(1e-10))
     end
 
     return nothing
@@ -5475,6 +5266,9 @@ end
                  y::AbstractMatrix; maxiter=500, tol=1e-6, verbose=false)
 
 EM algorithm for full dynamic factor model.
+
+With AR errors each iteration filters the quasi-differenced data for the current
+`δ`, so the log-likelihood is that of `X_{r+1:n}` given `X_{1:r}`.
 """
 function _em_dfm!(
         kf_ws::KalmanWorkspace{T},
@@ -5483,21 +5277,18 @@ function _em_dfm!(
         y::AbstractMatrix;
         maxiter::Int = 500,
         tol::Real = 1e-6,
-        verbose::Bool = false
+        verbose::Bool = false,
+        warn::Bool = true
 ) where {T}
-    N, k,
-    p,
-    q,
-    r = dfm_ws.n_obs,
-    dfm_ws.n_factors,
-    dfm_ws.loading_lags,
-    dfm_ws.factor_lags,
-    dfm_ws.error_lags
+    N, r = dfm_ws.n_obs, dfm_ws.error_lags
 
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
     converged = false
     iter = 0
+
+    # The data the filter sees: y itself, or its quasi-difference for the current δ.
+    filter_data!() = r > 0 ? _dfm_quasi_difference!(dfm_ws, y) : y
 
     for i in 1:maxiter
         iter = i
@@ -5506,9 +5297,11 @@ function _em_dfm!(
         sync_params_to_ssm!(kf_ws, dfm_ws)
 
         # E-step: Filter and smooth
-        filter_and_smooth!(kf_ws, y)
+        y_f = filter_data!()
+        kalman_filter_and_smooth!(kf_ws, y_f; crosscov = true)
         ll = kf_ws.loglik
         loglik_history[i] = ll
+        kf_ws.status == 0 || break
 
         # Check convergence
         if i > 1
@@ -5533,20 +5326,18 @@ function _em_dfm!(
         ll_prev = ll
 
         # Compute sufficient statistics
-        n_valid = compute_sufficient_stats!(em_ws, kf_ws, y)
+        n_valid = compute_sufficient_stats!(em_ws, kf_ws, y_f)
 
-        # M-step: Update factor loadings and VAR
-        update_Z!(kf_ws, em_ws, n_valid)  # Updates Λ
-        update_T!(kf_ws, em_ws)           # Updates Φ
-        update_Q!(kf_ws, em_ws)           # Updates Σ_η
-
-        # M-step: Update AR error parameters (if r > 0)
         if r > 0
-            compute_error_sufficient_stats!(dfm_ws, kf_ws, y)
-            update_ar_errors!(dfm_ws, kf_ws)
+            # Factor dynamics, then loadings, δ and σ²_v
+            update_T!(kf_ws, em_ws)
+            update_Q!(kf_ws, em_ws)
+            _update_dfm_ar!(dfm_ws, kf_ws, y)
         else
-            # Update idiosyncratic variances directly from H
-            update_H!(kf_ws, em_ws, n_valid)
+            update_Z!(kf_ws, em_ws, n_valid)  # Updates Λ
+            update_T!(kf_ws, em_ws)           # Updates Φ
+            update_Q!(kf_ws, em_ws)           # Updates Σ_η
+            update_H!(kf_ws, em_ws, n_valid)  # Updates σ²_v
             for i in 1:N
                 dfm_ws.σ²_v[i] = kf_ws.H[i, i]
             end
@@ -5556,9 +5347,17 @@ function _em_dfm!(
         sync_params_from_ssm!(dfm_ws, kf_ws)
     end
 
-    # Final sync and filter
-    sync_params_to_ssm!(kf_ws, dfm_ws)
-    filter_and_smooth!(kf_ws, y)
+    # Final sync and filter. A failed E-step stopped the loop before the M-step,
+    # so the workspace already holds the run at the current parameters.
+    if kf_ws.status == 0
+        sync_params_to_ssm!(kf_ws, dfm_ws)
+        kalman_filter_and_smooth!(kf_ws, filter_data!(); crosscov = true)
+    end
+    warn && _warn_em(converged, iter, kf_ws.status, tol)
+    if r > 0
+        n = dfm_ws.n_times
+        dfm_ws.y_tail .= view(y, :, (n - r + 1):n)
+    end
 
     return (
         converged = converged,
@@ -5666,6 +5465,13 @@ function DynamicFactorModel(
         error_lags::Int = 0,
         T::Type{<:Real} = Float64
 )
+    n_obs >= 1 || throw(ArgumentError("n_obs must be at least 1, got $n_obs"))
+    n_factors >= 1 || throw(ArgumentError("n_factors must be at least 1, got $n_factors"))
+    n_times >= 2 || throw(ArgumentError("n_times must be at least 2, got $n_times"))
+    for (name, val) in ((:loading_lags, loading_lags), (:factor_lags, factor_lags),
+        (:error_lags, error_lags))
+        val >= 0 || throw(ArgumentError("$name must be non-negative, got $val"))
+    end
     spec = DynamicFactorModelSpec(n_obs, n_factors, loading_lags, factor_lags, error_lags)
     kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T)
 
@@ -5686,45 +5492,7 @@ end
 # Status Accessors
 # ============================================
 
-"""
-    isfitted(model::DynamicFactorModel) -> Bool
-
-Check whether the model has been fitted.
-"""
-isfitted(model::DynamicFactorModel) = model.fitted
-
-"""
-    isconverged(model::DynamicFactorModel) -> Bool
-
-Check whether EM converged. Throws error if model not fitted.
-"""
-function isconverged(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.converged
-end
-
-"""
-    loglikelihood(model::DynamicFactorModel) -> T
-
-Return final log-likelihood. Throws error if model not fitted.
-"""
-function loglikelihood(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.loglik
-end
-
-"""
-    niterations(model::DynamicFactorModel) -> Int
-
-Return number of EM iterations. Throws error if model not fitted.
-"""
-function niterations(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
-    return model.iterations
-end
+_fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 
 # ============================================
 # Factor Accessors
@@ -5736,10 +5504,9 @@ end
 Extract smoothed factors (k × n) from fitted model.
 """
 function factors(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.αs[1:k, :]
+    return smoothed_states(model.kf_ws)[1:k, :]
 end
 
 """
@@ -5748,10 +5515,9 @@ end
 Extract smoothed factor covariances (k × k × n) from fitted model.
 """
 function factors_cov(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.Vs[1:k, 1:k, :]
+    return smoothed_states_cov(model.kf_ws)[1:k, 1:k, :]
 end
 
 """
@@ -5760,10 +5526,9 @@ end
 Extract filtered factors (k × n) from fitted model.
 """
 function filtered_factors(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.att[1:k, :]
+    return filtered_states(model.kf_ws)[1:k, :]
 end
 
 """
@@ -5772,10 +5537,9 @@ end
 Extract filtered factor covariances (k × k × n) from fitted model.
 """
 function filtered_factors_cov(model::DynamicFactorModel)
-    model.fitted ||
-        throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
+    _require_fitted(model)
     k = model.spec.n_factors
-    return model.kf_ws.Ptt[1:k, 1:k, :]
+    return filtered_states_cov(model.kf_ws)[1:k, 1:k, :]
 end
 
 # ============================================
@@ -5843,7 +5607,7 @@ end
 
 """
     fit!(::EM, model::DynamicFactorModel, y::AbstractMatrix;
-         maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false)
+         maxiter::Int=500, tol::Real=1e-6, verbose::Bool=false, warn::Bool=true)
 
 Fit a dynamic factor model using the EM algorithm.
 
@@ -5856,9 +5620,16 @@ Fit a dynamic factor model using the EM algorithm.
 - `maxiter`: Maximum EM iterations (default: 500)
 - `tol`: Convergence tolerance for log-likelihood (default: 1e-6)
 - `verbose`: Print progress (default: false)
+- `warn`: Warn when EM stops without converging (default: true)
 
 # Returns
 - The fitted `model` (same object, mutated)
+
+With AR errors (`error_lags = r > 0`) the model is estimated on the
+quasi-differenced data `Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ`, so the log-likelihood is that
+of `X_{r+1:n}` given `X_{1:r}`, and a period contributes only when it and its `r`
+predecessors are observed. The smoothed factors of the first `r` periods are
+informed by the factor dynamics only.
 
 # Example
 ```julia
@@ -5873,8 +5644,10 @@ function fit!(
         y::AbstractMatrix;
         maxiter::Int = 500,
         tol::Real = 1e-6,
-        verbose::Bool = false
+        verbose::Bool = false,
+        warn::Bool = true
 ) where {T}
+    y = _nan_obs(y)
     N, n = size(y)
     spec = model.spec
 
@@ -5895,10 +5668,7 @@ function fit!(
         println("  Loading lags (p): ", spec.loading_lags)
         println("  Factor VAR lags (q): ", spec.factor_lags)
         println("  Error AR lags (r): ", spec.error_lags)
-        s = max(spec.factor_lags, spec.loading_lags + 1)
-        m_f = spec.n_factors * s
-        m_e = spec.n_obs * spec.error_lags
-        println("  State dimension: $(m_f + m_e) (factors: $m_f, errors: $m_e)")
+        println("  State dimension: ", model.dfm_ws.state_dim)
     end
 
     # Run EM algorithm
@@ -5909,7 +5679,8 @@ function fit!(
         y;
         maxiter = maxiter,
         tol = tol,
-        verbose = verbose
+        verbose = verbose,
+        warn = warn
     )
 
     # Update model state
@@ -5927,31 +5698,7 @@ end
 # ============================================
 
 """
-    DynamicFactorModelForecast{T}
-
-Result of h-step ahead forecasting.
-
-# Fields
-- `h::Int` - Forecast horizon
-- `state_mean::Matrix{T}` - Forecasted state means E[αₙ₊ₕ|Y₁:ₙ] (m × h)
-- `state_cov::Array{T,3}` - Forecasted state covariances Var[αₙ₊ₕ|Y₁:ₙ] (m × m × h)
-- `obs_mean::Matrix{T}` - Forecasted observation means E[yₙ₊ₕ|Y₁:ₙ] (N × h)
-- `obs_cov::Array{T,3}` - Forecasted observation covariances Var[yₙ₊ₕ|Y₁:ₙ] (N × N × h)
-- `factor_mean::Matrix{T}` - Forecasted factor means (k × h)
-- `factor_cov::Array{T,3}` - Forecasted factor covariances (k × k × h)
-"""
-struct DynamicFactorModelForecast{T <: Real}
-    h::Int
-    state_mean::Matrix{T}      # m × h
-    state_cov::Array{T, 3}      # m × m × h
-    obs_mean::Matrix{T}        # N × h
-    obs_cov::Array{T, 3}        # N × N × h
-    factor_mean::Matrix{T}     # k × h
-    factor_cov::Array{T, 3}     # k × k × h
-end
-
-"""
-    forecast(model::DynamicFactorModel, h::Int)
+    forecast(model::DynamicFactorModel, h::Integer) -> ForecastResult
 
 Compute h-step ahead forecasts from a fitted DFM.
 
@@ -5960,158 +5707,90 @@ the state equation forward:
     E[αₙ₊ₕ|Y₁:ₙ] = Tʰ αₙ|ₙ
     Var[αₙ₊ₕ|Y₁:ₙ] = Tʰ Pₙ|ₙ (T')ʰ + Σⱼ₌₀ʰ⁻¹ Tʲ RQR' (T')ʲ
 
-# Arguments
-- `model::DynamicFactorModel` - Fitted DFM model
-- `h::Int` - Forecast horizon
+With AR errors the observation forecast also iterates
+`Xₙ₊ⱼ = δ₁Xₙ₊ⱼ₋₁ + … + δᵣXₙ₊ⱼ₋ᵣ + Z αₙ₊ⱼ + vₙ₊ⱼ` from the last `r` observations,
+which must not be missing.
 
-# Returns
-- `DynamicFactorModelForecast` with forecasted states and observations
+The factor forecasts are the first `k` states: `forecast_states(fc)[1:k, :]`, with
+intervals from `forecast_interval(fc; what = :states)`.
 
 # Example
 ```julia
 model = DynamicFactorModel(100, 6, 200; factor_lags=3)
 fit!(EM(), model, y)
 fc = forecast(model, 4)
-ci = forecast_interval(fc, 0.05)
+lower, upper = forecast_interval(fc, 0.95)
 ```
 """
-function forecast(model::DynamicFactorModel{T}, h::Int) where {T}
+function forecast(model::DynamicFactorModel{T}, h::Integer) where {T}
     model.fitted ||
         throw(ArgumentError("Model not fitted. Call fit!(EM(), model, y) first."))
 
-    k = model.spec.n_factors
-    N = model.spec.n_obs
+    model.spec.error_lags > 0 && return _forecast_dfm_ar(model, h)
+
     kf_ws = model.kf_ws
-    m = kf_ws.state_dim
-    n = kf_ws.n_times
+    m, n = kf_ws.state_dim, kf_ws.n_times
+    # The workspace keeps RQR' only, so it stands in for Q with R = I.
+    p = KFParms(kf_ws.Z, kf_ws.H, kf_ws.Tmat, Matrix{T}(I, m, m), kf_ws.RQR)
+    return _forecast_from_filtered(p, kf_ws.att[:, n], kf_ws.Ptt[:, :, n], n, h)
+end
 
-    # Initialize with filtered state at time n
-    a_h = copy(kf_ws.att[:, n])
-    P_h = copy(kf_ws.Ptt[:, :, n])
+# Forecast of a DFM with AR errors. The observations follow
+#   Xₜ₊₁ = δ₁Xₜ + … + δᵣXₜ₋ᵣ₊₁ + Z αₜ₊₁ + vₜ₊₁,
+# so the forecast iterates the augmented state βₜ = [αₜ; Xₜ; …; Xₜ₋ᵣ₊₁] from the
+# filtered αₙ and the last r observations, which are known.
+function _forecast_dfm_ar(model::DynamicFactorModel{T}, h::Integer) where {T}
+    h >= 1 || throw(ArgumentError("forecast horizon must be at least 1, got $h"))
+    N, r = model.spec.n_obs, model.spec.error_lags
+    kf_ws, dfm_ws = model.kf_ws, model.dfm_ws
+    m, n = kf_ws.state_dim, kf_ws.n_times
+    any(isnan, dfm_ws.y_tail) && throw(ArgumentError(
+        "forecasting a DFM with AR errors needs the last $r observations; some are missing"))
 
-    # Storage for forecasts
+    Z, Tm, H, RQR = kf_ws.Z, kf_ws.Tmat, kf_ws.H, kf_ws.RQR
+    M = m + N * r
+    xs = (m + 1):(m + N)                       # rows of Xₜ in βₜ
+
+    Ta = zeros(T, M, M)
+    Ta[1:m, 1:m] .= Tm
+    Ta[xs, 1:m] .= Z * Tm
+    for l in 1:r
+        for i in 1:N
+            Ta[m + i, m + (l - 1) * N + i] = dfm_ws.δ[l]
+        end
+    end
+    for l in 1:(r - 1), i in 1:N
+
+        Ta[m + l * N + i, m + (l - 1) * N + i] = one(T)
+    end
+
+    # Shocks: Rηₜ₊₁ to αₜ₊₁, Z Rηₜ₊₁ + vₜ₊₁ to Xₜ₊₁.
+    Qa = zeros(T, M, M)
+    Qa[1:m, 1:m] .= RQR
+    Qa[1:m, xs] .= RQR * Z'
+    Qa[xs, 1:m] .= Z * RQR
+    Qa[xs, xs] .= Z * RQR * Z' .+ H
+
+    a = zeros(T, M)
+    a[1:m] .= view(kf_ws.att, :, n)
+    for l in 1:r
+        a[(m + (l - 1) * N + 1):(m + l * N)] .= view(dfm_ws.y_tail, :, r - l + 1)
+    end
+    P = zeros(T, M, M)
+    P[1:m, 1:m] .= view(kf_ws.Ptt, :, :, n)
+
     state_mean = Matrix{T}(undef, m, h)
     state_cov = Array{T, 3}(undef, m, m, h)
     obs_mean = Matrix{T}(undef, N, h)
     obs_cov = Array{T, 3}(undef, N, N, h)
-
-    # Temporaries
-    tmp_mm = similar(P_h)
-    tmp_nm = Matrix{T}(undef, N, m)
-
-    Tmat = kf_ws.Tmat
-    Z = kf_ws.Z
-    H = kf_ws.H
-    RQR = kf_ws.RQR
-
-    @inbounds for j in 1:h
-        # State forecast: αₙ₊ⱼ|ₙ = T αₙ₊ⱼ₋₁|ₙ
-        a_new = Tmat * a_h
-
-        # Covariance forecast: Pₙ₊ⱼ|ₙ = T Pₙ₊ⱼ₋₁|ₙ T' + RQR'
-        mul!(tmp_mm, Tmat, P_h)
-        mul!(P_h, tmp_mm, Tmat')
-        P_h .+= RQR
-
-        # Store state forecast
-        state_mean[:, j] .= a_new
-        state_cov[:, :, j] .= P_h
-
-        # Observation forecast: yₙ₊ⱼ|ₙ = Z αₙ₊ⱼ|ₙ
-        mul!(view(obs_mean, :, j), Z, a_new)
-
-        # Observation covariance: Fₙ₊ⱼ|ₙ = Z Pₙ₊ⱼ|ₙ Z' + H
-        mul!(tmp_nm, Z, P_h)
-        mul!(view(obs_cov, :, :, j), tmp_nm, Z')
-        obs_cov[:, :, j] .+= H
-
-        # Update for next iteration
-        a_h .= a_new
+    for j in 1:h
+        a = Ta * a
+        P = Ta * P * Ta' + Qa
+        state_mean[:, j] .= view(a, 1:m)
+        state_cov[:, :, j] .= view(P, 1:m, 1:m)
+        obs_mean[:, j] .= view(a, xs)
+        obs_cov[:, :, j] .= view(P, xs, xs)
     end
 
-    # Extract factor forecasts (first k elements of state)
-    factor_mean = state_mean[1:k, :]
-    factor_cov = state_cov[1:k, 1:k, :]
-
-    return DynamicFactorModelForecast{T}(
-        h,
-        state_mean,
-        state_cov,
-        obs_mean,
-        obs_cov,
-        factor_mean,
-        factor_cov
-    )
-end
-
-"""
-    forecast_interval(fc::DynamicFactorModelForecast, α::Real=0.05)
-
-Compute (1-α) confidence intervals for forecasts.
-
-# Returns
-- NamedTuple with `lower` and `upper` for observation forecasts, each N × h
-"""
-function forecast_interval(fc::DynamicFactorModelForecast{T}, α::Real = 0.05) where {T}
-    # z-value for (1-α) confidence interval: Φ⁻¹(1 - α/2) ≈ 1.96 for α=0.05
-    z = quantile_normal(one(T) - T(α) / 2)
-
-    N, h = size(fc.obs_mean)
-    lower = similar(fc.obs_mean)
-    upper = similar(fc.obs_mean)
-
-    @inbounds for j in 1:h
-        for i in 1:N
-            se = sqrt(fc.obs_cov[i, i, j])
-            lower[i, j] = fc.obs_mean[i, j] - z * se
-            upper[i, j] = fc.obs_mean[i, j] + z * se
-        end
-    end
-
-    return (lower = lower, upper = upper)
-end
-
-"""
-    factor_forecast_interval(fc::DynamicFactorModelForecast, α::Real=0.05)
-
-Compute (1-α) confidence intervals for factor forecasts.
-
-# Returns
-- NamedTuple with `lower` and `upper` for factor forecasts, each k × h
-"""
-function factor_forecast_interval(
-        fc::DynamicFactorModelForecast{T},
-        α::Real = 0.05
-) where {T}
-    z = quantile_normal(one(T) - T(α) / 2)
-
-    k, h = size(fc.factor_mean)
-    lower = similar(fc.factor_mean)
-    upper = similar(fc.factor_mean)
-
-    @inbounds for j in 1:h
-        for i in 1:k
-            se = sqrt(fc.factor_cov[i, i, j])
-            lower[i, j] = fc.factor_mean[i, j] - z * se
-            upper[i, j] = fc.factor_mean[i, j] + z * se
-        end
-    end
-
-    return (lower = lower, upper = upper)
-end
-
-# Simple approximation for normal quantile (avoid dependency)
-function quantile_normal(p::T) where {T}
-    # Rational approximation for Φ⁻¹(p)
-    # Uses Abramowitz & Stegun 26.2.23
-    # For p > 0.5, use symmetry: Φ⁻¹(p) = -Φ⁻¹(1-p)
-    if p > 0.5
-        return -quantile_normal(one(T) - p)
-    end
-    # For p ≤ 0.5, compute negative quantile
-    t = sqrt(-2 * log(p))
-    c0, c1, c2 = T(2.515517), T(0.802853), T(0.010328)
-    d1, d2, d3 = T(1.432788), T(0.189269), T(0.001308)
-    # This gives the negative of what we want, so negate it
-    return -(t - (c0 + c1*t + c2*t^2) / (one(T) + d1*t + d2*t^2 + d3*t^3))
+    return ForecastResult(obs_mean, obs_cov, state_mean, state_cov, n)
 end

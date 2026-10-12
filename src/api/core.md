@@ -15,30 +15,37 @@ KFParms_static
 
 ```@docs
 kalman_loglik
-kalman_loglik_scalar
 ```
 
 ### Full Filter Output
 
 ```@docs
 kalman_filter
-kalman_filter_scalar
+KalmanFilterResult
 ```
 
 ## Kalman Smoother
 
 ```@docs
 kalman_smoother
-kalman_smoother_scalar
 kalman_filter_and_smooth
+SmootherResult
 ```
 
 ## Prediction and Forecasting
 
 ```@docs
 predict
+predicted_observations
 forecast
 forecast_paths
+ForecastResult
+forecast_observations
+forecast_observations_cov
+forecast_states
+forecast_states_cov
+forecast_periods
+forecast_interval
 ```
 
 ## Missing Data Utilities
@@ -46,8 +53,10 @@ forecast_paths
 ```@docs
 missing_to_nan
 nan_to_missing
-count_missing
-ismissing_obs
+ismissing_period
+isincomplete_period
+count_missing_periods
+count_incomplete_periods
 ```
 
 ## StaticArrays Utilities

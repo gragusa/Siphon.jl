@@ -11,6 +11,7 @@ using Test
 using Siphon
 using Siphon.DSL
 using LinearAlgebra
+using ForwardDiff
 using CSV
 using DataFrames
 
@@ -467,4 +468,25 @@ end
 
     # Optimal should be best on grid
     @test result.loglik ≈ maximum(result.loglik_profile)
+end
+
+@testset "DNS models are ForwardDiff-compatible" begin
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    y = Matrix(Matrix(df)')
+    for spec in (
+        dns_model([3, 12, 24, 60, 120]; T_structure = :diagonal,
+        H_structure = :diagonal, Q_structure = :diagonal, diffuse = false),
+        dns_model([3, 12, 24, 60, 120]))
+        names = Tuple(param_names(spec))
+        f(v) = ssm_loglik(spec, NamedTuple{names}(Tuple(v)), y)
+        @test all(isfinite, ForwardDiff.gradient(f, initial_values(spec)))
+    end
+
+    # Maximum likelihood runs end to end (gradients through the loadings)
+    spec = dns_model([3, 12, 24, 60, 120]; T_structure = :diagonal,
+        H_structure = :diagonal, Q_structure = :diagonal, diffuse = false)
+    res = optimize_ssm(spec, y; maxiters = 50)
+    @test isfinite(res.loglik)
+    @test res.loglik > ssm_loglik(spec,
+        NamedTuple{Tuple(param_names(spec))}(Tuple(initial_values(spec))), y)
 end

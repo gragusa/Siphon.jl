@@ -1,7 +1,7 @@
 """
     ekf_inplace.jl
 
-In-place Extended Kalman Filter workspace and `ekf_filter!`.
+In-place Extended Kalman Filter workspace and `kalman_filter!`.
 
 Mirrors `KalmanWorkspace` / `kalman_filter!` in `inplace.jl` with two changes:
 
@@ -38,7 +38,7 @@ valued output buffer of length `p` that ForwardDiff requires to know the
 output shape. Constructed once per workspace.
 
 `ADJacobian()` workspace construction allocates this cache; subsequent
-`ekf_filter!` calls reuse the cfg's internal dual buffers — the only per-step
+`kalman_filter!` calls reuse the cfg's internal dual buffers — the only per-step
 allocations are those inside the user's `measurement!` body when it operates
 on duals (e.g. a temporary state-vector product the user code computes).
 """
@@ -87,7 +87,8 @@ In-place workspace for Extended Kalman Filter operations. Mirrors
 Construct via `EKFWorkspace(p::EKFParms, a1, P1, n)` or by passing the system
 matrices and measurement object directly.
 """
-mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache}
+mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <:
+               AbstractFilterWorkspace
     # Dimensions
     obs_dim::Int      # p
     state_dim::Int    # m
@@ -156,6 +157,11 @@ mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache}
     # Scalars
     loglik::T
     n_obs_valid::Int
+
+    # Run status, as in KalmanWorkspace
+    status::Int
+    smoothed::Bool
+    crosscov::Bool
 end
 
 # ============================================================================
@@ -185,12 +191,12 @@ function EKFWorkspace{T}(
     p = size(H, 1)
     m = size(Tmat, 1)
     r = size(Q, 1)
-    @assert size(H) == (p, p)
-    @assert size(Tmat) == (m, m)
-    @assert size(R) == (m, r)
-    @assert size(Q) == (r, r)
-    @assert length(a1) == m
-    @assert size(P1) == (m, m)
+    _check_size("EKFWorkspace", "H", H, (p, p))
+    _check_size("EKFWorkspace", "T", Tmat, (m, m))
+    _check_size("EKFWorkspace", "R", R, (m, r))
+    _check_size("EKFWorkspace", "Q", Q, (r, r))
+    _check_size("EKFWorkspace", "a1", a1, (m,))
+    _check_size("EKFWorkspace", "P1", P1, (m, m))
 
     # Verify the measurement protocol is consistent with jacobian_mode.
     _check_measurement_protocol(measurement_model, jacobian_mode, m, p, T)
@@ -205,48 +211,51 @@ function EKFWorkspace{T}(
     ws = EKFWorkspace{T, typeof(measurement_model), typeof(jacobian_mode), typeof(cache)}(
         p, m, r, n,
         measurement_model, jacobian_mode,
-        Matrix{T}(undef, p, p),     # H
-        Matrix{T}(undef, m, m),     # Tmat
-        Matrix{T}(undef, m, r),     # R
-        Matrix{T}(undef, r, r),     # Q
-        Vector{T}(undef, m),        # a1
-        Matrix{T}(undef, m, m),     # P1
-        Matrix{T}(undef, m, m),     # RQR
-        Matrix{T}(undef, m, n),     # at
-        Array{T, 3}(undef, m, m, n),# Pt
-        Matrix{T}(undef, m, n),     # att
-        Array{T, 3}(undef, m, m, n),# Ptt
-        Matrix{T}(undef, p, n),     # yt
-        Array{T, 3}(undef, p, m, n),# Zt
-        Matrix{T}(undef, p, n),     # vt
-        Array{T, 3}(undef, p, p, n),# Ft
-        Array{T, 3}(undef, p, p, n),# Ft_L
-        Array{T, 3}(undef, m, p, n),# Kt
-        BitVector(undef, n),        # missing_mask
-        Matrix{T}(undef, m, n),     # αs
-        Array{T, 3}(undef, m, m, n),# Vs
-        Array{T, 3}(undef, m, m, max(n - 1, 1)),# Pcross
-        Matrix{T}(undef, m, m),     # tmp_mm1
-        Matrix{T}(undef, m, m),     # tmp_mm2
-        Matrix{T}(undef, m, m),     # tmp_mm3
-        Matrix{T}(undef, p, p),     # tmp_pp1
-        Matrix{T}(undef, p, p),     # tmp_pp2
-        Matrix{T}(undef, m, p),     # tmp_mp
-        Matrix{T}(undef, p, m),     # tmp_pm
-        Matrix{T}(undef, m, r),     # tmp_mr
-        Vector{T}(undef, m),        # tmp_m1
-        Vector{T}(undef, m),        # tmp_m2
-        Vector{T}(undef, p),        # tmp_p1
-        Vector{T}(undef, p),        # tmp_p2
-        Vector{T}(undef, p),        # tmp_yhat
-        Matrix{T}(undef, p, m),     # tmp_Zt
+        zeros(T, p, p),     # H
+        zeros(T, m, m),     # Tmat
+        zeros(T, m, r),     # R
+        zeros(T, r, r),     # Q
+        zeros(T, m),        # a1
+        zeros(T, m, m),     # P1
+        zeros(T, m, m),     # RQR
+        zeros(T, m, n),     # at
+        zeros(T, m, m, n),# Pt
+        zeros(T, m, n),     # att
+        zeros(T, m, m, n),# Ptt
+        zeros(T, p, n),     # yt
+        zeros(T, p, m, n),# Zt
+        zeros(T, p, n),     # vt
+        zeros(T, p, p, n),# Ft
+        zeros(T, p, p, n),# Ft_L
+        zeros(T, m, p, n),# Kt
+        falses(n),        # missing_mask
+        zeros(T, m, n),     # αs
+        zeros(T, m, m, n),# Vs
+        zeros(T, m, m, max(n - 1, 1)),# Pcross
+        zeros(T, m, m),     # tmp_mm1
+        zeros(T, m, m),     # tmp_mm2
+        zeros(T, m, m),     # tmp_mm3
+        zeros(T, p, p),     # tmp_pp1
+        zeros(T, p, p),     # tmp_pp2
+        zeros(T, m, p),     # tmp_mp
+        zeros(T, p, m),     # tmp_pm
+        zeros(T, m, r),     # tmp_mr
+        zeros(T, m),        # tmp_m1
+        zeros(T, m),        # tmp_m2
+        zeros(T, p),        # tmp_p1
+        zeros(T, p),        # tmp_p2
+        zeros(T, p),        # tmp_yhat
+        zeros(T, p, m),     # tmp_Zt
         cache,                       # ad_cache
-        Vector{T}(undef, m),        # r_smooth
-        Matrix{T}(undef, m, m),     # N_smooth
-        Matrix{T}(undef, m, m),     # L_smooth
-        Matrix{T}(undef, m, m),     # J_smooth
+        zeros(T, m),        # r_smooth
+        zeros(T, m, m),     # N_smooth
+        zeros(T, m, m),     # L_smooth
+        zeros(T, m, m),     # J_smooth
         zero(T),                    # loglik
-        0                           # n_obs_valid
+        0,                          # n_obs_valid
+        _NOT_RUN,                   # status
+        false,                      # smoothed
+        false                       # crosscov
     )
 
     set_params!(ws, H, Tmat, R, Q)
@@ -306,7 +315,7 @@ function _check_measurement_protocol(
     if !hasmethod(measurement, Tuple{typeof(model), typeof(a_probe), Int})
         error("EKFWorkspace with ADJacobian() requires the pure functional `measurement(model, a, t)` to be defined for $(typeof(model)).")
     end
-    # The mutating measurement! is also required so ekf_filter! can write into
+    # The mutating measurement! is also required so kalman_filter! can write into
     # tmp_yhat without allocating per step.
     if !hasmethod(measurement!, Tuple{
         typeof(out_probe), typeof(model), typeof(a_probe), Int})
@@ -343,6 +352,7 @@ function set_params!(
         R::AbstractMatrix,
         Q::AbstractMatrix
 )
+    _check_params(ws, "set_params!"; H, Tmat, R, Q)
     copyto!(ws.H, H)
     copyto!(ws.Tmat, Tmat)
     copyto!(ws.R, R)
@@ -352,13 +362,14 @@ function set_params!(
 end
 
 function set_initial!(ws::EKFWorkspace, a1::AbstractVector, P1::AbstractMatrix)
+    _check_initial(ws, "set_initial!", a1, P1)
     copyto!(ws.a1, a1)
     copyto!(ws.P1, P1)
     return ws
 end
 
 """
-    update_params!(ws::EKFWorkspace; H=nothing, Tmat=nothing, R=nothing, Q=nothing)
+    update_params!(ws::EKFWorkspace; H=nothing, T=nothing, R=nothing, Q=nothing)
 
 Selective update of the linear-system matrices. Recomputes RQR if R or Q
 change. The measurement model is held by reference; mutate or swap it via
@@ -368,12 +379,13 @@ the measurement structure changes).
 function update_params!(
         ws::EKFWorkspace;
         H::Union{Nothing, AbstractMatrix} = nothing,
-        Tmat::Union{Nothing, AbstractMatrix} = nothing,
+        T::Union{Nothing, AbstractMatrix} = nothing,
         R::Union{Nothing, AbstractMatrix} = nothing,
         Q::Union{Nothing, AbstractMatrix} = nothing
 )
+    _check_params(ws, "update_params!"; H, Tmat = T, R, Q)
     H !== nothing && copyto!(ws.H, H)
-    Tmat !== nothing && copyto!(ws.Tmat, Tmat)
+    T !== nothing && copyto!(ws.Tmat, T)
     update_RQR = false
     if R !== nothing
         copyto!(ws.R, R)
@@ -411,21 +423,25 @@ end
 # ============================================================================
 
 """
-    ekf_filter!(ws::EKFWorkspace, y::AbstractMatrix) -> loglik
+    kalman_filter!(ws::EKFWorkspace, y::AbstractMatrix) -> loglik
 
 Run the Extended Kalman Filter in place, storing per-step quantities in `ws`.
 
 Behaves as `kalman_filter!` (in-place linear filter) with `Z` replaced by a
 per-step Jacobian `tmp_Zt` and the measurement linearisation stored in
-`ws.Zt[:, :, t]`.
+`ws.Zt[:, :, t]`. Returns `-Inf` when an innovation covariance is not positive
+definite; the workspace accessors then throw.
 """
-function ekf_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
+function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
+    y = _nan_obs(y)
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
-    @assert size(y) == (p, n) "Observation matrix size mismatch"
-    _require_no_partial_periods(y, "ekf_filter!")
+    _check_obs(ws, "kalman_filter!", y)
+    _require_no_partial_periods(y, "kalman_filter!")
 
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
+    ws.smoothed = false
+    ws.crosscov = false
 
     a_curr = ws.tmp_m1
     P_curr = ws.tmp_mm1
@@ -490,7 +506,12 @@ function ekf_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
             Ft_view[idx] = ws.tmp_pp1[idx]
         end
 
-        cholF = cholesky!(Symmetric(ws.tmp_pp1, :L))
+        cholF = cholesky!(Symmetric(ws.tmp_pp1, :L); check = false)
+        if !issuccess(cholF)
+            ws.status = t
+            ws.loglik = T(-Inf)
+            return ws.loglik
+        end
         L_lower = LowerTriangular(cholF.factors)
 
         # Store Cholesky lower triangle (zero upper for clean reuse)
@@ -556,6 +577,7 @@ function ekf_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
     end
 
     ws.loglik += -p * ws.n_obs_valid * log2pi / 2
+    ws.status = 0
     return ws.loglik
 end
 
@@ -564,10 +586,10 @@ end
 # ============================================================================
 
 """
-    ekf_smoother!(ws::EKFWorkspace; crosscov::Bool=true)
+    kalman_smoother!(ws::EKFWorkspace; crosscov::Bool=false)
 
 Run the extended RTS smoother in place using filter results stored in `ws`.
-Must be called after `ekf_filter!(ws, y)`.
+Must be called after `kalman_filter!(ws, y)`.
 
 The recursion is identical to the linear smoother with the constant `Z`
 replaced by the per-step linearisation `Z_t = ws.Zt[:, :, t]` produced during
@@ -576,16 +598,17 @@ smoothing is performed on the time-varying linear-Gaussian approximation
 generated by the forward EKF.
 
 # Arguments
-- `ws::EKFWorkspace` — workspace populated by `ekf_filter!`.
+- `ws::EKFWorkspace` — workspace populated by `kalman_filter!`.
 - `crosscov` — also compute lag-1 cross-covariances `Cov[α_t, α_{t-1} | y_{1:n}]`
-  used by EM. Default `true`.
+  used by EM. Default `false`.
 
 # Stored
 - `ws.αs` — smoothed state means.
 - `ws.Vs` — smoothed state covariances.
 - `ws.Pcross` — lag-1 cross-covariances (when `crosscov=true`).
 """
-function ekf_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = true) where {T}
+function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
+    _require_output(ws, :kalman_smoother!)
     m, n = ws.state_dim, ws.n_times
     p = ws.obs_dim
 
@@ -709,34 +732,26 @@ function ekf_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = true) where {T}
         end
     end
 
+    ws.smoothed = true
+    ws.crosscov = crosscov
     return nothing
-end
-
-"""
-    ekf_filter_and_smooth!(ws::EKFWorkspace, y; crosscov=true) -> loglik
-
-Run `ekf_filter!` followed by `ekf_smoother!`.
-"""
-function ekf_filter_and_smooth!(ws::EKFWorkspace, y::AbstractMatrix; crosscov::Bool = true)
-    ll = ekf_filter!(ws, y)
-    ekf_smoother!(ws; crosscov = crosscov)
-    return ll
 end
 
 # ============================================================================
 # Accessors (mirror KalmanWorkspace where possible)
 # ============================================================================
 
-predicted_states(ws::EKFWorkspace) = ws.at
-variances_predicted_states(ws::EKFWorkspace) = ws.Pt
-filtered_states(ws::EKFWorkspace) = ws.att
-variances_filtered_states(ws::EKFWorkspace) = ws.Ptt
-prediction_errors(ws::EKFWorkspace) = ws.vt
-variances_prediction_errors(ws::EKFWorkspace) = ws.Ft
-kalman_gains(ws::EKFWorkspace) = ws.Kt
-loglikelihood(ws::EKFWorkspace) = ws.loglik
-predicted_observations(ws::EKFWorkspace) = ws.yt
-measurement_jacobians(ws::EKFWorkspace) = ws.Zt
-smoothed_states(ws::EKFWorkspace) = ws.αs
-variances_smoothed_states(ws::EKFWorkspace) = ws.Vs
-crosslag_covs(ws::EKFWorkspace) = ws.Pcross
+# The shared accessors are in accessors.jl.
+predicted_observations(ws::EKFWorkspace) = _require_output(ws, :predicted_observations).yt
+measurement_jacobians(ws::EKFWorkspace) = _require_output(ws, :measurement_jacobians).Zt
+_observed_mask(ws::EKFWorkspace) = repeat(.!transpose(ws.missing_mask), ws.obs_dim)
+observed_mask(ws::EKFWorkspace) = _observed_mask(_require_output(ws, :observed_mask))
+
+function system_matrices(ws::EKFWorkspace)
+    EKFParms(ws.measurement, ws.jacobian_mode, ws.H, ws.Tmat, ws.R, ws.Q)
+end
+function obs_matrix(::EKFWorkspace)
+    throw(ArgumentError(
+        "the extended Kalman filter has no observation matrix; " *
+        "use measurement_jacobians for the linearisation at each period"))
+end

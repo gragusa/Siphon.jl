@@ -120,6 +120,7 @@ function SSMLogDensity(
         prior = nothing,
         use_static::Bool = true
 )
+    y = _nan_obs(y)
     t = build_transformation(spec)
     SSMLogDensity(spec, t, y, prior, use_static)
 end
@@ -139,11 +140,7 @@ function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
     # Transform to NamedTuple (constrained space)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
 
-    # Build state-space components (with optional StaticArrays)
-    ss = build_linear_state_space(ld.spec, θ_nt, ld.y; use_static = ld.use_static)
-
-    # Compute log-likelihood
-    ll = kalman_loglik(ss.p, ld.y, ss.a1, ss.P1)
+    ll = _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static)
 
     # Add prior (on constrained parameters)
     if ld.prior !== nothing
@@ -254,7 +251,7 @@ function (p::InverseGammaPrior)(θ::NamedTuple)
     for name in p.param_names
         σ = getproperty(θ, name)
         σ² = σ^2
-        result += p.α * log(p.β) - lgamma(p.α) - (p.α + 1) * log(σ²) - p.β / σ²
+        result += p.α * log(p.β) - loggamma(p.α) - (p.α + 1) * log(σ²) - p.β / σ²
     end
     result
 end

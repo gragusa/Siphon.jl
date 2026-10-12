@@ -24,9 +24,10 @@ This tutorial covers:
    `measurement!` / `measurement_jacobian!`).
 2. Two Jacobian modes: `ADJacobian()` (ForwardDiff, default) and
    `AnalyticJacobian()` (user-supplied).
-3. Three layers of the API: the functional `ekf_loglik` / `ekf_filter`, the
-   in-place `EKFWorkspace` + `ekf_filter!` + `ekf_smoother!`, and the DSL
-   `EKFSpec` + `optimize_ekf` for MLE.
+3. Three layers of the API, which are the linear filter's functions selected by the
+   argument types: the functional `kalman_loglik` / `kalman_filter` on an
+   `EKFParms`, the in-place `kalman_filter!` + `kalman_smoother!` on an
+   `EKFWorkspace`, and `optimize_ssm` on an `EKFSpec` for MLE.
 4. A worked example: a shadow-rate dynamic Nelson-Siegel ("SB-DNS") yield-curve
    model fit by EKF MLE.
 
@@ -38,7 +39,7 @@ one of:
 | Method | When required |
 |---|---|
 | `measurement(model, a, t) -> AbstractVector` | `ADJacobian()` mode (default), and for the pure functional path |
-| `measurement!(out, model, a, t)` | `EKFWorkspace` / `ekf_filter!` (in-place) |
+| `measurement!(out, model, a, t)` | `EKFWorkspace` / `kalman_filter!` (in-place) |
 | `measurement_jacobian(model, a, t) -> AbstractMatrix` | optional pure analytic |
 | `measurement_jacobian!(Z, model, a, t)` | `AnalyticJacobian()` mode |
 
@@ -68,52 +69,53 @@ Siphon.measurement_jacobian(m::LinearMeasurement, a, t)         = m.Z
 Siphon.measurement_jacobian!(Z, m::LinearMeasurement, a, t)     = (copyto!(Z, m.Z); Z)
 ```
 
-With this in place, `ekf_loglik` matches `kalman_loglik` to machine precision.
+With this in place, `kalman_loglik` on the `EKFParms` matches `kalman_loglik` on the
+equivalent `KFParms` to machine precision.
 
 ## Three API Layers
 
-### 1. Functional API — `ekf_loglik`, `ekf_filter`
+### 1. Functional API — `kalman_loglik`, `kalman_filter`
 
 ```julia
 p = EKFParms(measurement, AnalyticJacobian(), H, T, R, Q)
-ll  = ekf_loglik(p, y, a1, P1)        # log-likelihood only
-res = ekf_filter(p, y, a1, P1)        # full result with at, Pt, att, Ptt, ...
+ll  = kalman_loglik(p, y, a1, P1)     # log-likelihood only
+res = kalman_filter(p, y, a1, P1)     # full result with at, Pt, att, Ptt, ...
 ```
 
-`ekf_filter` returns an `EKFFilterResult` with the same accessors as
+`kalman_filter` returns an `EKFFilterResult` with the same accessors as
 `KalmanFilterResult`, plus two EKF-specific fields:
 * `predicted_observations(res)` — the per-step ``\hat{y}_t = h(a_t, t)``
 * `measurement_jacobians(res)` — the per-step ``Z_t``
 
 The functional path is AD-compatible: ForwardDiff propagates through
-`ekf_loglik` for parameter gradients.
+`kalman_loglik` for parameter gradients.
 
-### 2. In-place API — `EKFWorkspace`, `ekf_filter!`, `ekf_smoother!`
+### 2. In-place API — `EKFWorkspace`, `kalman_filter!`, `kalman_smoother!`
 
 For repeated calls (MLE inner loop, EM, large panels):
 
 ```julia
 ws = EKFWorkspace(measurement, AnalyticJacobian(), H, T, R, Q, a1, P1, n)
-ll = ekf_filter!(ws, y)
-ekf_smoother!(ws; crosscov=true)
+ll = kalman_filter!(ws, y)
+kalman_smoother!(ws)              # crosscov=true also fills crosslag_covs(ws)
 αs = smoothed_states(ws)
-Vs = variances_smoothed_states(ws)
+Vs = smoothed_states_cov(ws)
 ```
 
-Allocation budget: after a warm-up call, both `ekf_filter!` and the combined
-`ekf_filter_and_smooth!` allocate **O(1) bytes** in the time loop in both
+Allocation budget: after a warm-up call, both `kalman_filter!` and the combined
+`kalman_filter_and_smooth!` allocate **O(1) bytes** in the time loop in both
 Analytic and AD modes (the AD path uses a workspace-owned
 `ForwardDiff.JacobianConfig` cached at construction time).
 
 To swap parameters between calls without rebuilding the workspace:
 
 ```julia
-update_params!(ws; H=H_new, Tmat=T_new, Q=Q_new)   # selective in-place update
+update_params!(ws; H=H_new, T=T_new, Q=Q_new)   # selective in-place update
 set_initial!(ws, a1_new, P1_new)
-ll_new = ekf_filter!(ws, y)
+ll_new = kalman_filter!(ws, y)
 ```
 
-### 3. DSL API — `EKFSpec`, `custom_ekf`, `optimize_ekf`
+### 3. DSL API — `EKFSpec`, `custom_ekf`, `optimize_ssm`
 
 `EKFSpec` is the nonlinear-measurement counterpart to `SSMSpec`. System
 matrices use the same DSL helpers (`diag_free`, `cov_free`, `identity_mat`,
@@ -130,7 +132,7 @@ spec = custom_ekf(
     a1 = zeros(m),
     P1 = 10.0 .* Matrix(I, m, m),
 )
-res = optimize_ekf(spec, y; method = Optim.LBFGS())
+res = optimize_ssm(spec, y; method = Optim.LBFGS())
 ```
 
 When the measurement itself depends on free parameters (e.g. a smoothing
@@ -146,7 +148,7 @@ mexpr = MeasurementExpr(
 spec = custom_ekf(measurement = mexpr, ...)
 ```
 
-`optimize_ekf` runs in unconstrained ℝⁿ via TransformVariables (variances
+`optimize_ssm` runs in unconstrained ℝⁿ via TransformVariables (variances
 through `asℝ₊`, bounded reals through `as(Real, lo, hi)`, etc.), so you only
 declare bounds on the parameters and the optimizer handles the rest.
 
@@ -213,7 +215,7 @@ function Siphon.measurement_jacobian!(Z, m::SBSCenteredMeasurement, ξ, t)
 end
 ```
 
-### Simulating data and fitting via `optimize_ekf`
+### Simulating data and fitting via `optimize_ssm`
 
 ```julia
 using Random
@@ -267,7 +269,7 @@ spec = custom_ekf(
     P1 = 1.0 .* Matrix(I, m_state, m_state),
 )
 
-result = optimize_ekf(spec, y; maxiters = 400)
+result = optimize_ssm(spec, y; maxiters = 400)
 result.converged    # → true
 result.loglik       # → ≈ 2312
 result.θ.μ_L        # ≈ 3.5
@@ -291,7 +293,7 @@ a1, P1 = build_initial_state(spec, θ̂)
 
 ws = EKFWorkspace(p̂.measurement, p̂.jacobian_mode, p̂.H, p̂.T, p̂.R, p̂.Q,
                   a1, P1, n)
-ekf_filter_and_smooth!(ws, y; crosscov = true)
+kalman_filter_and_smooth!(ws, y; crosscov = true)
 
 αs = smoothed_states(ws)              # smoothed state in deviation form
 μ̂ = [θ̂.μ_L, θ̂.μ_S, θ̂.μ_C]
@@ -299,7 +301,7 @@ ekf_filter_and_smooth!(ws, y; crosscov = true)
 ```
 
 Smoothed RMSE on each component is typically 10-20% lower than filtered RMSE,
-and `Vs = variances_smoothed_states(ws)` is positive semidefinite throughout.
+and `Vs = smoothed_states_cov(ws)` is positive semidefinite throughout.
 
 ## Choosing Between Jacobian Modes
 
@@ -317,13 +319,13 @@ and `Vs = variances_smoothed_states(ws)` is positive semidefinite throughout.
 
 ## Performance Notes
 
-* The functional `ekf_loglik` is intended for AD parameter gradients; it
+* The functional `kalman_loglik` is intended for AD parameter gradients; it
   allocates per call.
 * For repeated filtering (MLE inner loop, EM, simulation), use
-  `EKFWorkspace` + `ekf_filter!`. With allocation-free user methods this is
+  `EKFWorkspace` + `kalman_filter!`. With allocation-free user methods this is
   the same wall-time as the linear `kalman_filter!` for the same dimensions.
 * The state Jacobian is recomputed at every time step. Storage of
-  ``Z_t`` per step is unavoidable when using `ekf_smoother!`; for filter-only
+  ``Z_t`` per step is unavoidable when using `kalman_smoother!`; for filter-only
   workloads, the workspace stores ``Z_t`` regardless (used by the cross-lag
   smoother step).
 * Always pre-build the `EKFWorkspace` and the measurement object outside any

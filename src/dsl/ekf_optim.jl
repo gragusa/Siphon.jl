@@ -1,9 +1,8 @@
 """
     ekf_optim.jl
 
-`EKFLogDensity` (LogDensityProblems-compatible) and `optimize_ekf`
-(Optimization.jl-backed MLE) for `EKFSpec`. Mirrors `SSMLogDensity` /
-`optimize_ssm`.
+`EKFLogDensity` (LogDensityProblems-compatible) and the `optimize_ssm` method
+(Optimization.jl-backed MLE) for `EKFSpec`. Mirrors `SSMLogDensity`.
 """
 
 # ============================================================================
@@ -27,6 +26,7 @@ struct EKFLogDensity{S <: EKFSpec, Tr, Y <: AbstractMatrix}
 end
 
 function EKFLogDensity(spec::EKFSpec, y::AbstractMatrix; use_static::Bool = true)
+    y = _nan_obs(y)
     t = build_transformation(spec)
     return EKFLogDensity{typeof(spec), typeof(t), typeof(y)}(spec, t, y, use_static)
 end
@@ -35,8 +35,12 @@ end
 # SSMLogDensity. We add an EKF method here.
 function logdensity(ld::EKFLogDensity, θ_u::AbstractVector)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
-    ll = ekf_loglik(ld.spec, θ_nt, ld.y; use_static = ld.use_static)
-    return ll + logjac
+    return _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static) + logjac
+end
+
+function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
+    ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
+    return kalman_loglik(ss.p, y, ss.a1, ss.P1)
 end
 
 # Optional LogDensityProblems integration
@@ -48,16 +52,17 @@ function LogDensityProblems.capabilities(::Type{<:EKFLogDensity})
 end
 
 # ============================================================================
-# optimize_ekf
+# optimize_ssm for EKFSpec
 # ============================================================================
 
 """
-    optimize_ekf(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
+    optimize_ssm(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
                  ad_backend=Optimization.AutoForwardDiff(),
-                 use_static=true, prob_kwargs=NamedTuple(), kwargs...)
+                 use_static=true, prob_kwargs=NamedTuple(), warn=true, kwargs...)
 
-Maximum-likelihood estimation for an `EKFSpec`. Works in unconstrained
-parameter space via `TransformVariables`. Mirrors `optimize_ssm`.
+Maximum-likelihood estimation for an `EKFSpec`, with the same keywords and return
+value as for an `SSMSpec`. Works in unconstrained parameter space via
+`TransformVariables`.
 
 # AD-backend choice
 The default `AutoForwardDiff()` requires that the entire likelihood path is
@@ -69,37 +74,17 @@ gradients. The choice of `ad_backend` here affects only the *parameter*
 gradient; the *state* Jacobian is controlled by `spec.jacobian_mode`.
 
 # Returns
-A NamedTuple with `θ` (constrained), `loglik`, `result`, and `converged`.
+A NamedTuple with `θ` (constrained), `loglik`, `result`, and `converged`. A warning is
+emitted when the optimiser does not report convergence, unless `warn = false`.
 """
-function optimize_ekf(spec::EKFSpec, y::AbstractMatrix;
+function optimize_ssm(spec::EKFSpec, y::AbstractMatrix;
         method = Optim.LBFGS(),
         θ0::Union{Nothing, AbstractVector, NamedTuple} = nothing,
         ad_backend = Optimization.AutoForwardDiff(),
         use_static::Bool = true,
         prob_kwargs::NamedTuple = NamedTuple(),
+        warn::Bool = true,
         kwargs...)
-    ld = EKFLogDensity(spec, y; use_static = use_static)
-
-    θ0_c = if θ0 === nothing
-        initial_values(spec)
-    elseif θ0 isa NamedTuple
-        collect(Float64, θ0)
-    else
-        θ0
-    end
-    θ0_u = transform_to_unconstrained(spec, θ0_c)
-
-    neglogdensity(θ_u, _) = -logdensity(ld, θ_u)
-    optf = OptimizationFunction(neglogdensity, ad_backend)
-    prob = OptimizationProblem(optf, θ0_u; prob_kwargs...)
-    result = Optimization.solve(prob, method; kwargs...)
-
-    θ_opt, _ = transform_to_constrained(spec, result.u)
-    ll_opt = -result.objective
-    return (
-        θ = θ_opt,
-        loglik = ll_opt,
-        result = result,
-        converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
-    )
+    y = _nan_obs(y)
+    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
 end

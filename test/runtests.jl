@@ -158,9 +158,12 @@ end
     @test ll_mle ≈ -632.5456 rtol=1e-4
 end
 
-@testset "kalman_loglik_scalar" begin
-    ll = kalman_loglik_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, Float64.(nile[!, 1]))
+@testset "kalman_loglik on a scalar KFParms" begin
+    p_scalar = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+    ll = kalman_loglik(p_scalar, Float64.(nile[!, 1]), 0.0, 1e7)
+    # A 1 × n matrix works too
+    @test kalman_loglik(p_scalar, y, 0.0, 1e7) == ll
+    @test_throws DimensionMismatch kalman_loglik(p_scalar, [y; y], 0.0, 1e7)
 
     @test isfinite(ll)
     @test ll < 0
@@ -216,9 +219,16 @@ end
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
     result = kalman_filter(p, y, a1_nile, P1_nile)
 
-    smooth = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
-    alpha_smooth = smooth.alpha
-    V_smooth = smooth.V
+    smooth = kalman_smoother(result)
+    @test smooth isa SmootherResult
+    alpha_smooth = smoothed_states(smooth)
+    V_smooth = smoothed_states_cov(smooth)
+    @test_throws ArgumentError crosslag_covs(smooth)
+    @test size(crosslag_covs(kalman_smoother(result; crosscov = true))) ==
+          (1, 1, size(y, 2) - 1)
+
+    # One call does the filtering too
+    @test smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile)) == alpha_smooth
 
     n = size(y, 2)
     @test size(alpha_smooth) == (1, n)
@@ -245,8 +255,7 @@ end
         Q = [theta[2];;]
         p = KFParms(Z_nile, H, T_nile, R_nile, Q)
         result = kalman_filter(p, y, a1_nile, P1_nile)
-        smooth = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
-        return sum(smooth.alpha)
+        return sum(smoothed_states(kalman_smoother(result)))
     end
 
     theta = [15099.0, 1469.1]
@@ -258,55 +267,59 @@ end
 
 @testset "kalman_filter_and_smooth" begin
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
-    result = kalman_filter_and_smooth(p, y, a1_nile, P1_nile)
+    filt, smooth = kalman_filter_and_smooth(p, y, a1_nile, P1_nile)
 
-    @test haskey(result, :loglik)
-    @test haskey(result, :a_filtered)
-    @test haskey(result, :P_filtered)
-    @test haskey(result, :alpha_smooth)
-    @test haskey(result, :V_smooth)
+    @test filt isa KalmanFilterResult
+    @test smooth isa SmootherResult
 
     # Compare with separate calls
     ll = kalman_loglik(p, y, a1_nile, P1_nile)
-    @test isapprox(result.loglik, ll, rtol = 1e-10)
+    @test isapprox(loglikelihood(filt), ll, rtol = 1e-10)
+    @test smoothed_states(smooth) ==
+          smoothed_states(kalman_smoother(p, y, a1_nile, P1_nile))
 end
 
-@testset "kalman_smoother_scalar" begin
+@testset "kalman_filter and kalman_smoother on a scalar KFParms" begin
     nile_vec = Float64.(nile[!, 1])
-    result_scalar = kalman_filter_scalar(
-        1.0, 15099.0, 1.0, 1.0, 1469.1, 0.0, 1e7, nile_vec)
+    p_scalar = KFParms(1.0, 15099.0, 1.0, 1.0, 1469.1)
+    result_scalar = kalman_filter(p_scalar, nile_vec, 0.0, 1e7)
 
-    # Check struct type
-    @test result_scalar isa Siphon.KalmanFilterResultScalar
+    # The scalar kernel returns the common result type
+    @test result_scalar isa KalmanFilterResult
+    p_mat = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
+    result_mat = kalman_filter(p_mat, y, a1_nile, P1_nile)
+    @test loglikelihood(result_scalar) ≈ loglikelihood(result_mat) rtol = 1e-10
+    @test filtered_states_cov(result_scalar) ≈ filtered_states_cov(result_mat) rtol = 1e-10
+    @test kalman_gains(result_scalar) ≈ kalman_gains(result_mat) rtol = 1e-10
+    @test Siphon.missing_mask(result_scalar) == Siphon.missing_mask(result_mat)
+    @test obs_matrix(result_scalar) == 1.0
 
-    alpha,
-    V = kalman_smoother_scalar(
-        1.0,
-        1.0,
-        result_scalar.at,
-        result_scalar.Pt,
-        result_scalar.vt,
-        result_scalar.Ft
-    )
+    smooth_scalar = kalman_smoother(result_scalar)
+    @test smooth_scalar isa SmootherResult
+    @test crosslag_covs(kalman_smoother(result_scalar; crosscov = true)) ≈
+          crosslag_covs(kalman_smoother(result_mat; crosscov = true))
 
     n = length(nile_vec)
-    @test length(alpha) == n
-    @test length(V) == n
+    @test size(smoothed_states(smooth_scalar)) == (1, n)
+    @test size(smoothed_states_cov(smooth_scalar)) == (1, 1, n)
 
     # Should match matrix version
     p = KFParms(Z_nile, H_nile, T_nile, R_nile, Q_nile)
-    result = kalman_filter(p, y, a1_nile, P1_nile)
-    alpha_mat,
-    V_mat = kalman_smoother(Z_nile, T_nile, result.at, result.Pt, result.vt, result.Ft)
+    smooth = kalman_smoother(p, y, a1_nile, P1_nile)
 
-    @test isapprox(alpha, vec(alpha_mat), rtol = 1e-10)
+    @test isapprox(smoothed_states(smooth_scalar), smoothed_states(smooth), rtol = 1e-10)
+    @test isapprox(smoothed_states_cov(smooth_scalar), smoothed_states_cov(smooth),
+        rtol = 1e-10)
 end
 
 # DSL tests
 include("dsl_tests.jl")
 
-# EM algorithm tests (uses TestItems)
+# EM algorithm tests
 include("em_tests.jl")
+
+# Dynamic factor model tests
+include("dfm_tests.jl")
 
 # Generalized EM tests (MARSS validation - diagonal covariances)
 include("em_generalized_tests.jl")
@@ -329,6 +342,21 @@ include("diffuse_tests.jl")
 # Extended Kalman Filter tests
 include("ekf_tests.jl")
 
+# Accessors shared by results, workspaces and models
+include("accessor_tests.jl")
+
+# One smoother result type and the result/workspace conversions
+include("smoother_interface_tests.jl")
+
+# Filter variants selected by argument types
+include("variant_dispatch_tests.jl")
+
+# Failure model: -Inf objectives, guarded accessors, shape errors, warnings
+include("failure_tests.jl")
+
+# Observations with `missing` entries; innovations in series positions
+include("missing_input_tests.jl")
+
 # Per-element (partially observed period) missing data
 include("partial_missing_tests.jl")
 
@@ -343,6 +371,15 @@ include("singular_innovation_tests.jl")
 
 # Filtering across a transition whose spectral radius exceeds one
 include("explosive_transition_tests.jl")
+
+# DNS model validation against MARSS
+include("dns_marss_validation_tests.jl")
+
+# Exported functions without coverage elsewhere
+include("api_coverage_tests.jl")
+
+# Known bugs, pinned with @test_broken
+include("known_bugs_tests.jl")
 
 # Aqua.jl quality assurance tests
 include("Aqua.jl")

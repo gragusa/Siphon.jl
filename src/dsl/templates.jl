@@ -71,7 +71,8 @@ function parse_param_spec(
             name;
             lower = default_lower,
             upper = default_upper,
-            init = default_init
+            init = default_init,
+            default_init = true
         )
     )
 end
@@ -96,7 +97,11 @@ function parse_param_spec(
     init = get(spec, :init, default_init)
     lower = get(spec, :lower, default_lower)
     upper = get(spec, :upper, default_upper)
-    (true, SSMParameter(name; lower = lower, upper = upper, init = init))
+    (
+        true,
+        SSMParameter(name; lower = lower, upper = upper, init = init,
+            default_init = !haskey(spec, :init))
+    )
 end
 
 """
@@ -107,6 +112,13 @@ Union type for diffuse initialization specification:
 - `Symbol` - `:exact` for exact diffuse initialization (Durbin-Koopman method)
 """
 const DiffuseSpec = Union{Bool, Symbol}
+
+function _check_diffuse(diffuse::DiffuseSpec)
+    diffuse isa Bool || diffuse === :exact ||
+        throw(ArgumentError(
+            "diffuse must be true, false or :exact, got $(repr(diffuse))"))
+    return nothing
+end
 
 """
     local_level(; var_obs=:free, var_level=:free, diffuse=true)
@@ -187,6 +199,7 @@ function local_level(;
     a1 = [FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         # Exact diffuse: P1_star = 0, P1_inf = I
         P1 = SSMMatrixSpec((1, 1))
@@ -270,6 +283,7 @@ function local_linear_trend(;
     a1 = [FixedValue(0.0), FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         # Exact diffuse: P1_star = 0, P1_inf = I
         P1 = SSMMatrixSpec((2, 2))
@@ -347,6 +361,7 @@ function ar1(;
     a1 = [FixedValue(0.0)]
 
     # Initial state covariance - depends on diffuse mode
+    _check_diffuse(diffuse)
     if diffuse === :exact
         P1 = SSMMatrixSpec((1, 1))
         P1.elements[(1, 1)] = FixedValue(0.0)
@@ -362,15 +377,24 @@ function ar1(;
 end
 
 """
-    arma(p::Int, q::Int; ar_init=nothing, ma_init=nothing, var_init=1.0, diffuse=true)
+    arma(p::Int, q::Int; ar_init=nothing, ma_init=nothing, var_init=nothing, diffuse=true)
 
 Create specification for ARMA(p,q) model in state-space form.
 
 Uses the innovations state-space representation.
 
 Parameters: ar coefficients φ₁...φₚ, ma coefficients θ₁...θᵧ, var (innovation variance)
+
+When `var_init` is `nothing`, the innovation variance starts at 1.0 and maximum
+likelihood rescales it to the data (see [`optimize_ssm`](@ref)).
+
+`diffuse` sets the initial state covariance:
+- `true` (default): Approximate diffuse (P1 = 1e7*I)
+- `false`: Non-diffuse (P1 = 1e4*I)
+- `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
-function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1.0)
+function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = nothing,
+        diffuse::DiffuseSpec = true)
     # State dimension is max(p, q+1)
     r = max(p, q + 1)
 
@@ -402,7 +426,9 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     end
 
     # Innovation variance
-    push!(params, SSMParameter(:var; lower = 0.0, upper = Inf, init = var_init))
+    push!(params,
+        SSMParameter(:var; lower = 0.0, upper = Inf, init = something(var_init, 1.0),
+            default_init = var_init === nothing))
 
     # Z = [1 0 ... 0]
     Z = SSMMatrixSpec((1, r))
@@ -437,20 +463,30 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = 1
     Q = SSMMatrixSpec((1, 1))
     Q.elements[(1, 1)] = ParameterRef(:var)
 
-    # Initial state (diffuse)
+    # Initial state
     a1 = [FixedValue(0.0) for _ in 1:r]
+    name = Symbol("ARMA($p,$q)")
     P1 = SSMMatrixSpec((r, r))
-    for i in 1:r
-        P1.elements[(i, i)] = FixedValue(1e7)
+    _check_diffuse(diffuse)
+    if diffuse === :exact
+        P1_inf = SSMMatrixSpec((r, r))
+        for i in 1:r
+            P1.elements[(i, i)] = FixedValue(0.0)
+            P1_inf.elements[(i, i)] = FixedValue(1.0)
+        end
+        return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1, P1_inf)
     end
-
-    SSMSpec(Symbol("ARMA($p,$q)"), r, 1, 1, params, Z, H, T, R, Q, a1, P1)
+    P1_val = diffuse ? 1e7 : 1e4
+    for i in 1:r
+        P1.elements[(i, i)] = FixedValue(P1_val)
+    end
+    return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1)
 end
 
 """
     dynamic_factor(n_obs, n_factors; factor_lags=1, obs_lags=0, correlated_errors=false,
-                   loadings_init=0.5, ar_init=0.5, var_obs_init=1.0,
-                   var_factor_init=1.0, diffuse=true)
+                   loadings_init=0.5, ar_init=0.5, var_obs_init=nothing,
+                   var_factor_init=nothing, diffuse=true)
 
 Create specification for a dynamic factor model with VAR factor dynamics and
 optional lagged factor loadings.
@@ -490,8 +526,11 @@ All other loadings (including lagged) are free parameters.
                                    If false, H is diagonal (exact DFM).
 - `loadings_init::Real=0.5`: Initial value for free factor loadings
 - `ar_init::Real=0.5`: Initial value for AR coefficients (divided by lag number)
-- `var_obs_init::Real=1.0`: Initial value for observation error variances
-- `var_factor_init::Real=1.0`: Initial value for factor innovation variances
+- `var_obs_init=nothing`: Initial value for observation error variances
+- `var_factor_init=nothing`: Initial value for factor innovation variances
+
+  When a variance init is `nothing`, the variances start at 1.0 and maximum
+  likelihood rescales them to the data (see [`optimize_ssm`](@ref)).
 - `diffuse::Bool=true`: Use diffuse initialization for factors
 
 # State Space Representation
@@ -547,8 +586,8 @@ function dynamic_factor(
         correlated_errors::Bool = false,
         loadings_init::Real = 0.5,
         ar_init::Real = 0.5,
-        var_obs_init::Real = 1.0,
-        var_factor_init::Real = 1.0,
+        var_obs_init::Union{Nothing, Real} = nothing,
+        var_factor_init::Union{Nothing, Real} = nothing,
         diffuse::Bool = true
 )
     # Validation
@@ -642,7 +681,7 @@ function dynamic_factor(
                         pname;
                         lower = 0.0,
                         upper = Inf,
-                        init = sqrt(var_obs_init)
+                        init = sqrt(something(var_obs_init, 1.0))
                     )
                 )
                 push!(param_set, pname)
@@ -672,7 +711,9 @@ function dynamic_factor(
             pname = Symbol("var_obs_$i")
             push!(
                 params,
-                SSMParameter(pname; lower = 0.0, upper = Inf, init = var_obs_init)
+                SSMParameter(pname; lower = 0.0, upper = Inf,
+                    init = something(var_obs_init, 1.0),
+                    default_init = var_obs_init === nothing)
             )
             push!(param_set, pname)
             H.elements[(i, i)] = ParameterRef(pname)
@@ -739,7 +780,10 @@ function dynamic_factor(
     Q = SSMMatrixSpec((n_shocks, n_shocks))
     for i in 1:n_factors
         pname = Symbol("var_factor_$i")
-        push!(params, SSMParameter(pname; lower = 0.0, upper = Inf, init = var_factor_init))
+        push!(params,
+            SSMParameter(pname; lower = 0.0, upper = Inf,
+                init = something(var_factor_init, 1.0),
+                default_init = var_factor_init === nothing))
         push!(param_set, pname)
         Q.elements[(i, i)] = ParameterRef(pname)
     end

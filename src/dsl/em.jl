@@ -125,19 +125,19 @@ function _em_local_level(
 
         # E-step: Kalman filter and smoother with cross-covariances
         filt = kalman_filter(p, y, a1, P1)
-        smooth_result = kalman_smoother(
+        smooth_result = _kalman_smoother(
             p.Z,
             p.T,
             filt.at,
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true
+            crosscov = true
         )
 
-        alpha_hat = smooth_result.alpha      # m × n
-        V_hat = smooth_result.V              # m × m × n
-        P_crosslag = smooth_result.P_crosslag  # m × m × (n-1)
+        alpha_hat = smooth_result.αs      # m × n
+        V_hat = smooth_result.Vs              # m × m × n
+        P_crosslag = smooth_result.Pcross  # m × m × (n-1)
 
         # Current log-likelihood
         ll = filt.loglik
@@ -215,14 +215,14 @@ function _em_local_level(
     # Final smoother run for output
     p_final = _build_local_level_kfparms(var_obs, var_level)
     filt_final = kalman_filter(p_final, y, a1, P1)
-    smooth_final = kalman_smoother(
+    smooth_final = _kalman_smoother(
         p_final.Z,
         p_final.T,
         filt_final.at,
         filt_final.Pt,
         filt_final.vt,
         filt_final.Ft;
-        compute_crosscov = false
+        crosscov = false
     )
 
     EMResult(
@@ -232,8 +232,8 @@ function _em_local_level(
         ll_history,
         converged,
         iter,
-        smooth_final.alpha,
-        smooth_final.V
+        smooth_final.αs,
+        smooth_final.Vs
     )
 end
 
@@ -662,19 +662,19 @@ function _em_general_ssm_full_cov(
 
         # E-step: Kalman filter and smoother
         filt = kalman_filter(kfp, y, a1, P1)
-        smooth_result = kalman_smoother(
+        smooth_result = _kalman_smoother(
             Z,
             T,
             filt.at,
             filt.Pt,
             filt.vt,
             filt.Ft;
-            compute_crosscov = true
+            crosscov = true
         )
 
-        alpha_hat = smooth_result.alpha       # m × n
-        V_hat = smooth_result.V               # m × m × n
-        P_crosslag = smooth_result.P_crosslag # m × m × (n-1)
+        alpha_hat = smooth_result.αs       # m × n
+        V_hat = smooth_result.Vs               # m × m × n
+        P_crosslag = smooth_result.Pcross # m × m × (n-1)
 
         # Current log-likelihood
         ll = filt.loglik
@@ -801,14 +801,14 @@ function _em_general_ssm_full_cov(
     # Final filter/smoother run
     kfp_final = KFParms(Z, H, T, R, Q)
     filt_final = kalman_filter(kfp_final, y, a1, P1)
-    smooth_final = kalman_smoother(
+    smooth_final = _kalman_smoother(
         Z,
         T,
         filt_final.at,
         filt_final.Pt,
         filt_final.vt,
         filt_final.Ft;
-        compute_crosscov = false
+        crosscov = false
     )
 
     return (
@@ -820,8 +820,8 @@ function _em_general_ssm_full_cov(
         loglik_history = ll_history,
         converged = converged,
         iterations = iter,
-        smoothed_states = smooth_final.alpha,
-        smoothed_cov = smooth_final.V
+        smoothed_states = smooth_final.αs,
+        smoothed_cov = smooth_final.Vs
     )
 end
 

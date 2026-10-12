@@ -57,11 +57,11 @@ end
 end
 
 # ============================================================================
-# ekf_loglik
+# EKF log-likelihood
 # ============================================================================
 
 """
-    ekf_loglik(p::EKFParms, y, a1, P1) -> loglik
+    kalman_loglik(p::EKFParms, y, a1, P1) -> loglik
 
 Compute the log-likelihood of the nonlinear-measurement state-space model
 
@@ -85,13 +85,14 @@ via the Extended Kalman Filter prediction-error decomposition.
 - Missing observations skip the measurement update and propagate the state
   via the transition equation, matching `kalman_loglik`.
 """
-function ekf_loglik(
+function kalman_loglik(
         p::EKFParms,
         y::AbstractMatrix,
         a1::AbstractVector,
         P1::AbstractMatrix
 )
-    _require_no_partial_periods(y, "ekf_loglik")
+    y = _nan_obs(y)
+    _require_no_partial_periods(y, "kalman_loglik")
     n = size(y, 2)
     obs_dim = size(y, 1)
     ET = _ekf_filter_eltype(p, a1, P1)
@@ -171,11 +172,11 @@ function ekf_loglik(
 end
 
 # ============================================================================
-# ekf_filter
+# EKF filter
 # ============================================================================
 
 """
-    ekf_filter(p::EKFParms, y, a1, P1) -> EKFFilterResult
+    kalman_filter(p::EKFParms, y, a1, P1) -> EKFFilterResult
 
 Run the Extended Kalman Filter and return per-step predicted/filtered
 moments, innovations, gains, and stored measurement linearisations.
@@ -183,28 +184,29 @@ moments, innovations, gains, and stored measurement linearisations.
 Field semantics match `KalmanFilterResult`; see `EKFFilterResult` for the two
 EKF-specific fields `yt` (predicted measurement) and `Zt` (per-step Jacobian).
 """
-function ekf_filter(
+function kalman_filter(
         p::EKFParms,
         y::AbstractMatrix,
         a1::AbstractVector,
         P1::AbstractMatrix
 )
-    _require_no_partial_periods(y, "ekf_filter")
+    y = _nan_obs(y)
+    _require_no_partial_periods(y, "kalman_filter")
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
     ET = _ekf_filter_eltype(p, a1, P1)
 
-    at_store = Matrix{ET}(undef, state_dim, n)
-    Pt_store = Array{ET}(undef, state_dim, state_dim, n)
-    att_store = Matrix{ET}(undef, state_dim, n)
-    Ptt_store = Array{ET}(undef, state_dim, state_dim, n)
-    yt_store = Matrix{ET}(undef, obs_dim, n)
-    Zt_store = Array{ET}(undef, obs_dim, state_dim, n)
-    vt_store = Matrix{ET}(undef, obs_dim, n)
-    Ft_store = Array{ET}(undef, obs_dim, obs_dim, n)
-    Kt_store = Array{ET}(undef, state_dim, obs_dim, n)
-    missing_mask = BitVector(undef, n)
+    at_store = fill(ET(NaN), state_dim, n)
+    Pt_store = fill(ET(NaN), state_dim, state_dim, n)
+    att_store = fill(ET(NaN), state_dim, n)
+    Ptt_store = fill(ET(NaN), state_dim, state_dim, n)
+    yt_store = fill(ET(NaN), obs_dim, n)
+    Zt_store = fill(ET(NaN), obs_dim, state_dim, n)
+    vt_store = fill(ET(NaN), obs_dim, n)
+    Ft_store = fill(ET(NaN), obs_dim, obs_dim, n)
+    Kt_store = fill(ET(NaN), state_dim, obs_dim, n)
+    missing_mask = falses(n)
 
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
@@ -248,7 +250,7 @@ function ekf_filter(
             if F_val <= zero(ET)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
             end
             Finv = fill(one(ET) / F_val, 1, 1)
             logdetF = log(F_val)
@@ -259,7 +261,7 @@ function ekf_filter(
             if !issuccess(chol_result)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
             end
             Finv = inv(chol_result)
             logdetF = 2 * sum(log.(diag(chol_result.U)))

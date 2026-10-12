@@ -53,7 +53,7 @@ isconverged(model)          # Whether estimation converged
 niterations(model)          # Number of iterations (EM only)
 
 # Access system matrices at fitted parameters
-mats = system_matrices(model)  # All matrices as NamedTuple
+mats = system_matrices(model)  # All matrices as a KFParms
 mats.Z  # Observation matrix
 mats.H  # Observation covariance
 mats.T  # Transition matrix
@@ -110,7 +110,15 @@ Siphon.kalman_smoother!(::Siphon.StateSpaceModel)
 
 ## Model Accessors
 
-After fitting a `StateSpaceModel`, use these functions to access results:
+After fitting a `StateSpaceModel`, use these functions to access results. The same
+accessors work on filter results (`AbstractFilterResult`) and on in-place filter
+workspaces (`AbstractFilterWorkspace`).
+
+```@docs
+Siphon.AbstractStateSpaceModel
+Siphon.AbstractFilterResult
+Siphon.AbstractFilterWorkspace
+```
 
 ### Parameters
 
@@ -128,15 +136,23 @@ Siphon.obs_cov
 Siphon.transition_matrix
 Siphon.selection_matrix
 Siphon.state_cov
+Siphon.initial_state
+Siphon.initial_state_cov
 ```
 
 ### Filter and Smoother Results
 
 ```@docs
 Siphon.filtered_states
+Siphon.filtered_states_cov
 Siphon.predicted_states
+Siphon.predicted_states_cov
 Siphon.smoothed_states
+Siphon.smoothed_states_cov
 Siphon.prediction_errors
+Siphon.prediction_errors_cov
+Siphon.kalman_gains
+Siphon.crosslag_covs
 ```
 
 ## Direct Optimization
