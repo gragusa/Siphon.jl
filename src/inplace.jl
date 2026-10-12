@@ -3225,7 +3225,7 @@ Supports both MLE and EM estimation.
 # Usage
 ```julia
 # Create from SSMSpec
-spec = local_level(var_obs=:free, var_level=:free)
+spec = local_level()
 model = StateSpaceModel(spec, 200)
 
 # Fit with MLE (pure Kalman filter, AD-compatible)
@@ -3306,7 +3306,7 @@ Construct a StateSpaceModel from an SSMSpec.
 
 # Example
 ```julia
-spec = local_level(var_obs=:free, var_level=:free)
+spec = local_level()
 model = StateSpaceModel(spec, 200)
 ```
 """
@@ -3832,7 +3832,7 @@ compounds it. Pass `static = :off` to opt out for those workflows.
 
 # Example
 ```julia
-spec = local_level(var_obs=:free, var_level=:free)
+spec = local_level()
 model = StateSpaceModel(spec, 100)
 fit!(MLE(), model, randn(1, 100))
 parameters(model)  # (var_obs=..., var_level=...)

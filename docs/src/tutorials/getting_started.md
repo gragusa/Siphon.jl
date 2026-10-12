@@ -278,7 +278,7 @@ spec = local_linear_trend()
 
 ```julia
 # AR(1) with measurement noise
-spec = ar1(ρ_init=0.9)
+spec = ar1(ρ = FreeParam(init = 0.9))
 # Parameters: (:ρ, :var_obs, :var_state)
 ```
 

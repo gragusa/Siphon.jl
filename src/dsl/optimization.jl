@@ -30,9 +30,9 @@ for gradient computation.
 - `kwargs...`: All other kwargs passed to `Optimization.solve`
 
 # Default starting values
-A variance on the diagonal of `H` or `Q` whose initial value comes from a template
-default (for example `local_level()` rather than `local_level(var_obs=(init=…,))`)
-starts at that default times the variance of the first differences of `y`. An
+A variance on the diagonal of `H` or `Q` whose initial value was left unset (for
+example `local_level()` rather than `local_level(var_obs = FreeParam(init = …))`)
+starts at its default times the variance of the first differences of `y`. An
 observation variance uses the series it applies to; a state variance uses the mean
 over series. Differences keep the scale meaningful for trending series, where
 `var(y)` is dominated by the trend. Initial values set by the user, and all other

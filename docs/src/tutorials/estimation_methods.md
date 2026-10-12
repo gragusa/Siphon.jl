@@ -93,10 +93,10 @@ spec = dns_model(maturities;
     T_structure = :diagonal,  # Diagonal AR(1) for each factor
     H_structure = :diagonal,  # Diagonal observation variances
     Q_structure = :diagonal,  # Diagonal state variances
-    λ_init = 0.06,
-    T_init = 0.9,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.9),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("Parameters: ", param_names(spec))
@@ -140,7 +140,7 @@ spec_full = dns_model(maturities;
     T_structure = :full,      # Full 3×3 VAR matrix
     H_structure = :diagonal,
     Q_structure = :full,      # Full 3×3 covariance
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 # Profile EM estimation
@@ -176,7 +176,7 @@ spec = dns_model(maturities;
     T_structure = :diagonal,
     H_structure = :diagonal,
     Q_structure = :diagonal,
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 model = StateSpaceModel(spec, n_obs)
@@ -239,7 +239,7 @@ spec = dns_model(maturities;
     T_structure = :full,
     Q_structure = :full,
     H_structure = :diagonal,
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 println("Model: ", spec.name)

@@ -3,105 +3,102 @@
 
 Pre-built state-space model templates for common models.
 
-# Specifying Fixed vs Free Parameters
+# Fixed and free parameters
 
-All template functions accept keyword arguments to control which parameters are
-estimated vs fixed:
+Every parameter keyword of a template takes either
 
-- Pass a `Symbol` or `nothing` to estimate (optimize) that parameter
-- Pass a `Real` value to fix the parameter at that value
+- a number, which fixes the parameter at that value, or
+- a `FreeParam`, which marks it for estimation. Unset fields take the
+  template's defaults: `FreeParam()` uses the template's bounds and starting
+  value, and `FreeParam(init = 225.0)` changes only the starting value. The
+  name may be omitted or repeat the template's name for that parameter.
 
-## Examples
+The default for every parameter keyword is `FreeParam()`. A keyword that covers
+a group of parameters (ARMA coefficients, factor loadings, …) takes one value
+for every member, or a vector with one value per member.
 
 ```julia
-# Estimate both var_obs and var_level (default)
-spec = local_level()
-
-# Fix var_obs at 225.0, estimate var_level starting from 100.0
-spec = local_level(var_obs=225.0, var_level=100.0)
-# Wait, that's ambiguous! Use explicit :free marker:
-
-# Fix var_obs at 225.0, estimate var_level
-spec = local_level(var_obs=225.0, var_level=:free)
-
-# Estimate var_obs, fix var_level at 100.0
-spec = local_level(var_obs=:free, var_level=100.0)
-
-# Set initial values for estimation
-spec = local_level(var_obs=(init=225.0,), var_level=(init=100.0,))
-
-# Full control: bounds + initial value
-spec = local_level(var_obs=(init=225.0, lower=1.0, upper=40000.0), var_level=:free)
+spec = local_level()                                   # estimate both variances
+spec = local_level(var_obs = 225.0)                    # fix var_obs
+spec = local_level(var_obs = FreeParam(init = 225.0))  # estimate, from 225
+spec = local_level(var_obs = FreeParam(lower = 1.0, upper = 4e4))
+spec = arma(2, 1; ar = [FreeParam(), 0.0])            # φ2 fixed at 0
 ```
 """
 
-"""
-    ParamSpec
-
-Union type for parameter specification in templates:
-- `Symbol` (:free) - estimate with default bounds/init
-- `Real` - fix at this value
-- `NamedTuple` - estimate with custom (init=, lower=, upper=)
-"""
-const ParamSpec = Union{Symbol, Real, NamedTuple}
-
-"""
-    parse_param_spec(name, spec, default_init, default_lower, default_upper)
-
-Parse a parameter specification into either an SSMParameter (free) or FixedValue.
-Returns (is_free::Bool, param_or_value)
-"""
-function parse_param_spec(
-        name::Symbol,
-        spec::Symbol,
-        default_init,
-        default_lower,
-        default_upper
-)
-    spec == :free || throw(
-        ArgumentError(
-        "Unknown symbol :$spec for parameter $name. Use :free or a numeric value.",
-    ),
-    )
-    (
-        true,
-        SSMParameter(
-            name;
-            lower = default_lower,
-            upper = default_upper,
-            init = default_init,
-            default_init = true
-        )
-    )
+# Add the template parameter `name`, given by the user as `x`, to `params` and
+# return the matrix element that refers to it. `lower`, `upper` and `init` are
+# the template's defaults for the fields `x` leaves unset; `kw` is the keyword
+# that `x` was passed as.
+function _template_param!(params, param_set, x, name::Symbol, lower, upper, init;
+        kw::Symbol = name)
+    x isa Real && return FixedValue(Float64(x))
+    x isa FreeParam || throw(ArgumentError(
+        "`$kw` must be a number (to fix the parameter) or a FreeParam (to estimate " *
+        "it), e.g. FreeParam(init = 1.0); got $(repr(x))"))
+    x.name === nothing || x.name === name ||
+        throw(ArgumentError(
+            "`$kw` sets the parameter :$name; pass a FreeParam without a name, " *
+            "got FreeParam(:$(x.name))"))
+    lo = something(x.lower, lower)
+    up = something(x.upper, upper)
+    p = if x.init === nothing
+        SSMParameter(name; lower = lo, upper = up, default_init = true,
+            init = lo < init < up ? init : _default_init(lo, up))
+    else
+        SSMParameter(name; lower = lo, upper = up, init = x.init)
+    end
+    _add_param!(params, param_set, p)
+    return ParameterRef(name)
 end
 
-function parse_param_spec(
-        name::Symbol,
-        spec::Real,
-        default_init,
-        default_lower,
-        default_upper
-)
-    (false, FixedValue(Float64(spec)))
+# A group of template parameters: `x` is one value for every member or a vector
+# with one value per member. `inits` holds the template's starting values.
+function _template_params!(params, param_set, x, names, lower, upper, inits; kw::Symbol)
+    xs = _group_values(x, length(names), kw)
+    return MatrixElement[_template_param!(params, param_set, xs[i], names[i], lower,
+                             upper, inits[i]; kw) for i in eachindex(names, xs, inits)]
 end
 
-function parse_param_spec(
-        name::Symbol,
-        spec::NamedTuple,
-        default_init,
-        default_lower,
-        default_upper
-)
-    lower = get(spec, :lower, default_lower)
-    upper = get(spec, :upper, default_upper)
-    # The template default may fall outside user-given bounds.
-    init = get(spec, :init,
-        lower < default_init < upper ? default_init : _default_init(lower, upper))
-    (
-        true,
-        SSMParameter(name; lower = lower, upper = upper, init = init,
-            default_init = !haskey(spec, :init))
-    )
+function _group_values(x::AbstractVector, n::Int, kw::Symbol)
+    length(x) == n || throw(DimensionMismatch(
+        "`$kw` covers $n parameters, got a vector of length $(length(x))"))
+    return x
+end
+
+function _group_values(x, n::Int, kw::Symbol)
+    n > 1 && x isa FreeParam && x.name !== nothing &&
+        throw(ArgumentError(
+            "one FreeParam for all $n parameters of `$kw` cannot carry a name; " *
+            "pass a vector to set each parameter separately"))
+    return fill(x, n)
+end
+
+# Starting standard deviations of a full covariance (D * Corr * D) whose keyword
+# `kw` gives the variances. Only the starting variances can be set there.
+function _cov_sd_inits(x, n::Int, init; kw::Symbol)
+    map(_group_values(x, n, kw)) do xi
+        xi isa FreeParam && xi.name === nothing && xi.lower === nothing &&
+        xi.upper === nothing || throw(ArgumentError(
+            "with a full covariance, `$kw` sets only starting variances, as " *
+            "FreeParam(init = v); got $(repr(xi))"))
+        sqrt(something(xi.init, init))
+    end
+end
+
+# Standard deviation and correlation parameters of a full n × n covariance named
+# `<prefix>_sd_<label>` and `<prefix>_corr_<i>`.
+function _cov_params!(params, param_set, prefix::Symbol, labels, sd_inits)
+    sd_names = [Symbol("$(prefix)_sd_$l") for l in labels]
+    n = length(labels)
+    corr_names = [Symbol("$(prefix)_corr_$i") for i in 1:(n * (n - 1) ÷ 2)]
+    for (name, init) in zip(sd_names, sd_inits)
+        _add_param!(params, param_set, SSMParameter(name; lower = 0.0, init))
+    end
+    for name in corr_names
+        _add_param!(params, param_set, SSMParameter(name; init = 0.0))
+    end
+    return sd_names, corr_names
 end
 
 """
@@ -121,7 +118,7 @@ function _check_diffuse(diffuse::DiffuseSpec)
 end
 
 """
-    local_level(; var_obs=:free, var_level=:free, diffuse=true)
+    local_level(; var_obs=FreeParam(), var_level=FreeParam(), diffuse=true)
 
 Create specification for local level (random walk + noise) model.
 
@@ -130,13 +127,16 @@ Model:
     μₜ₊₁ = μₜ + ηₜ,  ηₜ ~ N(0, var_level)
 
 # Arguments
-- `var_obs`: Observation noise variance. Use `:free` to estimate, a number to fix,
-             or `(init=, lower=, upper=)` for custom estimation settings.
-- `var_level`: Level noise variance. Same options as var_obs.
+- `var_obs`: Observation noise variance. A number fixes it; a `FreeParam`
+  estimates it (defaults: `lower = 0`, `init = 1.0`).
+- `var_level`: Level noise variance. Same options and defaults as `var_obs`.
 - `diffuse`: Initialization mode:
   - `true` (default): Approximate diffuse (P1 = 1e7)
-  - `false`: Non-diffuse (P1 = small value)
+  - `false`: Non-diffuse (P1 = 1e4)
   - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
+
+A starting value left unset is rescaled to the data by maximum likelihood (see
+[`optimize_ssm`](@ref)).
 
 # Examples
 ```julia
@@ -144,80 +144,61 @@ Model:
 spec = local_level()
 
 # Fix observation variance, estimate level variance
-spec = local_level(var_obs=225.0, var_level=:free)
+spec = local_level(var_obs = 225.0)
 
 # Use exact diffuse initialization
-spec = local_level(diffuse=:exact)
+spec = local_level(diffuse = :exact)
 
-# Custom initial value and bounds
-spec = local_level(var_obs=(init=225.0, lower=1.0, upper=10000.0))
+# Custom starting value and bounds
+spec = local_level(var_obs = FreeParam(lower = 1.0, upper = 1e4, init = 225.0))
 ```
 """
 function local_level(;
-        var_obs::ParamSpec = :free,
-        var_level::ParamSpec = :free,
+        var_obs = FreeParam(),
+        var_level = FreeParam(),
         diffuse::DiffuseSpec = true
 )
-    # Parse parameter specifications (variance parameters, lower=0.0)
-    obs_free, obs_spec = parse_param_spec(:var_obs, var_obs, 1.0, 0.0, Inf)
-    level_free, level_spec = parse_param_spec(:var_level, var_level, 1.0, 0.0, Inf)
-
-    # Build parameter list (only free parameters)
+    _check_diffuse(diffuse)
     params = SSMParameter{Float64}[]
-    obs_free && push!(params, obs_spec)
-    level_free && push!(params, level_spec)
+    param_set = Set{Symbol}()
 
-    # Z = [1]
     Z = SSMMatrixSpec((1, 1))
     Z.elements[(1, 1)] = FixedValue(1.0)
-
-    # H = var_obs (either ParameterRef or FixedValue)
     H = SSMMatrixSpec((1, 1))
-    if obs_free
-        H.elements[(1, 1)] = ParameterRef(:var_obs)
-    else
-        H.elements[(1, 1)] = FixedValue(obs_spec.value)
-    end
-
-    # T = [1]
+    H.elements[(1, 1)] = _template_param!(
+        params, param_set, var_obs, :var_obs, 0.0, Inf, 1.0)
     T = SSMMatrixSpec((1, 1))
     T.elements[(1, 1)] = FixedValue(1.0)
-
-    # R = [1]
     R = SSMMatrixSpec((1, 1))
     R.elements[(1, 1)] = FixedValue(1.0)
-
-    # Q = var_level (either ParameterRef or FixedValue)
     Q = SSMMatrixSpec((1, 1))
-    if level_free
-        Q.elements[(1, 1)] = ParameterRef(:var_level)
-    else
-        Q.elements[(1, 1)] = FixedValue(level_spec.value)
-    end
-
-    # Initial state mean
+    Q.elements[(1, 1)] = _template_param!(
+        params, param_set, var_level, :var_level, 0.0, Inf, 1.0)
     a1 = [FixedValue(0.0)]
+    return _template_spec(:LocalLevel, 1, 1, 1, params, Z, H, T, R, Q, a1, diffuse)
+end
 
-    # Initial state covariance - depends on diffuse mode
-    _check_diffuse(diffuse)
+# The spec with the initial state covariance that `diffuse` selects: 1e7 I
+# (true), 1e4 I (false), or P1_star = 0 with P1_inf = I (:exact).
+function _template_spec(name, m, p, r, params, Z, H, T, R, Q, a1, diffuse::DiffuseSpec)
+    P1 = SSMMatrixSpec((m, m))
     if diffuse === :exact
-        # Exact diffuse: P1_star = 0, P1_inf = I
-        P1 = SSMMatrixSpec((1, 1))
-        P1.elements[(1, 1)] = FixedValue(0.0)  # P1_star = 0
-        P1_inf = SSMMatrixSpec((1, 1))
-        P1_inf.elements[(1, 1)] = FixedValue(1.0)  # P1_inf = I
-        return SSMSpec(:LocalLevel, 1, 1, 1, params, Z, H, T, R, Q, a1, P1, P1_inf)
-    else
-        # Approximate diffuse or non-diffuse
-        P1_val = diffuse ? 1e7 : 1e4
-        P1 = SSMMatrixSpec((1, 1))
-        P1.elements[(1, 1)] = FixedValue(P1_val)
-        return SSMSpec(:LocalLevel, 1, 1, 1, params, Z, H, T, R, Q, a1, P1)
+        P1_inf = SSMMatrixSpec((m, m))
+        for i in 1:m
+            P1.elements[(i, i)] = FixedValue(0.0)
+            P1_inf.elements[(i, i)] = FixedValue(1.0)
+        end
+        return SSMSpec(name, m, p, r, params, Z, H, T, R, Q, a1, P1, P1_inf)
     end
+    for i in 1:m
+        P1.elements[(i, i)] = FixedValue(diffuse ? 1e7 : 1e4)
+    end
+    return SSMSpec(name, m, p, r, params, Z, H, T, R, Q, a1, P1)
 end
 
 """
-    local_linear_trend(; var_obs=:free, var_level=:free, var_slope=:free, diffuse=true)
+    local_linear_trend(; var_obs=FreeParam(), var_level=FreeParam(),
+                       var_slope=FreeParam(), diffuse=true)
 
 Create specification for local linear trend model.
 
@@ -229,81 +210,47 @@ Model:
 State: [μₜ, νₜ]
 
 # Arguments
-- `var_obs`, `var_level`, `var_slope`: Use `:free` to estimate, a number to fix,
-  or `(init=, lower=, upper=)` for custom settings.
+- `var_obs`, `var_level`, `var_slope`: Variances. A number fixes one; a
+  `FreeParam` estimates it (defaults: `lower = 0` and `init` = 1.0, 0.01 and
+  1e-4 respectively).
 - `diffuse`: Initialization mode:
   - `true` (default): Approximate diffuse (P1 = 1e7*I)
   - `false`: Non-diffuse (P1 = 1e4*I)
   - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
 function local_linear_trend(;
-        var_obs::ParamSpec = :free,
-        var_level::ParamSpec = :free,
-        var_slope::ParamSpec = :free,
+        var_obs = FreeParam(),
+        var_level = FreeParam(),
+        var_slope = FreeParam(),
         diffuse::DiffuseSpec = true
 )
-    # Parse parameter specifications (variance parameters, lower=0.0)
-    obs_free, obs_spec = parse_param_spec(:var_obs, var_obs, 1.0, 0.0, Inf)
-    level_free, level_spec = parse_param_spec(:var_level, var_level, 0.01, 0.0, Inf)
-    slope_free, slope_spec = parse_param_spec(:var_slope, var_slope, 0.0001, 0.0, Inf)
-
-    # Build parameter list (only free parameters)
+    _check_diffuse(diffuse)
     params = SSMParameter{Float64}[]
-    obs_free && push!(params, obs_spec)
-    level_free && push!(params, level_spec)
-    slope_free && push!(params, slope_spec)
+    param_set = Set{Symbol}()
 
-    # Z = [1 0]
     Z = SSMMatrixSpec((1, 2))
     Z.elements[(1, 1)] = FixedValue(1.0)
-
-    # H = var_obs
     H = SSMMatrixSpec((1, 1))
-    H.elements[(1, 1)] = obs_free ? ParameterRef(:var_obs) : FixedValue(obs_spec.value)
-
-    # T = [1 1; 0 1]
+    H.elements[(1, 1)] = _template_param!(
+        params, param_set, var_obs, :var_obs, 0.0, Inf, 1.0)
     T = SSMMatrixSpec((2, 2))
     T.elements[(1, 1)] = FixedValue(1.0)
     T.elements[(1, 2)] = FixedValue(1.0)
     T.elements[(2, 2)] = FixedValue(1.0)
-
-    # R = I
     R = SSMMatrixSpec((2, 2))
     R.elements[(1, 1)] = FixedValue(1.0)
     R.elements[(2, 2)] = FixedValue(1.0)
-
-    # Q = diag(var_level, var_slope)
     Q = SSMMatrixSpec((2, 2))
-    Q.elements[(1, 1)] = level_free ? ParameterRef(:var_level) :
-                         FixedValue(level_spec.value)
-    Q.elements[(2, 2)] = slope_free ? ParameterRef(:var_slope) :
-                         FixedValue(slope_spec.value)
-
-    # Initial state mean
+    Q.elements[(1, 1)] = _template_param!(params, param_set, var_level, :var_level,
+        0.0, Inf, 0.01)
+    Q.elements[(2, 2)] = _template_param!(params, param_set, var_slope, :var_slope,
+        0.0, Inf, 1e-4)
     a1 = [FixedValue(0.0), FixedValue(0.0)]
-
-    # Initial state covariance - depends on diffuse mode
-    _check_diffuse(diffuse)
-    if diffuse === :exact
-        # Exact diffuse: P1_star = 0, P1_inf = I
-        P1 = SSMMatrixSpec((2, 2))
-        P1.elements[(1, 1)] = FixedValue(0.0)
-        P1.elements[(2, 2)] = FixedValue(0.0)
-        P1_inf = SSMMatrixSpec((2, 2))
-        P1_inf.elements[(1, 1)] = FixedValue(1.0)
-        P1_inf.elements[(2, 2)] = FixedValue(1.0)
-        return SSMSpec(:LocalLinearTrend, 2, 1, 2, params, Z, H, T, R, Q, a1, P1, P1_inf)
-    else
-        P1_val = diffuse ? 1e7 : 1e4
-        P1 = SSMMatrixSpec((2, 2))
-        P1.elements[(1, 1)] = FixedValue(P1_val)
-        P1.elements[(2, 2)] = FixedValue(P1_val)
-        return SSMSpec(:LocalLinearTrend, 2, 1, 2, params, Z, H, T, R, Q, a1, P1)
-    end
+    return _template_spec(:LocalLinearTrend, 2, 1, 2, params, Z, H, T, R, Q, a1, diffuse)
 end
 
 """
-    ar1(; ρ=:free, var_obs=:free, var_state=:free, diffuse=true)
+    ar1(; ρ=FreeParam(), var_obs=FreeParam(), var_state=FreeParam(), diffuse=true)
 
 Create specification for AR(1) plus noise model.
 
@@ -312,123 +259,83 @@ Model:
     xₜ₊₁ = ρ xₜ + ηₜ,  ηₜ ~ N(0, var_state)
 
 # Arguments
-- `ρ`: AR coefficient (|ρ| < 1). Use `:free`, a number, or `(init=, lower=, upper=)`.
-- `var_obs`, `var_state`: Noise variances. Same options.
+- `ρ`: AR coefficient. A number fixes it; a `FreeParam` estimates it (defaults:
+  bounds ±0.9999, `init = 0.8`).
+- `var_obs`, `var_state`: Noise variances (defaults: `lower = 0`, `init = 1.0`).
 - `diffuse`: Initialization mode:
   - `true` (default): Approximate diffuse (P1 = 1e7)
   - `false`: Non-diffuse (P1 = 1e4)
   - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 """
 function ar1(;
-        ρ::ParamSpec = :free,
-        var_obs::ParamSpec = :free,
-        var_state::ParamSpec = :free,
+        ρ = FreeParam(),
+        var_obs = FreeParam(),
+        var_state = FreeParam(),
         diffuse::DiffuseSpec = true
 )
-    # Parse parameter specifications
-    rho_free, rho_spec = parse_param_spec(:ρ, ρ, 0.8, -0.9999, 0.9999)
-    obs_free, obs_spec = parse_param_spec(:var_obs, var_obs, 1.0, 0.0, Inf)
-    state_free, state_spec = parse_param_spec(:var_state, var_state, 1.0, 0.0, Inf)
-
-    # Build parameter list
+    _check_diffuse(diffuse)
     params = SSMParameter{Float64}[]
-    rho_free && push!(params, rho_spec)
-    obs_free && push!(params, obs_spec)
-    state_free && push!(params, state_spec)
+    param_set = Set{Symbol}()
 
-    # Z = [1]
+    T = SSMMatrixSpec((1, 1))
+    T.elements[(1, 1)] = _template_param!(params, param_set, ρ, :ρ, -0.9999, 0.9999, 0.8)
     Z = SSMMatrixSpec((1, 1))
     Z.elements[(1, 1)] = FixedValue(1.0)
-
-    # H = var_obs
     H = SSMMatrixSpec((1, 1))
-    H.elements[(1, 1)] = obs_free ? ParameterRef(:var_obs) : FixedValue(obs_spec.value)
-
-    # T = [ρ]
-    T = SSMMatrixSpec((1, 1))
-    T.elements[(1, 1)] = rho_free ? ParameterRef(:ρ) : FixedValue(rho_spec.value)
-
-    # R = [1]
+    H.elements[(1, 1)] = _template_param!(
+        params, param_set, var_obs, :var_obs, 0.0, Inf, 1.0)
     R = SSMMatrixSpec((1, 1))
     R.elements[(1, 1)] = FixedValue(1.0)
-
-    # Q = var_state
     Q = SSMMatrixSpec((1, 1))
-    Q.elements[(1, 1)] = state_free ? ParameterRef(:var_state) :
-                         FixedValue(state_spec.value)
-
-    # Initial state mean
+    Q.elements[(1, 1)] = _template_param!(params, param_set, var_state, :var_state,
+        0.0, Inf, 1.0)
     a1 = [FixedValue(0.0)]
-
-    # Initial state covariance - depends on diffuse mode
-    _check_diffuse(diffuse)
-    if diffuse === :exact
-        P1 = SSMMatrixSpec((1, 1))
-        P1.elements[(1, 1)] = FixedValue(0.0)
-        P1_inf = SSMMatrixSpec((1, 1))
-        P1_inf.elements[(1, 1)] = FixedValue(1.0)
-        return SSMSpec(:AR1, 1, 1, 1, params, Z, H, T, R, Q, a1, P1, P1_inf)
-    else
-        P1_val = diffuse ? 1e7 : 1e4
-        P1 = SSMMatrixSpec((1, 1))
-        P1.elements[(1, 1)] = FixedValue(P1_val)
-        return SSMSpec(:AR1, 1, 1, 1, params, Z, H, T, R, Q, a1, P1)
-    end
+    return _template_spec(:AR1, 1, 1, 1, params, Z, H, T, R, Q, a1, diffuse)
 end
 
 """
-    arma(p::Int, q::Int; ar_init=nothing, ma_init=nothing, var_init=nothing, diffuse=true)
+    arma(p::Int, q::Int; ar=FreeParam(), ma=FreeParam(), var=FreeParam(), diffuse=true)
 
 Create specification for ARMA(p,q) model in state-space form.
 
 Uses the innovations state-space representation.
 
-Parameters: ar coefficients φ₁...φₚ, ma coefficients θ₁...θᵧ, var (innovation variance)
+Parameters: AR coefficients `φ1`, …, `φp`, MA coefficients `θ1`, …, `θq`, and
+the innovation variance `var`.
 
-When `var_init` is `nothing`, the innovation variance starts at 1.0 and maximum
-likelihood rescales it to the data (see [`optimize_ssm`](@ref)).
+# Arguments
+- `ar`: AR coefficients, as one value for all of them or a vector of length `p`.
+  A number fixes a coefficient; a `FreeParam` estimates it (defaults:
+  unbounded, `init = 0.5 / p`).
+- `ma`: MA coefficients, as for `ar` with length `q` (default `init = 0.0`).
+- `var`: Innovation variance (defaults: `lower = 0`, `init = 1.0`). A starting
+  value left unset is rescaled to the data by maximum likelihood (see
+  [`optimize_ssm`](@ref)).
+- `diffuse`: Initial state covariance:
+  - `true` (default): Approximate diffuse (P1 = 1e7*I)
+  - `false`: Non-diffuse (P1 = 1e4*I)
+  - `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
 
-`diffuse` sets the initial state covariance:
-- `true` (default): Approximate diffuse (P1 = 1e7*I)
-- `false`: Non-diffuse (P1 = 1e4*I)
-- `:exact`: Exact diffuse initialization (P1_star=0, P1_inf=I)
+# Example
+```julia
+spec = arma(2, 1)                                  # estimate everything
+spec = arma(2, 0; ar = [FreeParam(init = 0.5), 0.0])  # φ2 fixed at 0
+```
 """
-function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = nothing,
+function arma(p::Int, q::Int; ar = FreeParam(), ma = FreeParam(), var = FreeParam(),
         diffuse::DiffuseSpec = true)
+    p >= 0 && q >= 0 || throw(ArgumentError("arma orders must be ≥ 0, got ($p, $q)"))
+    _check_diffuse(diffuse)
     # State dimension is max(p, q+1)
     r = max(p, q + 1)
-
-    # Default initial values
-    if ar_init === nothing
-        ar_init = fill(0.5 / p, p)
-    end
-    if ma_init === nothing
-        ma_init = fill(0.0, q)
-    end
-
-    # Parameters
     params = SSMParameter{Float64}[]
+    param_set = Set{Symbol}()
 
-    # AR coefficients
-    for i in 1:p
-        push!(
-            params,
-            SSMParameter(Symbol("φ$i"); lower = -Inf, upper = Inf, init = ar_init[i])
-        )
-    end
-
-    # MA coefficients
-    for i in 1:q
-        push!(
-            params,
-            SSMParameter(Symbol("θ$i"); lower = -Inf, upper = Inf, init = ma_init[i])
-        )
-    end
-
-    # Innovation variance
-    push!(params,
-        SSMParameter(:var; lower = 0.0, upper = Inf, init = something(var_init, 1.0),
-            default_init = var_init === nothing))
+    φ = _template_params!(params, param_set, ar, [Symbol("φ$i") for i in 1:p],
+        -Inf, Inf, fill(0.5 / max(p, 1), p); kw = :ar)
+    θ = _template_params!(params, param_set, ma, [Symbol("θ$i") for i in 1:q],
+        -Inf, Inf, zeros(q); kw = :ma)
+    var_elem = _template_param!(params, param_set, var, :var, 0.0, Inf, 1.0)
 
     # Z = [1 0 ... 0]
     Z = SSMMatrixSpec((1, r))
@@ -444,49 +351,29 @@ function arma(p::Int, q::Int; ar_init = nothing, ma_init = nothing, var_init = n
     #     [φᵣ 0 0 ... 0]
     T = SSMMatrixSpec((r, r))
     for i in 1:r
-        if i <= p
-            T.elements[(i, 1)] = ParameterRef(Symbol("φ$i"))
-        end
-        if i < r
-            T.elements[(i, i + 1)] = FixedValue(1.0)
-        end
+        i <= p && (T.elements[(i, 1)] = φ[i])
+        i < r && (T.elements[(i, i + 1)] = FixedValue(1.0))
     end
 
-    # R = [1; θ₁; θ₂; ...; θᵧ; 0; ...]
+    # R = [1; θ₁; θ₂; ...; θ_q; 0; ...]
     R = SSMMatrixSpec((r, 1))
     R.elements[(1, 1)] = FixedValue(1.0)
     for i in 1:q
-        R.elements[(i + 1, 1)] = ParameterRef(Symbol("θ$i"))
+        R.elements[(i + 1, 1)] = θ[i]
     end
 
-    # Q = var
     Q = SSMMatrixSpec((1, 1))
-    Q.elements[(1, 1)] = ParameterRef(:var)
+    Q.elements[(1, 1)] = var_elem
 
-    # Initial state
     a1 = [FixedValue(0.0) for _ in 1:r]
-    name = Symbol("ARMA($p,$q)")
-    P1 = SSMMatrixSpec((r, r))
-    _check_diffuse(diffuse)
-    if diffuse === :exact
-        P1_inf = SSMMatrixSpec((r, r))
-        for i in 1:r
-            P1.elements[(i, i)] = FixedValue(0.0)
-            P1_inf.elements[(i, i)] = FixedValue(1.0)
-        end
-        return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1, P1_inf)
-    end
-    P1_val = diffuse ? 1e7 : 1e4
-    for i in 1:r
-        P1.elements[(i, i)] = FixedValue(P1_val)
-    end
-    return SSMSpec(name, r, 1, 1, params, Z, H, T, R, Q, a1, P1)
+    return _template_spec(
+        Symbol("ARMA($p,$q)"), r, 1, 1, params, Z, H, T, R, Q, a1, diffuse)
 end
 
 """
     dynamic_factor(n_obs, n_factors; factor_lags=1, loading_lags=0, correlated_errors=false,
-                   loadings_init=0.5, ar_init=0.5, var_obs_init=nothing,
-                   var_factor_init=nothing, diffuse=true)
+                   loadings=FreeParam(), ar=FreeParam(), var_obs=FreeParam(),
+                   var_factor=FreeParam(), diffuse=true)
 
 Create specification for a dynamic factor model with VAR factor dynamics and
 optional lagged factor loadings.
@@ -524,13 +411,21 @@ All other loadings (including lagged) are free parameters.
                          If p > 0, observations depend on fₜ, fₜ₋₁, ..., fₜ₋ₚ.
 - `correlated_errors::Bool=false`: If true, H is a full covariance matrix (inexact DFM).
                                    If false, H is diagonal (exact DFM).
-- `loadings_init::Real=0.5`: Initial value for free factor loadings
-- `ar_init::Real=0.5`: Initial value for AR coefficients (divided by lag number)
-- `var_obs_init=nothing`: Initial value for observation error variances
-- `var_factor_init=nothing`: Initial value for factor innovation variances
+- `loadings`: The free loadings, in the order of `param_names` (`λ0_i_j`, then
+  `λ1_i_j`, …). One value for all of them or a vector; a number fixes a loading
+  and a `FreeParam` estimates it (defaults: unbounded, `init` = 0.5 for `Λ₀` and
+  0.5 / (l + 1) for `Λₗ`).
+- `ar`: AR coefficients `φ_i_l`, ordered by factor and then lag (defaults:
+  bounds ±0.9999, `init = 0.5 / l`).
+- `var_obs`: Observation error variances `var_obs_i` (defaults: `lower = 0`,
+  `init = 1.0`). With `correlated_errors = true`, H is parameterized by standard
+  deviations `H_sd_i` and correlations `H_corr_i`, and `var_obs` can only set the
+  starting variances, as `FreeParam(init = v)`.
+- `var_factor`: Factor innovation variances `var_factor_i` (defaults:
+  `lower = 0`, `init = 1.0`).
 
-  When a variance init is `nothing`, the variances start at 1.0 and maximum
-  likelihood rescales them to the data (see [`optimize_ssm`](@ref)).
+  Variance starting values left unset are rescaled to the data by maximum
+  likelihood (see [`optimize_ssm`](@ref)).
 - `diffuse::Bool=true`: Use diffuse initialization for factors
 
 # State Space Representation
@@ -584,10 +479,10 @@ function dynamic_factor(
         factor_lags::Int = 1,
         loading_lags::Int = 0,
         correlated_errors::Bool = false,
-        loadings_init::Real = 0.5,
-        ar_init::Real = 0.5,
-        var_obs_init::Union{Nothing, Real} = nothing,
-        var_factor_init::Union{Nothing, Real} = nothing,
+        loadings = FreeParam(),
+        ar = FreeParam(),
+        var_obs = FreeParam(),
+        var_factor = FreeParam(),
         diffuse::Bool = true
 )
     # Validation
@@ -618,46 +513,30 @@ function dynamic_factor(
     # For identification: upper-left block of Λ₀ is identity
     Z = SSMMatrixSpec((n_obs, n_states))
 
-    # Contemporaneous loadings (Λ₀) - columns 1:n_factors
-    for i in 1:n_obs
-        for j in 1:n_factors
-            if i == j && i <= n_factors
-                # Diagonal of identity block: fixed at 1
-                Z.elements[(i, j)] = FixedValue(1.0)
-            elseif i < j && i <= n_factors
-                # Upper triangle of identity block: fixed at 0
-                Z.elements[(i, j)] = FixedValue(0.0)
-            else
-                # Free loading parameter (contemporaneous)
-                pname = Symbol("λ0_$(i)_$(j)")
-                push!(
-                    params,
-                    SSMParameter(pname; lower = -Inf, upper = Inf, init = loadings_init)
-                )
-                push!(param_set, pname)
-                Z.elements[(i, j)] = ParameterRef(pname)
-            end
+    # Free loadings: Λ₀ outside the identification block, then Λ₁, …, Λₚ
+    cells = Tuple{Int, Int}[]
+    names = Symbol[]
+    inits = Float64[]
+    for i in 1:n_obs, j in 1:n_factors
+
+        if i <= n_factors && j >= i
+            # Identification block: unit diagonal, zero upper triangle
+            Z.elements[(i, j)] = FixedValue(i == j ? 1.0 : 0.0)
+        else
+            push!(cells, (i, j))
+            push!(names, Symbol("λ0_$(i)_$(j)"))
+            push!(inits, 0.5)
         end
     end
-
-    # Lagged loadings (Λ₁, Λ₂, ..., Λₚ) - all free parameters
-    for lag in 1:loading_lags
-        col_offset = lag * n_factors
-        for i in 1:n_obs
-            for j in 1:n_factors
-                col = col_offset + j
-                # All lagged loadings are free (no identification restrictions)
-                pname = Symbol("λ$(lag)_$(i)_$(j)")
-                # Use smaller initial values for lagged loadings
-                init_val = loadings_init / (lag + 1)
-                push!(
-                    params,
-                    SSMParameter(pname; lower = -Inf, upper = Inf, init = init_val)
-                )
-                push!(param_set, pname)
-                Z.elements[(i, col)] = ParameterRef(pname)
-            end
-        end
+    for lag in 1:loading_lags, i in 1:n_obs, j in 1:n_factors
+        push!(cells, (i, lag * n_factors + j))
+        push!(names, Symbol("λ$(lag)_$(i)_$(j)"))
+        push!(inits, 0.5 / (lag + 1))
+    end
+    elems = _template_params!(params, param_set, loadings, names, -Inf, Inf, inits;
+        kw = :loadings)
+    for (cell, elem) in zip(cells, elems)
+        Z.elements[cell] = elem
     end
     # Remaining columns (beyond loading_lags) are zero - use default
 
@@ -665,57 +544,17 @@ function dynamic_factor(
     # H matrix (observation errors): n_obs × n_obs
     # ==========================================
     if correlated_errors
-        # Full covariance matrix using CovMatrixExpr (D*Corr*D parameterization)
-        prefix = :H
-        n = n_obs
-
-        # Standard deviation parameters (positive, for D*Corr*D)
-        σ_param_names = Symbol[]
-        for i in 1:n
-            pname = Symbol("$(prefix)_sd_$i")
-            if !(pname in param_set)
-                push!(
-                    params,
-                    SSMParameter(
-                        pname;
-                        lower = 0.0,
-                        upper = Inf,
-                        init = sqrt(something(var_obs_init, 1.0))
-                    )
-                )
-                push!(param_set, pname)
-            end
-            push!(σ_param_names, pname)
-        end
-
-        # Create correlation parameters (unconstrained)
-        n_corr = n * (n - 1) ÷ 2
-        corr_param_names = Symbol[]
-        for i in 1:n_corr
-            pname = Symbol("$(prefix)_corr_$i")
-            if !(pname in param_set)
-                push!(params, SSMParameter(pname; lower = -Inf, upper = Inf, init = 0.0))
-                push!(param_set, pname)
-            end
-            push!(corr_param_names, pname)
-        end
-
-        # Store CovMatrixExpr
-        matrix_exprs[:H] = CovMatrixExpr(n, σ_param_names, corr_param_names)
+        # Full covariance D * Corr * D, parameterized by standard deviations
+        sd_inits = _cov_sd_inits(var_obs, n_obs, 1.0; kw = :var_obs)
+        sd_names, corr_names = _cov_params!(params, param_set, :H, 1:n_obs, sd_inits)
+        matrix_exprs[:H] = CovMatrixExpr(n_obs, sd_names, corr_names)
         H = SSMMatrixSpec((n_obs, n_obs))  # Placeholder
     else
-        # Diagonal covariance (variance parameters)
         H = SSMMatrixSpec((n_obs, n_obs))
+        elems = _template_params!(params, param_set, var_obs,
+            [Symbol("var_obs_$i") for i in 1:n_obs], 0.0, Inf, ones(n_obs); kw = :var_obs)
         for i in 1:n_obs
-            pname = Symbol("var_obs_$i")
-            push!(
-                params,
-                SSMParameter(pname; lower = 0.0, upper = Inf,
-                    init = something(var_obs_init, 1.0),
-                    default_init = var_obs_init === nothing)
-            )
-            push!(param_set, pname)
-            H.elements[(i, i)] = ParameterRef(pname)
+            H.elements[(i, i)] = elems[i]
         end
     end
 
@@ -732,22 +571,16 @@ function dynamic_factor(
     # Each Φₗ is n_factors × n_factors diagonal matrix
     T = SSMMatrixSpec((n_states, n_states))
 
-    # First n_factors rows: AR coefficient blocks (only up to factor_lags)
-    for i in 1:n_factors
-        for lag in 1:factor_lags
-            # Column block for lag l starts at (lag-1)*n_factors + 1
-            col = (lag - 1) * n_factors + i
-            pname = Symbol("φ_$(i)_$(lag)")
-            # Initialize with decreasing values for higher lags
-            init_val = ar_init / lag
-            push!(
-                params,
-                SSMParameter(pname; lower = -0.9999, upper = 0.9999, init = init_val)
-            )
-            push!(param_set, pname)
-            T.elements[(i, col)] = ParameterRef(pname)
-        end
-        # Columns beyond factor_lags are zero (default)
+    # First n_factors rows: AR coefficients for lags 1:factor_lags; the
+    # remaining columns are zero (default)
+    ar_cells = [(i, (lag - 1) * n_factors + i) for i in 1:n_factors
+                for lag in 1:factor_lags]
+    elems = _template_params!(params, param_set, ar,
+        [Symbol("φ_$(i)_$(lag)") for i in 1:n_factors for lag in 1:factor_lags],
+        -0.9999, 0.9999, [0.5 / lag for i in 1:n_factors for lag in 1:factor_lags];
+        kw = :ar)
+    for (cell, elem) in zip(ar_cells, elems)
+        T.elements[cell] = elem
     end
 
     # Identity blocks for shifting lags (rows n_factors+1 to n_states)
@@ -777,14 +610,11 @@ function dynamic_factor(
     # ==========================================
     # Diagonal covariance for factor innovations (variance parameters)
     Q = SSMMatrixSpec((n_shocks, n_shocks))
+    elems = _template_params!(params, param_set, var_factor,
+        [Symbol("var_factor_$i") for i in 1:n_factors], 0.0, Inf, ones(n_factors);
+        kw = :var_factor)
     for i in 1:n_factors
-        pname = Symbol("var_factor_$i")
-        push!(params,
-            SSMParameter(pname; lower = 0.0, upper = Inf,
-                init = something(var_factor_init, 1.0),
-                default_init = var_factor_init === nothing))
-        push!(param_set, pname)
-        Q.elements[(i, i)] = ParameterRef(pname)
+        Q.elements[(i, i)] = elems[i]
     end
 
     # ==========================================
@@ -820,7 +650,8 @@ end
 
 """
     dns_model(maturities; T_structure=:diagonal, H_structure=:diagonal,
-              Q_structure=:full, λ_init=0.0609, ...)
+              Q_structure=:full, λ=FreeParam(), T=FreeParam(), H=FreeParam(),
+              Q=FreeParam(), diffuse=true)
 
 Create specification for Dynamic Nelson-Siegel yield curve model.
 
@@ -851,10 +682,19 @@ where:
 - `Q_structure::Symbol=:full`: State covariance structure
   - `:full` - Full 3×3 covariance (6 parameters: standard deviations `Q_sd_L`, `Q_sd_S`, `Q_sd_C` and correlation parameters `Q_corr_1`, …, `Q_corr_3`)
   - `:diagonal` - Diagonal (3 variances: `var_L`, `var_S`, `var_C`)
-- `λ_init`, `λ_lower`, `λ_upper`: Decay parameter settings
-- `T_init`: Initial value for T diagonal elements (scalar or 3-vector)
-- `Q_init`: Initial value for Q variances (scalar or 3-vector)
-- `H_init`: Initial value for H variances (scalar or p-vector)
+- `λ`: Decay parameter. A `FreeParam` estimates it (defaults: bounds
+  `[0.001, 1.0]`, `init = 0.0609`); a number fixes it, and `Z` is then a fixed
+  matrix.
+- `T`: The parameters of `T` in the order of `param_names`, as one value for all
+  or a vector (9, 3 or 1 values for `:full`, `:diagonal`, `:ar1`). A number fixes
+  an entry; a `FreeParam` estimates it (defaults: bounds ±0.9999, `init` = 0.95
+  on the diagonal and 0.0 off it).
+- `H`: Observation variances (`p` values for `:diagonal`, 1 for `:scalar`;
+  defaults: `lower = 0`, `init = 0.01`).
+- `Q`: State variances (3 values; defaults: `lower = 0`, `init = 0.01`). With
+  `Q_structure = :full`, Q is parameterized by standard deviations and
+  correlations, and `Q` can only set the starting variances, as
+  `FreeParam(init = v)`.
 - `diffuse::Bool=true`: Use diffuse initialization
 
 # Returns
@@ -895,12 +735,10 @@ function dns_model(
         T_structure::Symbol = :diagonal,
         H_structure::Symbol = :diagonal,
         Q_structure::Symbol = :full,
-        λ_init::Real = 0.0609,
-        λ_lower::Real = 0.001,
-        λ_upper::Real = 1.0,
-        T_init = 0.95,
-        Q_init = 0.01,
-        H_init = 0.01,
+        λ = FreeParam(),
+        T = FreeParam(),
+        H = FreeParam(),
+        Q = FreeParam(),
         diffuse::Bool = true
 )
     p = length(maturities)
@@ -911,40 +749,24 @@ function dns_model(
     param_set = Set{Symbol}()
     matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
 
-    # ==========================================
-    # Z matrix: DNS loadings via MatrixExpr
-    # ==========================================
-    Z_expr = build_dns_loadings(
-        maturities;
-        λ_init = λ_init,
-        λ_lower = λ_lower,
-        λ_upper = λ_upper
-    )
-    matrix_exprs[:Z] = Z_expr
-
-    # Add λ parameter from MatrixExpr
-    for z_param in Z_expr.params
-        push!(params, z_param)
-        push!(param_set, z_param.name)
+    # Z: Nelson-Siegel loadings, computed from λ when it is estimated
+    Z = SSMMatrixSpec((p, n_states))
+    λ_elem = _template_param!(params, param_set, λ, :λ, 0.001, 1.0, 0.0609)
+    if λ_elem isa FixedValue
+        for (i, τ) in enumerate(maturities)
+            Z.elements[(i, 1)] = FixedValue(1.0)
+            Z.elements[(i, 2)] = FixedValue(dns_loading1(λ_elem.value, τ))
+            Z.elements[(i, 3)] = FixedValue(dns_loading2(λ_elem.value, τ))
+        end
+    else
+        λp = only(params)
+        matrix_exprs[:Z] = build_dns_loadings(maturities; λ_init = λp.init,
+            λ_lower = λp.lower, λ_upper = λp.upper)
     end
 
-    # Placeholder Z spec (actual matrix built from MatrixExpr)
-    Z = SSMMatrixSpec((p, n_states))
-
-    # ==========================================
-    # T matrix: Factor dynamics
-    # ==========================================
-    T = _build_dns_T_spec(T_structure, T_init, params, param_set)
-
-    # ==========================================
-    # H matrix: Observation covariance
-    # ==========================================
-    H = _build_dns_H_spec(H_structure, p, H_init, params, param_set, matrix_exprs)
-
-    # ==========================================
-    # Q matrix: State covariance
-    # ==========================================
-    Q = _build_dns_Q_spec(Q_structure, Q_init, params, param_set, matrix_exprs)
+    Tmat = _build_dns_T_spec(T_structure, T, params, param_set)
+    Hmat = _build_dns_H_spec(H_structure, p, H, params, param_set)
+    Qmat = _build_dns_Q_spec(Q_structure, Q, params, param_set, matrix_exprs)
 
     # ==========================================
     # R matrix: Identity selection
@@ -964,157 +786,71 @@ function dns_model(
         P1.elements[(i, i)] = FixedValue(P1_val)
     end
 
-    SSMSpec(:DNS, n_states, p, n_shocks, params, Z, H, T, R, Q, a1, P1, matrix_exprs)
+    SSMSpec(:DNS, n_states, p, n_shocks, params, Z, Hmat, Tmat, R, Qmat, a1, P1,
+        matrix_exprs)
 end
 
-"""
-Build T matrix specification for DNS model based on structure.
-"""
-function _build_dns_T_spec(structure::Symbol, T_init, params, param_set)
+# T, H and Q of `dns_model` for each structure; `x` is the user's keyword value.
+function _build_dns_T_spec(structure::Symbol, x, params, param_set)
     T = SSMMatrixSpec((3, 3))
-
     if structure == :full
-        # Full 3×3 VAR matrix
-        for i in 1:3
-            for j in 1:3
-                pname = Symbol("T_$(i)_$(j)")
-                # Diagonal elements get T_init, off-diagonal get small values
-                if i == j
-                    init_val = T_init isa Real ? T_init : T_init[i]
-                else
-                    init_val = 0.0
-                end
-                push!(
-                    params,
-                    SSMParameter(pname; init = init_val, lower = -0.9999, upper = 0.9999)
-                )
-                push!(param_set, pname)
-                T.elements[(i, j)] = ParameterRef(pname)
-            end
-        end
+        cells = [(i, j) for i in 1:3 for j in 1:3]
+        names = [Symbol("T_$(i)_$(j)") for (i, j) in cells]
+        inits = [i == j ? 0.95 : 0.0 for (i, j) in cells]
     elseif structure == :diagonal
-        # Diagonal AR(1) for each factor
-        factor_names = [:T_L, :T_S, :T_C]
-        for (i, fname) in enumerate(factor_names)
-            init_val = T_init isa Real ? T_init : T_init[i]
-            push!(
-                params,
-                SSMParameter(fname; init = init_val, lower = -0.9999, upper = 0.9999)
-            )
-            push!(param_set, fname)
-            T.elements[(i, i)] = ParameterRef(fname)
-        end
+        cells = [(i, i) for i in 1:3]
+        names = [:T_L, :T_S, :T_C]
+        inits = fill(0.95, 3)
     elseif structure == :ar1
-        # Single AR coefficient for all factors
-        init_val = T_init isa Real ? T_init : T_init[1]
-        push!(params, SSMParameter(:φ; init = init_val, lower = -0.9999, upper = 0.9999))
-        push!(param_set, :φ)
-        for i in 1:3
-            T.elements[(i, i)] = ParameterRef(:φ)
-        end
+        cells = [(1, 1)]
+        names = [:φ]
+        inits = [0.95]
     else
-        throw(
-            ArgumentError("T_structure must be :full, :diagonal, or :ar1, got :$structure"),
-        )
+        throw(ArgumentError("T_structure must be :full, :diagonal, or :ar1, got :$structure"))
     end
-
-    T
+    elems = _template_params!(params, param_set, x, names, -0.9999, 0.9999, inits; kw = :T)
+    for (cell, elem) in zip(cells, elems)
+        T.elements[cell] = elem
+    end
+    if structure == :ar1
+        T.elements[(2, 2)] = T.elements[(3, 3)] = elems[1]
+    end
+    return T
 end
 
-"""
-Build H matrix specification for DNS model based on structure.
-"""
-function _build_dns_H_spec(
-        structure::Symbol,
-        p::Int,
-        H_init,
-        params,
-        param_set,
-        matrix_exprs
-)
+function _build_dns_H_spec(structure::Symbol, p::Int, x, params, param_set)
     H = SSMMatrixSpec((p, p))
-
     if structure == :diagonal
-        # Diagonal observation variances
-        for i in 1:p
-            pname = Symbol("var_obs_$i")
-            init_val = H_init isa Real ? H_init : H_init[i]
-            push!(params, SSMParameter(pname; init = init_val, lower = 0.0, upper = Inf))
-            push!(param_set, pname)
-            H.elements[(i, i)] = ParameterRef(pname)
-        end
+        elems = _template_params!(params, param_set, x,
+            [Symbol("var_obs_$i") for i in 1:p], 0.0, Inf, fill(0.01, p); kw = :H)
     elseif structure == :scalar
-        # Single variance for all observations
-        push!(
-            params,
-            SSMParameter(
-                :var_obs;
-                init = H_init isa Real ? H_init : H_init[1],
-                lower = 0.0,
-                upper = Inf
-            )
-        )
-        push!(param_set, :var_obs)
-        for i in 1:p
-            H.elements[(i, i)] = ParameterRef(:var_obs)
-        end
+        elems = fill(
+            _template_param!(params, param_set, x, :var_obs, 0.0, Inf, 0.01;
+                kw = :H), p)
     else
         throw(ArgumentError("H_structure must be :diagonal or :scalar, got :$structure"))
     end
-
-    H
+    for i in 1:p
+        H.elements[(i, i)] = elems[i]
+    end
+    return H
 end
 
-"""
-Build Q matrix specification for DNS model based on structure.
-"""
-function _build_dns_Q_spec(structure::Symbol, Q_init, params, param_set, matrix_exprs)
+function _build_dns_Q_spec(structure::Symbol, x, params, param_set, matrix_exprs)
     Q = SSMMatrixSpec((3, 3))
-
     if structure == :full
-        # Full covariance via CovMatrixExpr (D*Corr*D parameterization)
-        prefix = :Q
-        n = 3
-
-        # Standard deviation parameters; the variances are kept as var_init
-        σ_param_names = Symbol[]
-        var_init = Float64[]
-        factor_labels = [:L, :S, :C]
-        for (i, fl) in enumerate(factor_labels)
-            pname = Symbol("Q_sd_$fl")
-            var_val = Q_init isa Real ? Float64(Q_init) : Float64(Q_init[i])
-            init_val = sqrt(var_val)
-            push!(params, SSMParameter(pname; init = init_val, lower = 0.0, upper = Inf))
-            push!(param_set, pname)
-            push!(σ_param_names, pname)
-            push!(var_init, var_val)  # Store original variance
-        end
-
-        # Create correlation parameters (unconstrained for Cholesky)
-        n_corr = n * (n - 1) ÷ 2  # 3 correlations
-        corr_param_names = Symbol[]
-        for i in 1:n_corr
-            pname = Symbol("Q_corr_$i")
-            push!(params, SSMParameter(pname; init = 0.0, lower = -Inf, upper = Inf))
-            push!(param_set, pname)
-            push!(corr_param_names, pname)
-        end
-
-        # Store CovMatrixExpr with original variances
-        matrix_exprs[:Q] = CovMatrixExpr(n, σ_param_names, corr_param_names, var_init)
-
+        # D * Corr * D, parameterized by standard deviations
+        sd_inits = _cov_sd_inits(x, 3, 0.01; kw = :Q)
+        sd_names, corr_names = _cov_params!(params, param_set, :Q, (:L, :S, :C), sd_inits)
+        matrix_exprs[:Q] = CovMatrixExpr(3, sd_names, corr_names, sd_inits .^ 2)
     elseif structure == :diagonal
-        # Diagonal variances
-        factor_names = [:var_L, :var_S, :var_C]
-        for (i, fname) in enumerate(factor_names)
-            init_val = Q_init isa Real ? Q_init : Q_init[i]
-            push!(params, SSMParameter(fname; init = init_val, lower = 0.0, upper = Inf))
-            push!(param_set, fname)
-            Q.elements[(i, i)] = ParameterRef(fname)
+        elems = _template_params!(params, param_set, x, [:var_L, :var_S, :var_C],
+            0.0, Inf, fill(0.01, 3); kw = :Q)
+        for i in 1:3
+            Q.elements[(i, i)] = elems[i]
         end
     else
         throw(ArgumentError("Q_structure must be :full or :diagonal, got :$structure"))
     end
-
-    Q
+    return Q
 end

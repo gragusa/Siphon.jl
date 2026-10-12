@@ -92,6 +92,63 @@ end
     @test :θ1 in param_names(spec)
 end
 
+@testset "template keywords: a number fixes, a FreeParam estimates" begin
+    bounds(spec, name) = (
+        p = spec.params[Siphon.param_index(spec, name)]; (p.lower, p.upper, p.init))
+
+    # Unset FreeParam fields take the template's defaults
+    @test bounds(local_level(var_obs = FreeParam(init = 225.0)), :var_obs) ==
+          (0.0, Inf, 225.0)
+    @test bounds(ar1(ρ = FreeParam(upper = 0.9)), :ρ) == (-0.9999, 0.9, 0.8)
+    # A template default outside the user's bounds falls back to their midpoint
+    @test bounds(ar1(ρ = FreeParam(upper = 0.5)), :ρ)[3] ≈ (-0.9999 + 0.5) / 2
+    @test bounds(local_level(var_obs = FreeParam(:var_obs)), :var_obs) == (0.0, Inf, 1.0)
+
+    # A number fixes the parameter
+    spec = local_linear_trend(var_slope = 0.0)
+    @test param_names(spec) == [:var_obs, :var_level]
+    @test Siphon.build_kfparms(spec, (var_obs = 1.0, var_level = 2.0)).Q ==
+          [2.0 0.0; 0.0 0.0]
+
+    # Groups take one value for all members or a vector
+    spec = arma(2, 1; ar = [FreeParam(init = 0.4), 0.0], ma = FreeParam(init = 0.2))
+    @test param_names(spec) == [:φ1, :θ1, :var]
+    @test initial_values(spec)[1:2] == [0.4, 0.2]
+    @test Siphon.build_kfparms(spec, (φ1 = 0.4, θ1 = 0.2, var = 1.0)).T ==
+          [0.4 1.0; 0.0 0.0]
+    dfm = dynamic_factor(3, 1; ar = FreeParam(init = 0.3), var_factor = 2.0)
+    @test bounds(dfm, :φ_1_1) == (-0.9999, 0.9999, 0.3)
+    @test :var_factor_1 ∉ param_names(dfm)
+    @test param_names(dynamic_factor(3, 1; correlated_errors = true,
+        var_obs = FreeParam(init = 4.0)))[3:5] == [:H_sd_1, :H_sd_2, :H_sd_3]
+    @test bounds(
+        dynamic_factor(3, 1; correlated_errors = true,
+            var_obs = FreeParam(init = 4.0)), :H_sd_1)[3] == 2.0
+
+    # A fixed DNS decay gives a fixed loading matrix
+    mats = [3, 12, 60]
+    fixed = dns_model(mats; λ = 0.0609, Q_structure = :diagonal)
+    free = dns_model(mats; Q_structure = :diagonal)
+    @test :λ ∉ param_names(fixed) && !haskey(fixed.matrix_exprs, :Z)
+    θ = NamedTuple{Tuple(param_names(fixed))}(Tuple(initial_values(fixed)))
+    @test Siphon.build_kfparms(fixed, θ).Z ≈
+          Siphon.build_kfparms(free, merge(θ, (λ = 0.0609,))).Z
+    @test param_names(dns_model(mats; T_structure = :full, T = fill(FreeParam(), 9)))[2:10] ==
+          [Symbol("T_$(i)_$(j)") for i in 1:3 for j in 1:3]
+
+    # Old forms and misuse fail with a message that says what to pass
+    @test_throws "must be a number (to fix the parameter) or a FreeParam" local_level(var_obs = :free)
+    @test_throws "or a FreeParam" local_level(var_obs = (init = 1.0,))
+    @test_throws "pass a FreeParam without a name" local_level(var_obs = FreeParam(:x))
+    @test_throws "covers 2 parameters" arma(2, 0; ar = [0.1])
+    @test_throws "cannot carry a name" dynamic_factor(3, 1; factor_lags = 2, ar = FreeParam(:φ))
+    @test_throws "sets only starting variances" dns_model(mats; Q = FreeParam(lower = 0.0))
+    @test_throws "sets only starting variances" dynamic_factor(
+        3, 1; correlated_errors = true,
+        var_obs = 1.0)
+    @test_throws MethodError arma(1, 0; ar_init = [0.5])
+end
+
 # ============================================
 # custom_ssm Tests
 # ============================================
@@ -1048,15 +1105,15 @@ end
 
     # Only template defaults are flagged; inits the user gives are not
     @test all(p -> p.default_init, local_level().params)
-    @test [p.default_init for p in local_level(var_obs = (init = 5.0,)).params] ==
+    @test [p.default_init for p in local_level(var_obs = FreeParam(init = 5.0)).params] ==
           [false, true]
-    @test local_level(var_obs = (lower = 1.0,)).params[1].default_init
+    @test local_level(var_obs = FreeParam(lower = 1.0)).params[1].default_init
     @test last(arma(1, 0).params).default_init
-    @test !last(arma(1, 0; var_init = 3.0).params).default_init
+    @test !last(arma(1, 0; var = FreeParam(init = 3.0)).params).default_init
     @test !SSMParameter(:x; init = 1.0, lower = 0.0).default_init
 
     # A user-given init is used as given; a defaulted one is rescaled
-    init = Siphon._initial_constrained(local_level(var_obs = (init = 5.0,)), nothing, y)
+    init = Siphon._initial_constrained(local_level(var_obs = FreeParam(init = 5.0)), nothing, y)
     @test init[1] == 5.0
     @test init[2] ≈ var(diff(vec(y)))
     # Defaults keep the template's ratios between variances

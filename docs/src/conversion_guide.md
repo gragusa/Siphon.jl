@@ -452,3 +452,38 @@ parameters of a full covariance are named `<prefix>_sd_<i>` and `<prefix>_corr_<
 
 `SSMSpec` and `EKFSpec` now share the supertype `AbstractSSMSpec`. In
 `custom_ekf`, the measurement's output length must match the size of `H`.
+
+## Template keywords
+
+Every parameter keyword of a template takes a number, which fixes the parameter,
+or a `FreeParam`, which estimates it. Fields left unset in the `FreeParam` take
+the template's defaults, so `FreeParam(init = v)` changes only the starting
+value. A keyword that covers several parameters takes one value for all of them,
+or a vector with one value per parameter. All `*_init`, `λ_lower` and `λ_upper`
+keywords are gone.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `local_level(var_obs = :free)` | `local_level()` or `local_level(var_obs = FreeParam())` |
+| `local_level(var_obs = (init = 225.0,))` | `local_level(var_obs = FreeParam(init = 225.0))` |
+| `local_level(var_obs = (init = 225.0, lower = 1.0))` | `local_level(var_obs = FreeParam(lower = 1.0, init = 225.0))` |
+| `local_level(var_obs = 225.0)` (fixed) | unchanged |
+| `arma(p, q; ar_init = v, ma_init = w, var_init = s)` | `arma(p, q; ar = [FreeParam(init = v[1]), …], ma = [FreeParam(init = w[1]), …], var = FreeParam(init = s))` |
+| *(not possible)* | `arma(2, 0; ar = [FreeParam(), 0.0])` fixes φ2 at 0 |
+| `dynamic_factor(…; loadings_init = a, ar_init = b)` | `dynamic_factor(…; loadings = FreeParam(init = a), ar = FreeParam(init = b))` |
+| `dynamic_factor(…; var_obs_init = v, var_factor_init = w)` | `dynamic_factor(…; var_obs = FreeParam(init = v), var_factor = FreeParam(init = w))` |
+| `dns_model(…; λ_init = a, λ_lower = l, λ_upper = u)` | `dns_model(…; λ = FreeParam(lower = l, upper = u, init = a))` |
+| *(not possible)* | `dns_model(…; λ = 0.0609)` fixes λ, and `Z` is then fixed |
+| `dns_model(…; T_init = a, H_init = b, Q_init = c)` | `dns_model(…; T = FreeParam(init = a), H = FreeParam(init = b), Q = FreeParam(init = c))` |
+
+Two starting values differ from Siphon 0.1:
+
+- In `dynamic_factor`, a `FreeParam(init = a)` for `loadings` or `ar` starts
+  every member at `a`. The old `loadings_init` and `ar_init` were divided by the
+  lag (plus one, for loadings). Leave `init` unset to keep the per-lag defaults.
+- In `dns_model`, `T = FreeParam(init = a)` with `T_structure = :full` starts all
+  nine entries at `a`; the old `T_init` set only the diagonal. Pass a vector of
+  nine values to set the diagonal and off-diagonal entries separately.
+
+`dns_model` variances left unset are now rescaled to the data by maximum
+likelihood, as in the other templates.

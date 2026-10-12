@@ -52,7 +52,7 @@ where:
 using Siphon
 
 # Create a local level model specification
-spec = local_level(var_obs_init=225.0, var_level_init=100.0)
+spec = local_level(var_obs = FreeParam(init = 225.0), var_level = FreeParam(init = 100.0))
 
 # Your data (p × T matrix, where p = number of series, T = time periods)
 y = randn(1, 100)

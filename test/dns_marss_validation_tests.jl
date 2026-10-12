@@ -443,7 +443,7 @@ end
         T_structure = :diagonal,
         H_structure = :diagonal,
         Q_structure = :diagonal,
-        λ_init = 0.06,
+        λ = FreeParam(init = 0.06),
         diffuse = false
     )
 
@@ -477,7 +477,7 @@ end
     for (Ts, Hs, Qs) in ((:diagonal, :diagonal, :full), (:ar1, :scalar, :full),
         (:full, :diagonal, :diagonal))
         spec = dns_model(maturities; T_structure = Ts, H_structure = Hs,
-            Q_structure = Qs, λ_init = 0.06, diffuse = false)
+            Q_structure = Qs, λ = FreeParam(init = 0.06), diffuse = false)
         res = profile_em_ssm(spec, y; λ_grid = 0.05:0.01:0.07, maxiter = 300,
             warn = false)
         @test keys(res.θ) == Tuple(param_names(spec))
@@ -487,7 +487,8 @@ end
         # The initial state comes from the spec unchanged.
         @test res.em_result.P1 == 1e4 * Matrix(1.0I, 3, 3)
     end
-    spec = dns_model(maturities; H_structure = :scalar, λ_init = 0.06, diffuse = false)
+    spec = dns_model(maturities; H_structure = :scalar, λ = FreeParam(init = 0.06),
+        diffuse = false)
     res = profile_em_ssm(spec, y; λ_grid = [0.06], maxiter = 50, warn = false)
     H = res.em_result.H
     @test H == res.θ.var_obs * Matrix(1.0I, 5, 5)

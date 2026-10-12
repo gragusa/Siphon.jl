@@ -773,11 +773,18 @@ Other author answers, verbatim:
 ### CHUNK-040: migrate-template-keywords
 - **Kind**: `implement`
 - **Description**: Move every template (`local_level`, `local_linear_trend`, `ar1`, `arma`, `dynamic_factor`, `dns_model`) to the CHUNK-022 keyword convention: `Real` = fixed, `FreeParam` (optional name/bounds/init filled from template defaults) = free, groups take one value or a vector. Remove `ParamSpec`/`parse_param_spec` and all `*_init` keywords; keep the `default_init` flag for unset inits. Update tests, docs, examples, and the conversion guide.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-022
 - **Cluster**: dsl
 - **Notes**:
+  - **Resolver:** `_template_param!(params, param_set, x, name, lower, upper, init; kw)` returns a `FixedValue` for a Real or adds an `SSMParameter` and returns its `ParameterRef`. Other types throw an `ArgumentError` that names the new form. A FreeParam name may be omitted or equal the template's name; any other name throws. An unset init uses the template default when it is strictly inside the resolved bounds, otherwise `_default_init`; either way it is flagged `default_init`. `_template_params!` handles groups (a scalar is broadcast, and a broadcast named FreeParam throws; a vector length mismatch is a `DimensionMismatch`). `_cov_sd_inits`/`_cov_params!` handle full covariances: the keyword can only give starting variances, which are sqrt'ed into `<prefix>_sd_*`.
+  - **Keywords:** `local_level`/`local_linear_trend`/`ar1`: same names, default `FreeParam()`. `arma(p, q; ar, ma, var)`. `dynamic_factor(…; loadings, ar, var_obs, var_factor)`. `dns_model(…; λ, T, H, Q)`. `ParamSpec`/`parse_param_spec` are removed. A shared `_template_spec` builds P1/P1_inf from `diffuse`.
+  - **New capabilities:** fixing individual ARMA coefficients; a fixed DNS `λ` (Z becomes a fixed `SSMMatrixSpec`; `profile_em_ssm` then rejects the spec because `:λ` is not a parameter).
+  - **Behavior changes (in the conversion guide):** a given `init` for a DFM group is used for every member (the old code divided by the lag); `dns_model` `T` with `:full` broadcasts the init to off-diagonal entries; DNS variances left unset are now flagged `default_init` and rescaled by MLE (before, they were not flagged).
+  - **Unchanged:** `build_dns_loadings`/`build_svensson_loadings` keep their `λ_init`/`λ_lower`/`λ_upper` keywords (they are `MatrixExpr` builders, not templates).
+  - **Call sites:** tests (arma, dsl, dns_marss_validation), docs (index, getting_started, arma_models, dynamic_factor, estimation_methods, conversion_guide "Template keywords"), examples/dns_estimation_dsl.jl, benchmark/benchmarks.jl, `inplace.jl` docstrings, `optimize_ssm` docstring, local CLAUDE.md.
+  - **Tests:** dsl_tests "template keywords: a number fixes, a FreeParam estimates" (24).
 
 ### CHUNK-023: rework-priors
 - **Kind**: `implement`
@@ -963,11 +970,11 @@ Other author answers, verbatim:
 - 2026-10-12 CHUNK-020 (integrate-dfm) → next: CHUNK-021
 - 2026-10-12 CHUNK-021 (restructure-dsl-layering-and-exports) → next: CHUNK-022
 - 2026-10-13 CHUNK-022 (unify-dsl-conventions) → next: CHUNK-040
+- 2026-10-13 CHUNK-040 (migrate-template-keywords) → next: CHUNK-023
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
-- `docs/src/index.md:55` calls `local_level(var_obs_init=225.0, var_level_init=100.0)`; those keywords don't exist (the template takes `var_obs=(init=…,)`). Fix in CHUNK-032.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
 - `InverseGammaPrior` reads θ as standard deviations and evaluates the inverse-gamma density at σ² with no log-Jacobian term, while templates now use variances (`var_*`). CHUNK-023 should define it on the parameter as given (a variance) or drop it in favour of `Distributions.InverseGamma`.
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
@@ -983,3 +990,5 @@ Other author answers, verbatim:
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
 - Implementing the `identification =` option of `DynamicFactorModel` (named-factor / lower-triangular Λ₀ restrictions in the DFM M-step) was dropped from the docs in CHUNK-020; it can become a separate feature chunk. The deleted tests are at `git show 746f82d:test/em_tests.jl`, lines 905–1072.
 - `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
+- `FreeParam` has no custom `show`, so error messages print `FreeParam(nothing, 0.0, nothing, nothing)`. CHUNK-025 should print it as constructor syntax that shows only the set fields (`FreeParam(lower = 0.0)`).
+- `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`/`λ_lower`/`λ_upper` keywords, unlike the templates. Consider `λ = FreeParam(…)` there for consistency (CHUNK-026 or CHUNK-030).

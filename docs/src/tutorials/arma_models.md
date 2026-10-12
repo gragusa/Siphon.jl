@@ -151,7 +151,10 @@ Siphon.jl provides the `arma` template that handles all this automatically:
 using Siphon
 
 # Create ARMA(2,2) specification
-spec_template = arma(2, 2; ar_init=[0.5, 0.2], ma_init=[0.3, 0.1], var_init=1.0)
+spec_template = arma(2, 2;
+    ar = [FreeParam(init = 0.5), FreeParam(init = 0.2)],
+    ma = [FreeParam(init = 0.3), FreeParam(init = 0.1)],
+    var = FreeParam(init = 1.0))
 
 println("Model: ", spec_template.name)
 println("State dimension: ", spec_template.n_states)
@@ -199,7 +202,7 @@ y_sim = simulate_arma22(n, φ1_true, φ2_true, θ1_true, θ2_true, var_true)
 y = reshape(y_sim, 1, n)
 
 # Create and fit model with MLE
-spec = arma(2, 2; ar_init=[0.5, 0.0], ma_init=[0.0, 0.0], var_init=1.0)
+spec = arma(2, 2; ar = [FreeParam(init = 0.5), FreeParam(init = 0.0)], var = FreeParam(init = 1.0))
 model = StateSpaceModel(spec, n)
 fit!(MLE(), model, y)
 

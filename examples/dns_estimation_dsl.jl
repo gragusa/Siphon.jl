@@ -45,10 +45,10 @@ spec_diag = dns_model(
     T_structure = :diagonal,  # 3 params: T_L, T_S, T_C
     H_structure = :diagonal,  # p params: var_obs_1, ..., var_obs_p
     Q_structure = :diagonal,  # 3 params: var_L, var_S, var_C
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("\nDiagonal model parameters: ", param_names(spec_diag))
@@ -60,10 +60,10 @@ spec_full = dns_model(
     T_structure = :full,      # 9 params: T_1_1, T_1_2, ..., T_3_3
     H_structure = :diagonal,  # p params
     Q_structure = :full,      # 6 params (via Cholesky): Q_sd_L, Q_sd_S, Q_sd_C, Q_corr_1, Q_corr_2, Q_corr_3
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("\nFull model parameters: ", param_names(spec_full))
@@ -219,10 +219,10 @@ spec_diag_T_full = dns_model(
     T_structure = :full,
     H_structure = :diagonal,
     Q_structure = :diagonal,  # Diagonal Q
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 result_diag = profile_em_ssm(
@@ -295,10 +295,10 @@ if isfile(data_path)
         T_structure = :full,
         H_structure = :diagonal,
         Q_structure = :full,
-        λ_init = 0.06,
-        T_init = 0.95,
-        Q_init = 0.1,
-        H_init = 0.01
+        λ = FreeParam(init = 0.06),
+        T = FreeParam(init = 0.95),
+        Q = FreeParam(init = 0.1),
+        H = FreeParam(init = 0.01)
     )
 
     println("\n=== Profile EM on Real Data ===")

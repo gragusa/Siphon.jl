@@ -255,10 +255,10 @@ end
 
 # Specify and estimate model
 spec = dynamic_factor(n_obs, 2;
-    loadings_init = 0.5,
-    ar_init = 0.7,
-    σ_obs_init = 0.5,
-    σ_factor_init = 0.5
+    loadings = FreeParam(init = 0.5),
+    ar = FreeParam(init = 0.7),
+    var_obs = FreeParam(init = 0.25),
+    var_factor = FreeParam(init = 0.25)
 )
 
 result = optimize_ssm(spec, y)
@@ -328,13 +328,18 @@ dynamic_factor(n_obs, n_factors;
     factor_lags = 1,           # AR lags in factor dynamics
     loading_lags = 0,          # Lagged factor loadings
     correlated_errors = false, # Full H matrix if true
-    loadings_init = 0.5,       # Initial loading values
-    ar_init = 0.5,             # Initial AR coefficient
-    var_obs_init = nothing,    # Initial obs error variances (nothing: data-scaled)
-    var_factor_init = nothing, # Initial factor innovation variances
+    loadings = FreeParam(),    # Free loadings λ0_i_j, λl_i_j
+    ar = FreeParam(),          # AR coefficients φ_i_l
+    var_obs = FreeParam(),     # Observation error variances
+    var_factor = FreeParam(),  # Factor innovation variances
     diffuse = true             # Diffuse initialization
 )
 ```
+
+Each parameter keyword takes a number (fixes every parameter it covers), a
+`FreeParam` (estimates them; unset fields take the template's defaults), or a
+vector with one value per parameter. Variance starting values left unset are
+scaled to the data by maximum likelihood.
 
 ## Next Steps
 
