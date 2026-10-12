@@ -295,3 +295,42 @@ works on `KalmanFilterResult` and `DiffuseFilterResult` too.
 `forecast_paths` takes an `rng` keyword, keeps the element type of the system instead of
 returning `Float64`, and accepts singular covariances (a state shock of reduced rank, or
 `H = 0`), which made it throw before.
+
+## StaticArrays
+
+Every function that builds a linear system from a spec takes one keyword,
+`static = :auto | :on | :off`:
+
+- `build_linear_state_space`, `objective_function` and `ssm_loglik`;
+- `optimize_ssm`, `optimize_ssm_with_stderr` and `SSMLogDensity`;
+- the spec methods of `predict`, `forecast` and `forecast_paths`;
+- `fit!(MLE(), model, y)`, `kalman_loglik(model, y)` and `kalman_filter!(model, y)`.
+
+`:auto` uses StaticArrays when the numbers of states, observed series and shocks are all
+at most `STATIC_THRESHOLD` (13). The conversion covers all system matrices and the
+initial state, or none of them. The choice affects speed. Results agree up to rounding
+error, which an ill-conditioned innovation covariance (for example under a large
+approximate diffuse `P1`) can amplify.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `use_static = true` (DSL functions, `SSMLogDensity`) | `static = :auto` (the default) |
+| `use_static = false` | `static = :off` |
+| `fit!(MLE(), …; static, static_threshold = k)` | `fit!(MLE(), …; static)`; the threshold is fixed at `STATIC_THRESHOLD` |
+| `EKFLogDensity(spec, y; use_static)`, `optimize_ssm(::EKFSpec, y; use_static)`, `build_nonlinear_state_space(…; use_static)` | no keyword: the extended Kalman filter has no StaticArrays specialization |
+| `KFParms_static(Z, H, T, R, Q)` | `build_linear_state_space(spec, θ, y).p`, or `KFParms(SMatrix{m, n}(Z), …)` |
+| `to_static_if_small(x)` | `SMatrix{m, n}(x)` / `SVector{n}(x)` from StaticArrays |
+| `select_backend(n_states, n_obs, backend)` | removed |
+| `backend(model)`, `model.backend` | removed; `isfitted(model)` reports whether the model was fitted |
+
+Changed behavior:
+
+- `ssm_loglik`, `objective_function`, `kalman_loglik(model, y)` and
+  `kalman_filter!(model, y)` now default to `:auto`. Previously `ssm_loglik` and
+  `objective_function` always used plain arrays.
+- The `:auto` rule counts shocks too. `kalman_loglik(model, y)` and
+  `kalman_filter!(model, y)` previously ignored them.
+- A model with one dimension above the threshold no longer gets a mix of static and plain
+  arrays.
+- `static = :on` with exact diffuse initialization (`diffuse = :exact`) throws an
+  `ArgumentError`. Previously it fell back to plain arrays without saying so.

@@ -27,7 +27,8 @@ using StaticArrays
     @test kalman_loglik(p, ym, a1, P1) == ll
     @test isequal(filtered_states(kalman_filter(p, ym, a1, P1)),
         filtered_states(kalman_filter(p, y, a1, P1)))
-    ps = KFParms_static(Z, H, Tm, R, Q)
+    ps = KFParms(SMatrix{2, 2}(Z), SMatrix{2, 2}(H), SMatrix{2, 2}(Tm), SMatrix{2, 2}(R),
+        SMatrix{2, 2}(Q))
     @test kalman_loglik(ps, ym, SVector{2}(a1), SMatrix{2, 2}(P1)) ≈ ll
     @test kalman_loglik(p, ym, a1, zeros(m, m), Matrix(1.0I, m, m)) ==
           kalman_loglik(p, y, a1, zeros(m, m), Matrix(1.0I, m, m))

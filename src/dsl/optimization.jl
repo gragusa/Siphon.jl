@@ -30,7 +30,7 @@ for gradient computation.
   their default starting values). Default: the spec initial values, with template
   default variances rescaled to the data (see below)
 - `ad_backend`: AD backend for gradients (default: `Optimization.AutoForwardDiff()`)
-- `use_static::Bool=true`: Use StaticArrays for small matrices (dimensions ≤ 13)
+- `static::Symbol=:auto`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 - `prob_kwargs`: NamedTuple of kwargs passed to `OptimizationProblem`
 - `warn::Bool=true`: Warn when the optimiser does not report convergence
 - `kwargs...`: All other kwargs passed to `Optimization.solve`
@@ -96,7 +96,7 @@ result5 = optimize_ssm(spec, y;
 )
 
 # Disable StaticArrays (for debugging or if causing issues)
-result6 = optimize_ssm(spec, y; use_static=false)
+result6 = optimize_ssm(spec, y; static=:off)
 ```
 """
 function optimize_ssm(
@@ -105,26 +105,25 @@ function optimize_ssm(
         method = Optim.LBFGS(),
         θ0::Union{Nothing, AbstractVector, NamedTuple} = nothing,
         ad_backend = Optimization.AutoForwardDiff(),
-        use_static::Bool = true,
+        static::Symbol = :auto,
         prob_kwargs::NamedTuple = NamedTuple(),
         warn::Bool = true,
         kwargs...
 )
     y = _nan_obs(y)
-    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
+    return _mle(spec, y, method, θ0, ad_backend, static, prob_kwargs; warn, kwargs...)
 end
 
 # Maximum likelihood shared by the `optimize_ssm` methods for `SSMSpec` and `EKFSpec`.
 # The search runs in unconstrained coordinates, but the objective is the log-likelihood alone:
 # the log-Jacobian of the transform belongs to a density over parameters, not to
 # the likelihood, and including it would move the optimum.
-function _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn::Bool = true,
+function _mle(spec, y, method, θ0, ad_backend, static, prob_kwargs; warn::Bool = true,
         kwargs...)
     t = build_transformation(spec)
     θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0, y))
 
-    negloglik(θ_u, _) = -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y,
-        use_static)
+    negloglik(θ_u, _) = -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, static)
     optf = OptimizationFunction(negloglik, ad_backend)
     prob = OptimizationProblem(optf, θ0_u; prob_kwargs...)
     result = Optimization.solve(prob, method; kwargs...)
@@ -196,7 +195,7 @@ function _diff_variance(x)
 end
 
 """
-    optimize_ssm_with_stderr(spec, y; use_static=true, kwargs...)
+    optimize_ssm_with_stderr(spec, y; static=:auto, kwargs...)
 
 Optimize SSM and compute standard errors from the observed information.
 
@@ -212,12 +211,12 @@ mapped to the constrained parameters with the delta method,
 function optimize_ssm_with_stderr(
         spec::SSMSpec,
         y::AbstractMatrix;
-        use_static::Bool = true,
+        static::Symbol = :auto,
         warn::Bool = true,
         kwargs...
 )
     y = _nan_obs(y)
-    opt_result = optimize_ssm(spec, y; use_static = use_static, warn = false, kwargs...)
+    opt_result = optimize_ssm(spec, y; static, warn = false, kwargs...)
 
     if warn && !opt_result.converged
         @warn "Maximum likelihood optimisation did not converge (return code " *
@@ -230,7 +229,7 @@ function optimize_ssm_with_stderr(
     to_θ(θ_u) = collect(TransformVariables.transform(t, θ_u))
 
     H = ForwardDiff.hessian(
-        θ_u -> -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, use_static),
+        θ_u -> -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, static),
         θ_u_opt)
     J = ForwardDiff.jacobian(to_θ, θ_u_opt)
 

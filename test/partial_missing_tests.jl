@@ -560,14 +560,14 @@ end
     y[:, 30] .= NaN      # fully missing period
 
     θ = (h1 = 1.0, h2 = 1.0, q = 1.0)
-    ss = build_linear_state_space(spec, θ, y; use_static = false)
+    ss = build_linear_state_space(spec, θ, y; static = :off)
     filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
     ref = kalman_smoother(ss.p, y, ss.a1, ss.P1)
 
-    # The default use_static = true no longer rejects the partial periods
+    # The static path (the default for this small model) accepts partial periods
     @test predict(spec, θ, y) ≈ predicted_observations(filt)
     @test forecast(spec, θ, y, 2).yhat ≈ forecast(ss.p, y, ss.a1, ss.P1, 2).yhat
-    @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ filt.loglik
+    @test Siphon.DSL._spec_loglik(spec, θ, y, :on) ≈ filt.loglik
 
     # The model smoother uses the observed-row mask
     model = StateSpaceModel(spec, θ, n)
@@ -577,7 +577,7 @@ end
 
     model = StateSpaceModel(spec, n)
     fit!(MLE(), model, y)
-    ss_fit = build_linear_state_space(spec, parameters(model), y; use_static = false)
+    ss_fit = build_linear_state_space(spec, parameters(model), y; static = :off)
     @test smoothed_states(model) ≈
           smoothed_states(kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1))
 

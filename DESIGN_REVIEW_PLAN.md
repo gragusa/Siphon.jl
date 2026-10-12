@@ -68,6 +68,7 @@ Other author answers, verbatim:
 - **CHUNK-017** (2026-10-12, implementer's call; the author has not confirmed it):
   - `predict` returns the p × n fitted-value matrix rather than a filter result or a flattened NamedTuple. The filter output comes from `kalman_filter`, and `predicted_observations(result)` gives the same matrix.
   - `ForecastResult` keeps the field names `yhat`/`F`/`a`/`P` and adds `origin`.
+- **CHUNK-018** (2026-10-12, implementer's call; the author has not confirmed it): one keyword `static = :auto | :on | :off` with the existing `fit!` vocabulary; `static_threshold` is dropped; `backend(model)` and the `backend` field are removed rather than renamed.
 - **Merge of `main`** (2026-10-12): PRs #8–#10 add to `KalmanWorkspace`:
   - companion-form propagation: `set_companion_structure!`, `companion_block`;
   - a rank-revealing measurement update for singular Fₜ: `set_rank_revealing!`, `rank_revealing`, `innovation_ranks`, `InnovationSupportError`;
@@ -639,11 +640,18 @@ Other author answers, verbatim:
   `backend(model)` reports yet another vocabulary. Gating uses max(n_states, n_obs) in some places and adds n_shocks in others.
 
   Replace all of this with one keyword, one vocabulary and one gating rule. Make the conversion all-or-nothing per `KFParms`. Remove `select_backend`. Static vs dynamic must not change semantics; CHUNK-009 handles partial missingness.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-009, CHUNK-012
 - **Cluster**: api-unification
 - **Notes**:
+  - **Keyword:** `static::Symbol = :auto | :on | :off` on `build_linear_state_space`, `objective_function`, `ssm_loglik`, `optimize_ssm`, `optimize_ssm_with_stderr`, `SSMLogDensity` (field `static`), the spec `predict`/`forecast`/`forecast_paths`, `fit!(MLE())`, and `kalman_loglik`/`kalman_filter!` on `StateSpaceModel`. Everything defaults to `:auto`; `ssm_loglik` and `objective_function` used to force dynamic arrays.
+  - **Gating rule:** `_use_static` (types.jl) checks max(n_states, n_obs, n_shocks) ≤ `STATIC_THRESHOLD`. `:on` above the threshold warns; an unknown symbol throws "static must be :auto, :on or :off"; `:on` with `diffuse = :exact` throws.
+  - **All-or-nothing:** `_static_system(p, a1, P1)` converts all seven arrays together.
+  - **Removed:** `KFParms_static`, `to_static_if_small`, `select_backend`, `static_threshold`, and `backend(model)` together with the `StateSpaceModel.backend` field (implementer's call: static vs dynamic does not change results, so the accessor only reported an implementation detail). `STATIC_THRESHOLD` stays exported; CHUNK-031 can decide whether it becomes public-unexported. The package has no `public` declarations yet.
+  - **EKF:** `use_static` dropped from `EKFLogDensity`, `optimize_ssm(::EKFSpec)` and `build_nonlinear_state_space`, where it was a no-op. `_spec_loglik(::EKFSpec, …, static)` ignores its last argument.
+  - **Tests:** the api_coverage "static keyword" testset covers types, the all-or-nothing rule at p = 14, the `:on` warning, the exact-diffuse error and the invalid symbol. em_tests "static and dynamic paths agree" replaces the `backend` testset. Call sites were migrated in failure, missing_input, partial_missing and dsl tests.
+  - **Docs:** conversion guide section "StaticArrays"; `api/core.md` (both copies); the estimation_methods tutorial section.
 
 ### CHUNK-019: consolidate-em
 - **Kind**: `implement`
@@ -894,6 +902,7 @@ Other author answers, verbatim:
 - 2026-10-08 CHUNK-015 (unify-filter-smoother-interfaces) → next: CHUNK-016
 - 2026-10-08 CHUNK-016 (dispatch-based-variant-selection) → next: CHUNK-017
 - 2026-10-12 CHUNK-017 (unify-forecast-output) → next: CHUNK-018
+- 2026-10-12 CHUNK-018 (unify-static-backend-controls) → next: CHUNK-019
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -910,3 +919,5 @@ Other author answers, verbatim:
 - `EKFLogDensity` and `SSMLogDensity` remain two types; with `EKFSpec` going through `ssm_loglik`/`optimize_ssm`, a single `SSMLogDensity(spec, y)` constructor dispatching on the spec type would finish the job (CHUNK-023).
 - `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
+- Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
+- The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.

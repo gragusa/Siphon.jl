@@ -305,23 +305,28 @@ so the inner Kalman filter loop runs without heap allocations. This delivers
 ~6-10× speedups for one-shot MLE on models like `local_level`, `ar1`, and
 small ARMAs.
 
-The promotion is gated by a per-dimension threshold (`STATIC_THRESHOLD`,
-currently 13). The behaviour is controlled with two kwargs:
+The promotion is controlled by the `static` keyword, which every
+spec-level function accepts (`optimize_ssm`, `ssm_loglik`, `SSMLogDensity`,
+`predict`, `forecast`, …):
 
 ```julia
-fit!(MLE(), model, y; static = :auto, static_threshold = 13)
-# :auto — promote when max(n_states, n_obs, n_shocks) ≤ static_threshold (default).
-# :on   — force the static path (warns if dims exceed the threshold).
+fit!(MLE(), model, y; static = :auto)
+# :auto — promote when n_states, n_obs and n_shocks are all ≤ STATIC_THRESHOLD
+#         (currently 13). This is the default.
+# :on   — force the static path (warns if a dimension exceeds the threshold).
 # :off  — force the regular `Matrix`/`Vector` path.
-backend(model)  # → :mle_static or :mle_dynamic, for diagnostics.
 ```
 
-**EM is *not* affected by this knob.** Benchmarks across `local_level`,
+Either path gives the same estimates up to rounding error. An ill-conditioned
+innovation covariance, as under a large approximate diffuse `P1`, amplifies
+that error, so pass `static = :off` when comparing results at full precision. All system matrices and
+the initial state are promoted together, or none are.
+
+**EM does not take this keyword.** Benchmarks across `local_level`,
 `local_linear_trend`, and small custom models show that the in-place EM
 workspace beats the static path by 1.6-2.6× on every model size, because
 each EM iteration's Kalman filter call would otherwise re-allocate result
-arrays. EM therefore always uses the in-place workspace; `backend(model)`
-returns `:em_inplace` after `fit!(EM(), ...)`.
+arrays. EM therefore always uses the in-place workspace.
 
 ### The AD recompile pitfall
 

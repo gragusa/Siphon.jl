@@ -4,36 +4,37 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-017: unify-forecast-output
-- Every `forecast` method now returns one `ForecastResult` (fields `yhat`, `F`, `a`, `P`, `origin`). This covers `KFParms`, spec, `StateSpaceModel`, DFM and the new `forecast(::AbstractFilterResult, h)`.
-- The `forecast_*` accessors and the new `forecast_periods` and `forecast_interval` work on it, and the plot's time axis is `n+1:n+h`.
-- `predict` returns the fitted-value matrix.
-- `forecast_paths` gained `rng`, `psd_factor` and element-type promotion.
+CHUNK-018: unify-static-backend-controls
+- **One keyword:** every spec-level entry point takes `static = :auto | :on | :off`, with `:auto` as the default.
+- **One gating rule:** `_use_static` in types.jl checks max(n_states, n_obs, n_shocks) ≤ `STATIC_THRESHOLD`.
+- **All-or-nothing conversion:** `_static_system` converts all seven arrays together.
+- **Removed:** `KFParms_static`, `to_static_if_small`, `select_backend`, `static_threshold` and `backend(model)`/`model.backend`.
 
 ## Key decisions / shim choices
-- No shims; there is a new conversion-guide section, "Prediction and forecasting".
-- `predict` → matrix ŷ. This was the implementer's call and is recorded in Decisions as unconfirmed by the author. `predicted_observations` gained linear/diffuse methods.
-- The EKF forecasts through the measurement function and its Jacobian (`_measurement_mean`/`_measurement_jacobian` hooks in `predict.jl`).
-- `DynamicFactorModelForecast`, the DFM-only `forecast_interval` and `factor_forecast_interval` are removed; factors are the first k states.
+- No shims. There is a new "StaticArrays" section in the conversion guide.
+- `backend(model)` was removed outright. This is the implementer's call and is recorded in Decisions as unconfirmed.
+- The EKF lost its no-op `use_static` keyword instead of gaining `static`.
+- `STATIC_THRESHOLD` stays exported; the package has no `public` declarations yet.
+- `static = :on` with `diffuse = :exact` now throws. Before, it silently used plain arrays.
 
 ## State of the codebase
 - Files modified:
-  - src: Siphon.jl, predict.jl, inplace.jl, recipes.jl, api/core.md
-  - test: api_coverage, recipe, dfm, ekf, failure, dsl, missing_input, partial_missing
-  - docs/src: conversion_guide.md, api/core.md, api/ekf.md, tutorials/visualization.md, tutorials/dynamic_factor.md
-- Test suite: pass (`Pkg.test()`), 2 broken pins unchanged, Aqua 10/10.
+  - src: types.jl, Siphon.jl, inplace.jl, predict.jl, dsl/{dsl,codegen,bayesian,optimization,ekf_optim,ekf_codegen}.jl, api/core.md
+  - test: api_coverage, em, failure, missing_input, partial_missing, dsl
+  - docs/src: conversion_guide.md, api/core.md, tutorials/estimation_methods.md
+- Test suite: pass (`Pkg.test()` from the shell; the Julia MCP server failed to connect). 2 broken pins unchanged.
+- Static and dynamic paths differ under ill-conditioned F (Open Question); the new test uses a well-conditioned `P1`.
 - Ambiguity count: 0 (no change).
-- Staged but uncommitted: yes.
+- Staged but uncommitted: changes are unstaged and uncommitted.
 
 ## Cluster status
-- api-unification: 4 of 5 complete (CHUNK-018 remains).
+- api-unification: 5 of 5 complete.
 
 ## Next chunk
-CHUNK-018: unify-static-backend-controls. Replace `KFParms_static`/`to_static_if_small`/`use_static`/`static=`/`select_backend` with one keyword, one vocabulary and one gating rule.
+CHUNK-019: consolidate-em. One `EMResult`, `fit!(EM())` canonical, `profile_em_ssm` rebuilt on it (fixes B9), and dead static-EM/DFM helpers deleted.
 
 ## Watch out for
-- The spec-level `predict`/`forecast`/`forecast_paths` still take `use_static::Bool`; CHUNK-018 must migrate them.
-- `forecast` on a `DiffuseFilterResult` with `d == n` throws, including the edge case where the diffuse period ends exactly in period n (Open Question).
-- `ForecastResult` is now defined in `predict.jl`, which is included before `recipes.jl`; `forecast_interval` calls `confidence_bands` from recipes.jl at runtime.
-- Don't run `Pkg.test()` while editing `src/` or `test/`. Don't `Pkg.develop` into `test/`: it creates a stray `test/Project.toml` and rewrites the tracked `test/Manifest.toml`.
-- The `no-plan-comments.py` hook still errors after every Write/Edit; the edits apply.
+- The dead static EM block in inplace.jl (`_ssm_fit_em_static!` and friends) was migrated to `static = :auto` only so that it compiles; CHUNK-019 deletes it.
+- `ssm_loglik` now defaults to the static path for small models. Static and dynamic log-likelihoods differ at about 1e-13, so compare with `≈`, never `==`.
+- A background check found that Julia 1.10 passes the suite with `julia = "1.10"` (Open Questions). Supporting 1.10 affects how CHUNK-031 declares `public`.
+- Don't run `Pkg.test()` while editing `src/` or `test/`. Don't `Pkg.develop` into `test/`.

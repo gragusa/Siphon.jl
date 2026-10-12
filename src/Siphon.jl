@@ -18,10 +18,9 @@ include("ekf_types.jl")
 include("ekf_ad.jl")
 
 # Core Kalman filter/smoother exports
-export KFParms, KFParms_static
+export KFParms, STATIC_THRESHOLD
 export KalmanFilterResult, SmootherResult, SmootherWorkspace
 export DiffuseFilterResult  # Exact diffuse initialization
-export STATIC_THRESHOLD, to_static_if_small, select_backend
 export kalman_loglik
 export kalman_filter
 export kalman_smoother, kalman_filter_and_smooth
@@ -139,7 +138,7 @@ export MLE, EM  # Estimation method markers
 
 # High-level StateSpaceModel API
 export StateSpaceModel, fit!
-export isfitted, backend
+export isfitted
 
 # Dynamic Factor Model
 export DynamicFactorModel, DynamicFactorModelSpec

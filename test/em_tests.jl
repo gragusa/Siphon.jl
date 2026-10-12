@@ -699,40 +699,29 @@ end
 end
 
 # ============================================
-# backend(model) and static knob
+# static knob
 # ============================================
 
-@testset "backend(model) reports the path used" begin
+@testset "fit!(MLE) static and dynamic paths agree" begin
     Random.seed!(20260425)
     n = 80
     y = reshape(cumsum(randn(n)) .+ randn(n), 1, n)
     spec = local_level()
 
-    # Unfit model
-    m0 = StateSpaceModel(spec, n)
-    @test backend(m0) === :none
-
-    # MLE static path (default :auto on a tiny model)
     m_static = StateSpaceModel(spec, n)
     fit!(MLE(), m_static, y)
-    @test backend(m_static) === :mle_static
-
-    # MLE dynamic path (force off)
     m_dyn = StateSpaceModel(spec, n)
     fit!(MLE(), m_dyn, y; static = :off)
-    @test backend(m_dyn) === :mle_dynamic
-    # Both paths should reach essentially the same log-likelihood.
-    @test loglikelihood(m_dyn) ≈ loglikelihood(m_static) atol = 1e-4
-
-    # MLE :on with a small model is fine.
     m_on = StateSpaceModel(spec, n)
     fit!(MLE(), m_on, y; static = :on)
-    @test backend(m_on) === :mle_static
+    @test loglikelihood(m_dyn) ≈ loglikelihood(m_static) atol = 1e-4
+    @test loglikelihood(m_on) ≈ loglikelihood(m_static)
+    @test filtered_states(m_dyn) ≈ filtered_states(m_static) rtol = 1e-3
 
-    # EM always reports :em_inplace, regardless of model size.
-    m_em = StateSpaceModel(spec, n)
-    fit!(EM(), m_em, y; maxiter = 50)
-    @test backend(m_em) === :em_inplace
+    θ = parameters(m_static)
+    m = StateSpaceModel(spec, θ, n)
+    @test kalman_loglik(m, y) ≈ kalman_loglik(m, y; static = :off)
+    @test kalman_filter!(m, y; static = :off) ≈ kalman_filter!(m, y)
 end
 
 @testset "fit!(MLE) static knob validation" begin
@@ -740,7 +729,8 @@ end
     n = 50
     y = randn(1, n)
     model = StateSpaceModel(spec, n)
-    @test_throws ArgumentError fit!(MLE(), model, y; static = :nonsense)
+    @test_throws "static must be :auto, :on or :off" fit!(
+        MLE(), model, y; static = :nonsense)
 end
 
 # ============================================

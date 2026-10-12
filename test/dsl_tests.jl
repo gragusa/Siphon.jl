@@ -803,7 +803,6 @@ end
     @test model.fitted == true
     @test model.theta_fitted == true
     @test model.converged == true
-    @test model.backend == :external
     @test parameters(model) == θ
 end
 
@@ -1034,7 +1033,7 @@ end
     # Every spec-based path uses the diffuse filter. KFAS gives −632.55.
     @test ssm_loglik(spec, θ, y) ≈ exact
     @test ssm_loglik(spec, θ, y) ≈ -632.55 atol = 0.01
-    @test Siphon.DSL._spec_loglik(spec, θ, y, true) ≈ exact
+    @test Siphon.DSL._spec_loglik(spec, θ, y, :auto) ≈ exact
     @test objective_function(spec, y)([15099.0, 1469.1]) ≈ -exact
     filt = kalman_filter(p, y, [0.0], zeros(1, 1), ones(1, 1))
     @test predict(spec, θ, y) ≈ predicted_observations(filt)

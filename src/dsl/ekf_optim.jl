@@ -10,7 +10,7 @@
 # ============================================================================
 
 """
-    EKFLogDensity(spec::EKFSpec, y; use_static=true)
+    EKFLogDensity(spec::EKFSpec, y)
 
 Log-density evaluator for an `EKFSpec`, working in unconstrained ℝⁿ via the
 `TransformVariables` transformation built from `spec.params`. Pairs with
@@ -22,24 +22,24 @@ struct EKFLogDensity{S <: EKFSpec, Tr, Y <: AbstractMatrix}
     spec::S
     transformation::Tr
     y::Y
-    use_static::Bool
 end
 
-function EKFLogDensity(spec::EKFSpec, y::AbstractMatrix; use_static::Bool = true)
+function EKFLogDensity(spec::EKFSpec, y::AbstractMatrix)
     y = _nan_obs(y)
     t = build_transformation(spec)
-    return EKFLogDensity{typeof(spec), typeof(t), typeof(y)}(spec, t, y, use_static)
+    return EKFLogDensity{typeof(spec), typeof(t), typeof(y)}(spec, t, y)
 end
 
 # logdensity is defined in bayesian.jl as a generic function operating on
 # SSMLogDensity. We add an EKF method here.
 function logdensity(ld::EKFLogDensity, θ_u::AbstractVector)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
-    return _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static) + logjac
+    return _spec_loglik(ld.spec, θ_nt, ld.y, :off) + logjac
 end
 
-function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, use_static::Bool)
-    ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
+# The EKF has no StaticArrays specialization; `static` is always `:off` here.
+function _spec_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    ss = build_nonlinear_state_space(spec, θ, y)
     return kalman_loglik(ss.p, y, ss.a1, ss.P1)
 end
 
@@ -58,10 +58,11 @@ end
 """
     optimize_ssm(spec::EKFSpec, y; method=Optim.LBFGS(), θ0=nothing,
                  ad_backend=Optimization.AutoForwardDiff(),
-                 use_static=true, prob_kwargs=NamedTuple(), warn=true, kwargs...)
+                 prob_kwargs=NamedTuple(), warn=true, kwargs...)
 
 Maximum-likelihood estimation for an `EKFSpec`, with the same keywords and return
-value as for an `SSMSpec`. Works in unconstrained parameter space via
+value as for an `SSMSpec`, except `static`: the EKF has no StaticArrays
+specialization. Works in unconstrained parameter space via
 `TransformVariables`.
 
 # AD-backend choice
@@ -81,10 +82,9 @@ function optimize_ssm(spec::EKFSpec, y::AbstractMatrix;
         method = Optim.LBFGS(),
         θ0::Union{Nothing, AbstractVector, NamedTuple} = nothing,
         ad_backend = Optimization.AutoForwardDiff(),
-        use_static::Bool = true,
         prob_kwargs::NamedTuple = NamedTuple(),
         warn::Bool = true,
         kwargs...)
     y = _nan_obs(y)
-    return _mle(spec, y, method, θ0, ad_backend, use_static, prob_kwargs; warn, kwargs...)
+    return _mle(spec, y, method, θ0, ad_backend, :off, prob_kwargs; warn, kwargs...)
 end

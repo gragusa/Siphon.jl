@@ -126,7 +126,7 @@ function predicted_observations(r::Union{KalmanFilterResult, DiffuseFilterResult
 end
 
 """
-    predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; use_static=true) -> Matrix
+    predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; static=:auto) -> Matrix
     predict(p::KFParms, y, a1, P1) -> Matrix
 
 Return the in-sample one-step-ahead predictions ŷₜ|ₜ₋₁ = Z aₜ (p × n) of a model at
@@ -136,7 +136,7 @@ This is `predicted_observations(kalman_filter(…))`. Call the filter instead wh
 need the innovations, the states or the log-likelihood as well.
 
 # Arguments
-- `use_static::Bool=true`: Use StaticArrays for small matrices (dimensions ≤ 13)
+- `static::Symbol=:auto`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 
 # Example
 ```julia
@@ -149,9 +149,9 @@ plot(vec(y), label="observed")
 plot!(vec(yhat), label="predicted")
 ```
 """
-function predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; use_static::Bool = true)
+function predict(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; static::Symbol = :auto)
     y = _nan_obs(y)
-    ss = build_linear_state_space(spec, θ, y; use_static = use_static)
+    ss = build_linear_state_space(spec, θ, y; static)
     return predicted_observations(_ss_filter(ss, y))
 end
 
@@ -181,14 +181,14 @@ function forecast(r::AbstractFilterResult, h::Integer)
 end
 
 """
-    forecast(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, h::Integer; use_static=true) -> ForecastResult
+    forecast(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, h::Integer; static=:auto) -> ForecastResult
     forecast(p::KFParms, y, a1, P1, h::Integer) -> ForecastResult
 
 Filter `y` and forecast the `h` periods after it. See
 [`forecast(::AbstractFilterResult, ::Integer)`](@ref).
 
 # Arguments
-- `use_static::Bool=true`: Use StaticArrays for small matrices (dimensions ≤ 13)
+- `static::Symbol=:auto`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 
 # Example
 ```julia
@@ -206,10 +206,10 @@ function forecast(
         θ::NamedTuple,
         y::AbstractMatrix,
         h::Integer;
-        use_static::Bool = true
+        static::Symbol = :auto
 )
     y = _nan_obs(y)
-    ss = build_linear_state_space(spec, θ, y; use_static = use_static)
+    ss = build_linear_state_space(spec, θ, y; static)
     return forecast(_ss_filter(ss, y), h)
 end
 
@@ -273,7 +273,7 @@ end
 
 """
     forecast_paths(r::AbstractFilterResult, h::Integer, n_paths::Integer; rng=Random.default_rng()) -> Array
-    forecast_paths(spec::SSMSpec, θ, y, h, n_paths; use_static=true, rng=Random.default_rng()) -> Array
+    forecast_paths(spec::SSMSpec, θ, y, h, n_paths; static=:auto, rng=Random.default_rng()) -> Array
     forecast_paths(p::KFParms, y, a1, P1, h, n_paths; rng=Random.default_rng()) -> Array
 
 Simulate `n_paths` trajectories of the observations over the `h` periods after the
@@ -303,11 +303,11 @@ function forecast_paths(
         y::AbstractMatrix,
         h::Integer,
         n_paths::Integer;
-        use_static::Bool = true,
+        static::Symbol = :auto,
         rng::AbstractRNG = Random.default_rng()
 )
     y = _nan_obs(y)
-    ss = build_linear_state_space(spec, θ, y; use_static = use_static)
+    ss = build_linear_state_space(spec, θ, y; static)
     return forecast_paths(_ss_filter(ss, y), h, n_paths; rng = rng)
 end
 

@@ -28,7 +28,7 @@ EM algorithm infrastructure:
 High-level model interface:
 - `StateSpaceModel{T}` - mutable model container
 - `fit!(MLE(), model, y)` - MLE via numerical optimization
-- `fit!(EM(), model, y)` - EM algorithm (auto-selects backend)
+- `fit!(EM(), model, y)` - EM algorithm
 - Accessors: `parameters`, `filtered_states`, `smoothed_states`, etc.
 - `forecast(model, h)` - h-step ahead forecasting
 
@@ -3200,7 +3200,6 @@ loglikelihood(model::AbstractStateSpaceModel) = (_require_fitted(model); model.l
     StateSpaceModelWorkspaces{T}
 
 Pre-allocated workspaces for in-place EM computation.
-Only allocated for large models (dimensions > STATIC_THRESHOLD).
 """
 struct StateSpaceModelWorkspaces{T <: Real}
     kf_ws::KalmanWorkspace{T}
@@ -3212,7 +3211,7 @@ end
 
 Mutable state-space model container wrapping an SSMSpec.
 
-Supports both MLE and EM estimation with automatic backend selection for EM.
+Supports both MLE and EM estimation.
 
 # Usage
 ```julia
@@ -3223,7 +3222,7 @@ model = StateSpaceModel(spec, 200)
 # Fit with MLE (pure Kalman filter, AD-compatible)
 fit!(MLE(), model, y)
 
-# Or fit with EM (auto-selects backend based on dimensions)
+# Or fit with EM
 fit!(EM(), model, y; maxiter=500, verbose=true)
 
 # Access results
@@ -3256,7 +3255,6 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     fitted::Bool
     converged::Bool
     iterations::Int
-    backend::Symbol  # :none, :mle, :em_static, :em_inplace
 
     # Filter results (pre-allocated)
     at::Matrix{T}           # Predicted states (m × n)
@@ -3295,7 +3293,7 @@ Construct a StateSpaceModel from an SSMSpec.
 
 # Behavior
 - Pre-allocates filter storage
-- If max(n_states, n_obs) > STATIC_THRESHOLD: also pre-allocates KalmanWorkspace for EM
+- Pre-allocates the KalmanWorkspace and EMWorkspace used by `fit!(EM(), ...)`
 
 # Example
 ```julia
@@ -3364,7 +3362,6 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         false,
         false,
         0,
-        :none,
         at,
         Pt,
         att,
@@ -3395,7 +3392,7 @@ Construct a StateSpaceModel with known (externally provided) parameters.
 
 # Behavior
 - Creates model with parameters pre-set
-- Sets `fitted=true`, `theta_fitted=true`, `converged=true`, `backend=:external`
+- Sets `fitted=true`, `theta_fitted=true`, `converged=true`
 - No estimation is performed; parameters are taken as given
 
 # Example
@@ -3415,7 +3412,6 @@ function StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:
     # Mark as fitted with external parameters
     model.fitted = true
     model.converged = true
-    model.backend = :external
 
     return model
 end
@@ -3515,54 +3511,6 @@ model is not fitted.
 function parameters(model::StateSpaceModel)
     _require_fitted(model)
     return _ssm_get_theta_namedtuple(model)
-end
-
-"""
-    backend(model::StateSpaceModel) -> Symbol
-
-Return the symbol describing how the model was last fitted:
-
-- `:none` — never fitted.
-- `:em_inplace` — fit via `fit!(EM(), model, y)` (always uses the in-place
-  Kalman/EM workspace; the static path is not used for EM because per-EM
-  iteration the in-place workspace beats SMatrix arithmetic).
-- `:mle_static` — fit via `fit!(MLE(), model, y)` with the SMatrix
-  specialization of the Kalman filter (all matrices small enough).
-- `:mle_dynamic` — fit via `fit!(MLE(), model, y)` with the regular
-  `Matrix`/`Vector` specialization (some dimension exceeded the threshold,
-  or the user passed `static = :off`).
-- `:external` — constructed via `StateSpaceModel(spec, θ, n)`.
-
-This is purely a diagnostic: the choice is made automatically based on
-model dimensions and the `static` / `static_threshold` kwargs of `fit!`.
-"""
-backend(model::StateSpaceModel) = model.backend
-
-"""
-    _resolve_static_choice(choice::Symbol, threshold::Int, dims...) -> Bool
-
-Translate a user-facing `static = :auto | :on | :off` choice into the
-boolean `use_static` flag that the optimization / filter machinery expects.
-Warns when `:on` is requested for a dimension that exceeds `threshold`.
-"""
-function _resolve_static_choice(choice::Symbol, threshold::Int, dims::Vararg{Int})
-    max_dim = maximum(dims)
-    if choice === :on
-        if max_dim > threshold
-            @warn "static = :on requested but model has dimension $(max_dim) > " *
-                  "threshold $(threshold). StaticArrays specialization above this " *
-                  "size typically loses to BLAS and triggers slow recompilation; " *
-                  "consider :auto or :off." maxlog = 1
-        end
-        return true
-    elseif choice === :off
-        return false
-    elseif choice === :auto
-        return max_dim <= threshold
-    else
-        throw(ArgumentError(
-            "static must be :auto, :on, or :off, got :$(choice)"))
-    end
 end
 
 # ============================================
@@ -3715,13 +3663,14 @@ end
 # ============================================
 
 """
-    kalman_loglik(model::StateSpaceModel, y::AbstractMatrix)
+    kalman_loglik(model::StateSpaceModel, y::AbstractMatrix; static=:auto)
 
 Compute log-likelihood for observations without storing filter results.
 
 # Arguments
 - `model`: StateSpaceModel with fitted parameters (via constructor with θ or fit!)
 - `y`: Observations (p × n matrix), missing values as NaN
+- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 
 # Returns
 Log-likelihood value (Float64)
@@ -3734,7 +3683,8 @@ y = randn(1, 100)
 ll = kalman_loglik(model, y)
 ```
 """
-function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+function kalman_loglik(
+        model::StateSpaceModel{T}, y::AbstractMatrix; static::Symbol = :auto) where {T}
     y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
@@ -3742,20 +3692,20 @@ function kalman_loglik(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     _check_model_obs(model, "kalman_loglik", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
-    use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
+    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
 
     return DSL._ss_loglik(ss, y)
 end
 
 """
-    kalman_filter!(model::StateSpaceModel, y::AbstractMatrix)
+    kalman_filter!(model::StateSpaceModel, y::AbstractMatrix; static=:auto)
 
 Run Kalman filter and store results in model.
 
 # Arguments
 - `model`: StateSpaceModel with fitted parameters
 - `y`: Observations (p × n matrix), missing values as NaN
+- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 
 # Returns
 Log-likelihood value (Float64)
@@ -3775,7 +3725,8 @@ ll = kalman_filter!(model, y)
 att = filtered_states(model)
 ```
 """
-function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
+function kalman_filter!(
+        model::StateSpaceModel{T}, y::AbstractMatrix; static::Symbol = :auto) where {T}
     y = _nan_obs(y)
     model.theta_fitted ||
         throw(ArgumentError("Parameters not set. Provide θ in constructor or call fit!."))
@@ -3783,8 +3734,7 @@ function kalman_filter!(model::StateSpaceModel{T}, y::AbstractMatrix) where {T}
     _check_model_obs(model, "kalman_filter!", y)
 
     theta_nt = _ssm_get_theta_namedtuple(model)
-    use_static = max(model.spec.n_states, model.spec.n_obs) <= STATIC_THRESHOLD
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
+    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
 
     filt = DSL._ss_filter(ss, y)
 
@@ -3833,7 +3783,7 @@ end
 # ============================================
 
 """
-    fit!(::MLE, model::StateSpaceModel, y::AbstractMatrix; static, static_threshold, kwargs...)
+    fit!(::MLE, model::StateSpaceModel, y::AbstractMatrix; static=:auto, kwargs...)
 
 Fit state-space model using Maximum Likelihood Estimation.
 
@@ -3849,22 +3799,20 @@ filter loop runs without heap allocations and the compiler can unroll.
 # Keyword Arguments
 - `static::Symbol = :auto`: Controls whether the optimization uses the
   StaticArrays specialization of the Kalman filter.
-  - `:auto` — promote when `max(n_states, n_obs, n_shocks) ≤ static_threshold`.
+  - `:auto` — use it when `n_states`, `n_obs` and `n_shocks` are all at most
+    [`STATIC_THRESHOLD`](@ref).
   - `:on`   — force the static path. Warns if any dimension exceeds
-    `static_threshold`; promotion above ~16 typically loses to BLAS.
+    `STATIC_THRESHOLD`; StaticArrays above that size typically lose to BLAS.
   - `:off`  — force the dynamic-`Matrix` path. Useful when you do nested
     `ForwardDiff` or want to avoid the per-`Dual{...}` SMatrix recompile.
-- `static_threshold::Int = STATIC_THRESHOLD`: Maximum matrix dimension for
-  the `:auto` decision. Default is `STATIC_THRESHOLD` (currently 13).
-  Lower values reduce compile-time risk on AD-heavy workflows.
+  The choice affects speed; the estimates agree up to rounding error, which an
+  ill-conditioned innovation covariance amplifies.
 - `method`: Optimization algorithm (default: LBFGS from Optim.jl)
 - `verbose`: Print optimization progress (default: false)
 - Additional kwargs passed to `optimize_ssm`.
 
 # Returns
-The fitted `model` (same object, mutated). `model.backend` is set to
-`:mle_static` or `:mle_dynamic` to indicate which path was taken; see
-[`backend`](@ref).
+The fitted `model` (same object, mutated).
 
 # Static-path tradeoff
 The `SMatrix` specialization gives ~6-10× speedup for one-shot likelihoods on
@@ -3879,7 +3827,6 @@ spec = local_level(var_obs=:free, var_level=:free)
 model = StateSpaceModel(spec, 100)
 fit!(MLE(), model, randn(1, 100))
 parameters(model)  # (var_obs=..., var_level=...)
-backend(model)     # :mle_static
 ```
 """
 function fit!(
@@ -3887,26 +3834,20 @@ function fit!(
         model::StateSpaceModel{T},
         y::AbstractMatrix;
         static::Symbol = :auto,
-        static_threshold::Int = STATIC_THRESHOLD,
         verbose::Bool = false,
         kwargs...
 ) where {T}
     y = _nan_obs(y)
     _check_model_obs(model, "fit!(MLE(), ...)", y)
 
-    use_static = _resolve_static_choice(
-        static, static_threshold,
-        model.spec.n_states, model.spec.n_obs, model.spec.n_shocks
-    )
-
-    result = Siphon.optimize_ssm(model.spec, y; use_static = use_static, kwargs...)
+    result = Siphon.optimize_ssm(model.spec, y; static, kwargs...)
 
     # Store fitted parameters
     _ssm_store_theta!(model, result.θ)
 
     # Run full filter to get filter results
     theta_nt = _ssm_get_theta_namedtuple(model)
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; use_static = use_static)
+    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
     filt = DSL._ss_filter(ss, y)
 
     # Copy filter results to model storage
@@ -3917,14 +3858,12 @@ function fit!(
     model.fitted = true
     model.converged = result.converged
     model.iterations = 0  # MLE doesn't have iteration count in same sense
-    model.backend = use_static ? :mle_static : :mle_dynamic
     model.smoother_computed = false
 
     if verbose
         println("MLE fitting complete:")
         println("  Log-likelihood: ", round(model.loglik, digits = 4))
         println("  Converged: ", model.converged)
-        println("  Backend: ", model.backend)
     end
 
     return model
@@ -3939,9 +3878,8 @@ end
 
 Fit state-space model using EM algorithm.
 
-Automatically selects backend based on dimensions:
-- If max(n_states, n_obs) > 13: Use in-place KalmanWorkspace (zero allocations)
-- Otherwise: Use pure implementation
+Runs on the model's in-place KalmanWorkspace for every model size; the
+`static` keyword of `fit!(MLE(), ...)` has no counterpart here.
 
 # Arguments
 - `EM()`: Estimation method selector
@@ -4001,7 +3939,6 @@ function fit!(
         allow_degen = allow_degen, degen_lim = degen_lim,
         min_degen_iter = min_degen_iter
     )
-    model.backend = :em_inplace
 
     model.fitted = true
     model.smoother_computed = false
@@ -4009,7 +3946,7 @@ function fit!(
     return model
 end
 
-"""In-place EM backend for large models."""
+"""In-place EM on the model's KalmanWorkspace."""
 function _ssm_fit_em_inplace!(
         model::StateSpaceModel{T},
         y::AbstractMatrix;
@@ -4672,7 +4609,7 @@ function _ssm_fit_em_static!(
         theta_nt = NamedTuple{names}(Tuple(theta_curr))
 
         # Build state-space model from current parameters
-        ss = Siphon.build_linear_state_space(spec, theta_nt, y; use_static = true)
+        ss = Siphon.build_linear_state_space(spec, theta_nt, y; static = :auto)
 
         # E-step: Run Kalman filter
         filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
@@ -4742,7 +4679,7 @@ function _ssm_fit_em_static!(
     _ssm_store_theta!(model, theta_nt)
 
     # Run final filter to populate filter results
-    ss = Siphon.build_linear_state_space(spec, theta_nt, y; use_static = true)
+    ss = Siphon.build_linear_state_space(spec, theta_nt, y; static = :auto)
     filt = Siphon.kalman_filter(ss.p, y, ss.a1, ss.P1)
     _ssm_store_filter_results!(model, filt)
 

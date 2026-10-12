@@ -6,7 +6,6 @@ This page documents the core Kalman filtering and smoothing functions.
 
 ```@docs
 KFParms
-KFParms_static
 ```
 
 ## Kalman Filter
@@ -59,9 +58,8 @@ count_missing_periods
 count_incomplete_periods
 ```
 
-## StaticArrays Utilities
+## StaticArrays
 
 ```@docs
 STATIC_THRESHOLD
-to_static_if_small
 ```

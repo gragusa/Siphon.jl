@@ -165,17 +165,51 @@ const P1_cov = [1e7;;]
         @test count(Siphon.missing_mask(r)) == count_missing_periods(y)
     end
 
-    @testset "static-array helpers" begin
-        ps = KFParms_static([1.0;;], [15099.0;;], [1.0;;], [1.0;;], [1469.1;;])
-        @test ps.Z isa SMatrix
-        @test ps.Q isa SMatrix
-        ll_s = kalman_loglik(ps, y_cov, SVector{1}(a1_cov), SMatrix{1, 1}(P1_cov))
-        @test ll_s ≈ kalman_loglik(p_cov, y_cov, a1_cov, P1_cov)
+    @testset "static keyword" begin
+        spec = local_level()
+        θ = (var_obs = 15099.0, var_level = 1469.1)
+        y = y_cov
+        ss = build_linear_state_space(spec, θ, y)
+        @test ss.p.Z isa SMatrix && ss.p.Q isa SMatrix
+        @test ss.a1 isa SVector && ss.P1 isa SMatrix
+        ss_off = build_linear_state_space(spec, θ, y; static = :off)
+        @test ss_off.p.Z isa Matrix && ss_off.a1 isa Vector && ss_off.P1 isa Matrix
+        @test kalman_loglik(ss.p, y, ss.a1, ss.P1) ≈
+              kalman_loglik(ss_off.p, y, ss_off.a1, ss_off.P1)
+        @test ssm_loglik(spec, θ, y) ≈ ssm_loglik(spec, θ, y; static = :off)
+        @test_throws "static must be :auto, :on or :off" build_linear_state_space(
+            spec, θ, y; static = :yes)
+        @test_throws "static must be :auto, :on or :off" SSMLogDensity(
+            spec, y; static = :maybe)
 
-        @test to_static_if_small(ones(2, 2)) isa SMatrix{2, 2}
-        @test to_static_if_small(ones(3)) isa SVector{3}
-        big = ones(STATIC_THRESHOLD + 1, STATIC_THRESHOLD + 1)
-        @test to_static_if_small(big) isa Matrix
+        # One observable dimension above the threshold keeps every array dynamic,
+        # including the 1 × 1 state arrays.
+        p_big = STATIC_THRESHOLD + 1
+        spec_big = custom_ssm(
+            Z = ones(p_big, 1),
+            H = Matrix(1.0I, p_big, p_big),
+            T = [1.0;;],
+            R = [1.0;;],
+            Q = [FreeParam(:q, init = 1.0, lower = 0.0)],
+            a1 = [0.0],
+            P1 = [1.0;;]
+        )
+        y_big = randn(MersenneTwister(1), p_big, 20)
+        ss_big = build_linear_state_space(spec_big, (q = 1.0,), y_big)
+        @test ss_big.p.Z isa Matrix && ss_big.p.T isa Matrix
+        @test ss_big.a1 isa Vector && ss_big.P1 isa Matrix
+        ss_on = @test_logs (:warn, r"STATIC_THRESHOLD") build_linear_state_space(
+            spec_big, (q = 1.0,), y_big; static = :on)
+        @test ss_on.p.Z isa SMatrix && ss_on.a1 isa SVector
+        @test kalman_loglik(ss_on.p, y_big, ss_on.a1, ss_on.P1) ≈
+              kalman_loglik(ss_big.p, y_big, ss_big.a1, ss_big.P1)
+
+        # The exact diffuse filter has no static specialization.
+        spec_d = local_level(diffuse = :exact)
+        ss_d = build_linear_state_space(spec_d, θ, y)
+        @test ss_d.p.Z isa Matrix && ss_d.P1_inf isa AbstractMatrix
+        @test_throws "not available with exact diffuse" build_linear_state_space(
+            spec_d, θ, y; static = :on)
     end
 
     @testset "update_params!" begin

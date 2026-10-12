@@ -54,9 +54,9 @@ const fail_state_accessors = (predicted_states, predicted_states_cov, filtered_s
     @test_throws "stopped in period 3" predict(p, y, fail_a1, fail_P1)
     @test_throws "stopped in period 3" forecast(p, y, fail_a1, fail_P1, 2)
 
-    # The static path, including the single-observation branch that used to throw
-    # a DomainError from log(F).
-    ps = KFParms_static(fail_Z, fail_H, fail_T, fail_R, fail_Q)
+    # The static path, including its single-observation branch.
+    sm(A) = SMatrix{size(A, 1), size(A, 2)}(A)
+    ps = KFParms(sm(fail_Z), sm(fail_H), sm(fail_T), sm(fail_R), sm(fail_Q))
     rs = kalman_filter(ps, y, SVector{1}(fail_a1), SMatrix{1, 1}(fail_P1))
     @test loglikelihood(rs) == -Inf
     @test_throws "stopped in period 3" filtered_states(rs)
@@ -216,7 +216,7 @@ end
     ll = kalman_filter!(model, y)
     @test loglikelihood(model) == ll
     fc = forecast(model, 3)
-    fc_ref = forecast(spec, (var_obs = 1.0, var_level = 0.5), y, 3; use_static = false)
+    fc_ref = forecast(spec, (var_obs = 1.0, var_level = 0.5), y, 3; static = :off)
     @test fc.yhat ≈ fc_ref.yhat && fc.F ≈ fc_ref.F
     @test forecast_periods(fc) == (n + 1):(n + 3)
 

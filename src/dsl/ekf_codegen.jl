@@ -93,18 +93,16 @@ end
 # ============================================================================
 
 """
-    build_nonlinear_state_space(spec::EKFSpec, θ, y; use_static=true)
+    build_nonlinear_state_space(spec::EKFSpec, θ, y)
 
 Build the EKF parameter container, initial state, and observation matrix
 needed to evaluate `kalman_loglik`. Returns a NamedTuple `(p, a1, P1)`.
 
-`use_static` is currently a no-op for the EKF path — the measurement object
-typically owns the parts that would benefit from `SMatrix` conversion (e.g.
-loadings) and we should not blindly convert user-owned data. This kwarg is
-preserved for API symmetry with `build_linear_state_space`.
+Unlike `build_linear_state_space`, it takes no `static` keyword: the
+measurement object owns the parts that StaticArrays would convert (e.g.
+loadings), so the EKF path does not convert them.
 """
-function build_nonlinear_state_space(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix;
-        use_static::Bool = true)
+function build_nonlinear_state_space(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
     p = build_ekfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
     return (; p, a1, P1)
@@ -118,7 +116,7 @@ parameters `θ`. Equivalent to `kalman_loglik(p, y, a1, P1)` after building
 `(p, a1, P1)` from the spec.
 """
 function ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
-    _spec_loglik(spec, θ, _nan_obs(y), false)
+    _spec_loglik(spec, θ, _nan_obs(y), :off)
 end
 
 # ============================================================================

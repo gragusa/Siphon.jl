@@ -67,7 +67,7 @@ end
 # ============================================
 
 """
-    SSMLogDensity(spec, y; prior=nothing, use_static=true)
+    SSMLogDensity(spec, y; prior=nothing, static=:auto)
 
 Log-density for a state-space model, evaluated in UNCONSTRAINED ℝⁿ space.
 
@@ -80,7 +80,7 @@ handled automatically using TransformVariables.jl.
 - `transformation`: TransformVariables transformation (ℝⁿ → NamedTuple)
 - `y`: Observation data (p × n matrix)
 - `prior`: Optional prior on CONSTRAINED parameters (θ::NamedTuple -> log_prior)
-- `use_static`: Whether to use StaticArrays for small matrices (default: true)
+- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
 
 # Usage
 
@@ -111,18 +111,19 @@ struct SSMLogDensity{S <: SSMSpec, T, Y <: AbstractMatrix, P}
     transformation::T
     y::Y
     prior::P
-    use_static::Bool
+    static::Symbol
 end
 
 function SSMLogDensity(
         spec::SSMSpec,
         y::AbstractMatrix;
         prior = nothing,
-        use_static::Bool = true
+        static::Symbol = :auto
 )
     y = _nan_obs(y)
+    _use_static(static, spec.n_states, spec.n_obs, spec.n_shocks)  # validate the keyword
     t = build_transformation(spec)
-    SSMLogDensity(spec, t, y, prior, use_static)
+    SSMLogDensity(spec, t, y, prior, static)
 end
 
 """
@@ -140,7 +141,7 @@ function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
     # Transform to NamedTuple (constrained space)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
 
-    ll = _spec_loglik(ld.spec, θ_nt, ld.y, ld.use_static)
+    ll = _spec_loglik(ld.spec, θ_nt, ld.y, ld.static)
 
     # Add prior (on constrained parameters)
     if ld.prior !== nothing

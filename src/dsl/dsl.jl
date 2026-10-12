@@ -50,9 +50,9 @@ using LinearAlgebra
 using SpecialFunctions: loggamma
 using Statistics: mean, var
 using TransformVariables
-using ..Siphon: KFParms, KFParms_static, kalman_loglik
+using ..Siphon: KFParms, kalman_loglik
 using ..Siphon: kalman_filter, kalman_smoother, _kalman_smoother
-using ..Siphon: to_static_if_small, STATIC_THRESHOLD
+using ..Siphon: _use_static, _static_system, STATIC_THRESHOLD
 using ..Siphon: _nan_obs
 # EKF surface used by the DSL extension
 using ..Siphon: AbstractEKFMeasurement, AbstractEKFJacobianMode, ADJacobian,
