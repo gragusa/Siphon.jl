@@ -21,7 +21,7 @@ observation matrix.
 This tutorial covers:
 
 1. The measurement protocol (`AbstractEKFMeasurement`, `measurement` /
-   `measurement!` / `measurement_jacobian!`).
+   `measurement!` / `measurement_jacobian` / `measurement_jacobian!`).
 2. Three Jacobian modes: `ADJacobian()` (ForwardDiff, default),
    `AnalyticJacobian()` (user-supplied) and `FiniteDiffJacobian()`.
 3. Three layers of the API, which are the linear filter's functions selected by the
@@ -40,8 +40,8 @@ one of:
 |---|---|
 | `measurement(model, a, t) -> AbstractVector` | `ADJacobian()` mode (default), and for the pure functional path |
 | `measurement!(out, model, a, t)` | `EKFWorkspace` / `kalman_filter!` (in-place) |
-| `measurement_jacobian(model, a, t) -> AbstractMatrix` | optional pure analytic |
-| `measurement_jacobian!(Z, model, a, t)` | `AnalyticJacobian()` mode |
+| `measurement_jacobian(model, a, t) -> AbstractMatrix` | `AnalyticJacobian()` mode on the functional path (`EKFParms`, `optimize_ssm`) |
+| `measurement_jacobian!(Z, model, a, t)` | `AnalyticJacobian()` mode on `EKFWorkspace` |
 
 The `t` argument is the time index, allowing time-varying nonlinearities
 without forced allocation.
@@ -224,6 +224,13 @@ function Siphon.measurement!(out, m::SBSCenteredMeasurement, ξ, t)
 end
 
 # Analytic Jacobian: ∂y_i/∂ξ_j = logistic(s_i - r_LB) * Λ_{i,j}
+# Pure form, used by the functional filter and optimize_ssm
+function Siphon.measurement_jacobian(m::SBSCenteredMeasurement, ξ, t)
+    sh = m.Λ * (ξ .+ m.μ)
+    return _logistic.(sh .- m.r_LB) .* m.Λ
+end
+
+# In-place form, used by EKFWorkspace
 function Siphon.measurement_jacobian!(Z, m::SBSCenteredMeasurement, ξ, t)
     @inbounds for i in axes(m.Λ, 1)
         s = zero(eltype(Z))
@@ -291,8 +298,8 @@ spec = custom_ekf(
 
 result = optimize_ssm(spec, y; maxiters = 400)
 result.converged    # → true
-result.loglik       # → ≈ 2312
-result.θ.μ_L        # ≈ 3.5
+result.loglik       # → ≈ 2377
+result.θ.μ_L        # ≈ 3.7 (true value 3.5)
 result.θ.ψ_1        # ≈ 0.97
 ```
 

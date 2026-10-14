@@ -102,11 +102,8 @@ ll = kalman_filter!(model, y)
 kalman_smoother!(model)
 ```
 
-```@docs
-Siphon.kalman_loglik(::Siphon.StateSpaceModel, ::AbstractMatrix)
-Siphon.kalman_filter!(::Siphon.StateSpaceModel, ::AbstractMatrix)
-Siphon.kalman_smoother!(::Siphon.StateSpaceModel)
-```
+The docstrings for all methods are under [`kalman_loglik`](@ref) and
+[`kalman_filter!`](@ref) / [`kalman_smoother!`](@ref).
 
 ## Model Accessors
 
@@ -125,6 +122,8 @@ Siphon.AbstractFilterWorkspace
 ```@docs
 Siphon.parameters
 Siphon.loglikelihood
+Siphon.isconverged
+Siphon.niterations
 ```
 
 ### Statistical Model Interface
@@ -153,6 +152,7 @@ Siphon.coefnames(::Siphon.StateSpaceModel)
 Siphon.vcov(::Siphon.StateSpaceModel)
 Siphon.dof(::Siphon.StateSpaceModel)
 Siphon.nobs(::Siphon.StateSpaceModel)
+Siphon.isfitted(::Siphon.AbstractStateSpaceModel)
 ```
 
 ### System Matrices
@@ -200,6 +200,18 @@ For Dynamic Nelson-Siegel models with nonlinear λ parameter:
 Siphon.profile_em_ssm
 Siphon.ProfileEMResult
 Siphon.EMResult
+```
+
+## Low-Level EM
+
+`fit!(EM(), model, y)` runs the EM algorithm on a `StateSpaceModel`. The
+functions below run it directly on a [`KalmanWorkspace`](@ref).
+
+```@docs
+Siphon.EMWorkspace
+Siphon.em_estimate!
+Siphon.compute_sufficient_stats!
+Siphon.set_em_masks!
 ```
 
 ## Initial State Conventions and MARSS Compatibility

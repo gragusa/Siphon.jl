@@ -94,13 +94,14 @@ So if the optimizer finds ``\theta_u = 4.6``, you get ``\sigma^2 = \exp(4.6) \ap
 
 ```julia
 using Siphon
+using TransformVariables: transform
 
 spec = local_level()
 t = build_transformation(spec)
 
 # Transform from unconstrained to constrained
 θ_u = [4.6, 3.9]  # Unconstrained values
-θ_c = TransformVariables.transform(t, θ_u)
+θ_c = transform(t, θ_u)
 # θ_c = (var_obs = 99.5, var_level = 49.4)
 ```
 
@@ -196,7 +197,7 @@ variance for `var_*`); parameters without one get a flat prior:
 
 ```julia
 prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 1.0e4),
-                        var_level = InverseGammaPrior(2.0, 1.0e3))
+                        var_state = InverseGammaPrior(2.0, 1.0e3))
 ld = SSMLogDensity(spec, y; prior)
 ```
 

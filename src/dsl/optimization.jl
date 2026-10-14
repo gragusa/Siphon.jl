@@ -69,9 +69,10 @@ println("Log-likelihood: ", result.loglik)
 # With custom initial values
 result2 = optimize_ssm(spec, y; θ0=(var_obs=150.0^2, var_level=50.0^2))
 
-# Different optimizer with options
+# Different optimizer with options (Optim.jl, through OptimizationOptimJL)
+using OptimizationOptimJL: Optim
 result3 = optimize_ssm(spec, y;
-    method=Optim.Newton(),
+    method=Optim.BFGS(),
     maxiters=500,
     show_trace=true
 )

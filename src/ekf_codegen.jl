@@ -150,13 +150,23 @@ of `H`.
 
 # Example
 ```julia
-struct MyMeasurement{LT,T} <: Siphon.AbstractEKFMeasurement; Λ::LT; r_LB::T; end
-Siphon.measurement(m::MyMeasurement, β, t) = m.r_LB .+ softplus.(m.Λ * β .- m.r_LB)
-# (plus measurement!/measurement_jacobian! if AnalyticJacobian() is desired)
+using LinearAlgebra
 
+# Yields bounded below by r_LB: h(β) = r_LB + softplus(Λβ - r_LB)
+struct MyMeasurement{LT,T} <: Siphon.AbstractEKFMeasurement
+    Λ::LT
+    r_LB::T
+end
+softplus(x) = log1p(exp(x))
+Siphon.measurement(m::MyMeasurement, β, t) = m.r_LB .+ softplus.(m.Λ * β .- m.r_LB)
+
+p, m = 4, 2
+Λ = [ones(p) range(1.0, 0.2; length = p)]
+
+# The Jacobian comes from automatic differentiation (ADJacobian(), the default).
+# For AnalyticJacobian(), also define measurement! and measurement_jacobian!.
 spec = custom_ekf(
     measurement = MyMeasurement(Λ, 0.0),
-    jacobian_mode = AnalyticJacobian(),
     H = diag_free(p, :var_y; init=0.05),
     T = diag_free(m, :ψ; init=0.95, lower=-0.999, upper=0.999),
     R = I,

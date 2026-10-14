@@ -4,26 +4,28 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-031: annotate-public-api
-Set the compat bound to `julia = "1.13"`, since the package targets 1.13+ only. Declared 33 unexported user-facing names `public` with the `public` keyword (block at the end of `src/Siphon.jl`). The DNS loading builders are no longer exported and became public. Added docstrings for the newly public names that lacked them.
+CHUNK-032: sync-docs
+The docs build is now strict (`checkdocs = :public`, no `warnonly`) and passes. Every export and `public` name is in an `@docs` block, with two new API pages (`api/inplace.md`, `api/dfm.md`). All docstring examples in `src/` and all tutorial code blocks were run against the current API, and the broken ones were fixed. `index.md` and the README now describe the package as it is.
 
 ## Key decisions / shim choices
-- Author's decision: Julia 1.13+ only; do not test on 1.10 (recorded in Decisions).
-- Internal names are not renamed to `_name` (divergence recorded in the chunk notes).
-- No shims; the conversion guide notes the Julia 1.13 requirement, what `public` means, and the DNS builder move.
+- `checkdocs = :public`: internal docstrings do not need to be in the manual.
+- Whole-binding `@docs` entries for `kalman_filter!`, `kalman_smoother!` and `kalman_loglik`. Method entries for parametric signatures do not match in Documenter.
+- Tutorial code is still not executed by the docs build (plain ```julia blocks). Verification used a block-by-block runner in the scratchpad (not committed).
+- Two package bugs found while running the tutorials became new chunks instead of being fixed here: CHUNK-042 (static kernel gives `-Inf` on the DNS example; `optimize_ssm` reports convergence at `-Inf`) and CHUNK-043 (EM on `arma(2, 0)` → `PosDefException` in the smoother).
 
 ## State of the codebase
-- Files modified: Project.toml, src/Siphon.jl, src/inplace.jl, test/api_coverage_tests.jl, test/dsl_tests.jl, test/dns_marss_validation_tests.jl, docs/src/conversion_guide.md, docs/src/tutorials/custom_models.md
-- Test suite: full `Pkg.test()` passes on Julia 1.13.0 (4.3 min, Aqua included); the new public-names testset has 132 checks
-- Ambiguity count: 0 (no change)
+- Files modified: docs/make.jl, docs/Manifest.toml, docs/src/index.md, docs/src/api/{core,dsl,optimization}.md, docs/src/api/{inplace,dfm}.md (new), docs/src/tutorials/{arma_models,custom_models,dynamic_factor,ekf,estimation_methods,getting_started,transformations}.md, README.md, src/dsl/codegen.jl, src/dsl/optimization.jl, src/ekf_codegen.jl (docstrings only)
+- Test suite: full `Pkg.test()` passes (Aqua included); strict docs build passes
+- Ambiguity count: 0 (no source code changes beyond docstrings)
 - Staged but uncommitted: no (all unstaged)
 
 ## Cluster status
-- release: 2 of 5 complete
+- release: 3 of 7 complete (CHUNK-030, 031, 032; remaining 042, 043, 033, 034)
 
 ## Next chunk
-CHUNK-032: sync-docs. Every export and `public` name in an `@docs` block, remove `warnonly = [:missing_docs]`, fix the broken docstring examples and tutorials, update index.md and the README.
+CHUNK-042: fix-static-kernel-numerics. The static multivariate filter returns `-Inf` where the dynamic path gives a finite log-likelihood (DNS, 8 maturities, P1 = 1e7). Also make `optimize_ssm` fail loudly when the objective is `-Inf`.
 
 ## Watch out for
-- The newly public `set_H!`…`set_Q!` docstrings link `[`set_Z!`](@ref Siphon.set_Z!)`; check that it resolves in the docs build.
-- `docs/src/tutorials/custom_models.md:332` still calls `Siphon.build_dns_loadings(maturities, :λ; λ_init = …)`. Check that the signature matches in CHUNK-032.
+- Reproducer for CHUNK-042: the simulation block plus the "Approach 1" block of `docs/src/tutorials/estimation_methods.md`; `ssm_loglik(spec, θ0, yields; static = :on)` is `-Inf`, `:off` is ≈ 2881.
+- After CHUNK-042, rerun `estimation_methods.md` blocks 91/116/174/232. The quoted numbers in that tutorial were never checked against output.
+- `docs/src/tutorials/ekf.md` quotes `loglik ≈ 2377`, `μ_L ≈ 3.7` from one run (seed 0); if the EKF numerics change, update them.

@@ -185,12 +185,12 @@ model = StateSpaceModel(spec, n_obs)
 fit!(MLE(), model, yields)
 
 println("MLE Results:")
-println("Converged: ", model.converged)
+println("Converged: ", isconverged(model))
 println("Log-likelihood: ", round(loglikelihood(model), digits=2))
-println("Parameters: ", model.theta_values)
+println("Parameters: ", parameters(model))
 
-# Access filtered states directly
-println("Filtered state at t=100: ", model.att[:, 100])
+# Filtered states E[αₜ | y₁:ₜ], 3 × n_obs
+println("Filtered state at t=100: ", filtered_states(model)[:, 100])
 ```
 
 ### StateSpaceModel with EM
@@ -210,9 +210,9 @@ y_ll = reshape(y_ll, 1, n_obs)
 fit!(EM(), model_ll, y_ll; maxiter=200, tol=1e-6, verbose=true)
 
 println("\nLocal Level EM Results:")
-println("Converged: ", model_ll.converged)
-println("Iterations: ", model_ll.iterations)
-println("Parameters: ", model_ll.theta_values)
+println("Converged: ", isconverged(model_ll))
+println("Iterations: ", niterations(model_ll))
+println("Parameters: ", parameters(model_ll))
 ```
 
 ## Comparison: When to Use Each Approach
@@ -233,8 +233,7 @@ using Siphon
 using LinearAlgebra
 using Statistics
 
-# 1. SPECIFY MODEL
-maturities = [3, 6, 12, 24, 60, 120]
+# 1. SPECIFY MODEL (maturities and yields from the simulation above)
 spec = dns_model(maturities;
     T_structure = :full,
     Q_structure = :full,
@@ -268,31 +267,20 @@ println("T eigenvalues: ", round.(eigvals(T_opt), digits=3))
 println("Q diagonal: ", round.(diag(Q_opt), digits=5))
 
 # 5. SMOOTH FACTORS
-Z_opt = dns_loadings(λ_opt, maturities)
-p_final = KFParms(Z_opt, H_opt, T_opt, Matrix{Float64}(I, 3, 3), Q_opt)
-a1 = zeros(3)
-P1 = 1e4 * Matrix{Float64}(I, 3, 3)
-
-filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(filt)
+model = StateSpaceModel(spec, result.θ, size(yields, 2))
+kalman_filter!(model, yields)
+smooth = smoothed_states(model)          # 3 × n_obs
 
 # 6. ANALYZE FACTORS
 println("\n=== Factor Analysis ===")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    f = smoothed_states(smooth)[i, :]
+    f = smooth[i, :]
     println("$name: mean=$(round(mean(f), digits=2)), std=$(round(std(f), digits=2))")
 end
 
-# 7. FORECAST (optional)
-# Build forecast from final state
-h = 12  # 12-period ahead
-f_last = smoothed_states(smooth)[:, end]
-f_forecast = zeros(3, h)
-for t in 1:h
-    f_forecast[:, t] = T_opt^t * f_last
-end
-
-y_forecast = Z_opt * f_forecast
+# 7. FORECAST
+fc = forecast(model, 12)                 # periods n_obs+1 … n_obs+12
+y_forecast = forecast_observations(fc)   # n_maturities × 12
 println("\n=== 12-Period Yield Forecast ===")
 println("Short rate (3m): ", round.(y_forecast[1, :], digits=2))
 ```

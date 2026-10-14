@@ -42,7 +42,6 @@ For large-scale applications, use the `DynamicFactorModel` type with EM estimati
 
 ```julia
 using Siphon
-include("src/inplace.jl")
 
 # Create model: 100 observables, 6 factors, 200 time periods
 model = DynamicFactorModel(
@@ -190,7 +189,6 @@ println("States: ", spec.n_states)  # 6 = 2 factors × max(3, 1+1)
 using Siphon
 using LinearAlgebra
 using Statistics
-include("src/inplace.jl")
 
 # Load FRED-QD or similar macro data
 # y should be N × n (observables × time)

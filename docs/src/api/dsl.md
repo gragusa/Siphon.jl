@@ -10,6 +10,7 @@ Siphon.SSMParameter
 Siphon.SSMSpec
 Siphon.FixedValue
 Siphon.ParameterRef
+Siphon.SSMMatrixSpec
 ```
 
 ## Model Introspection
@@ -19,6 +20,8 @@ Siphon.param_names
 Siphon.n_params
 Siphon.initial_values
 Siphon.param_bounds
+Siphon.param_index
+Siphon.uses_exact_diffuse
 ```
 
 ## Model Building
@@ -27,6 +30,8 @@ Siphon.param_bounds
 Siphon.build_linear_state_space
 Siphon.ssm_loglik
 Siphon.objective_function
+Siphon.build_kfparms
+Siphon.build_initial_state
 ```
 
 ## Pre-Built Templates
@@ -61,6 +66,12 @@ Siphon.arma
 Siphon.dynamic_factor
 ```
 
+### Dynamic Nelson-Siegel Model
+
+```@docs
+Siphon.dns_model
+```
+
 ## Custom Model Specification
 
 ```@docs
@@ -71,7 +82,9 @@ Siphon.FreeParam
 ## Parameter Expressions
 
 ```@docs
+Siphon.AbstractMatrixExpr
 Siphon.MatrixExpr
+Siphon.CovMatrixExpr
 ```
 
 ## DNS/Svensson Yield Curve Helpers

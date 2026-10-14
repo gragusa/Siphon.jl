@@ -5,7 +5,7 @@ This tutorial demonstrates how to specify and estimate ARMA(p,q) models in state
 1. Theoretical background on ARMA in state-space form
 2. Building an ARMA(2,2) model from scratch using `custom_ssm`
 3. Using the built-in `arma` template
-4. Estimation with MLE and EM
+4. Estimation by maximum likelihood
 5. Accessing estimated parameters and matrices
 6. Validation against known parameters
 
@@ -78,7 +78,8 @@ H = zeros(1, 1)
 # T = [φ₁  1  0]
 #     [φ₂  0  1]
 #     [0   0  0]  (φ₃ = 0 since p=2)
-T = zeros(r, r)
+# Matrix{Any} holds a mix of numbers and FreeParam entries
+T = Matrix{Any}(zeros(r, r))
 T[1, 1] = FreeParam(:φ1, init=0.5, lower=-0.99, upper=0.99)
 T[2, 1] = FreeParam(:φ2, init=0.2, lower=-0.99, upper=0.99)
 # Subdiagonal ones
@@ -86,7 +87,7 @@ T[1, 2] = 1.0
 T[2, 3] = 1.0
 
 # Selection matrix: R = [1; θ₁; θ₂]
-R = zeros(r, 1)
+R = Matrix{Any}(zeros(r, 1))
 R[1, 1] = 1.0
 R[2, 1] = FreeParam(:θ1, init=0.3)
 R[3, 1] = FreeParam(:θ2, init=0.1)
@@ -135,7 +136,7 @@ spec_helpers = custom_ssm(
          0.0                                                 0.0  0.0],
     R = [1.0;
          FreeParam(:θ1, init=0.3);
-         FreeParam(:θ2, init=0.1)],
+         FreeParam(:θ2, init=0.1);;],         # ;; makes a 3×1 matrix
     Q = scalar_free(:var; init=1.0),
     a1 = [0.0, 0.0, 0.0],
     P1 = 1e7 * Matrix(1.0I, 3, 3),
@@ -256,41 +257,18 @@ params = parameters(model)
 println("φ1 = ", params.φ1)
 println("θ1 = ", params.θ1)
 
-# As Vector (internal representation, same order as param_names(spec))
-θ_vec = model.theta_values
-names = param_names(spec)
-for (name, val) in zip(names, θ_vec)
+# As Vector, in the order of coefnames(model)
+for (name, val) in zip(coefnames(model), coef(model))
     println("$name = $val")
 end
 ```
 
-## Comparison: MLE vs EM
+## Why MLE and not EM
 
-For ARMA models, both MLE and EM estimation are available:
-
-```julia
-# MLE estimation (gradient-based optimization)
-model_mle = StateSpaceModel(spec, n)
-fit!(MLE(), model_mle, y)
-
-# EM estimation (iterative)
-model_em = StateSpaceModel(spec, n)
-fit!(EM(), model_em, y; maxiter=200, verbose=false)
-
-println("\nComparison (MLE vs EM):")
-params_mle = parameters(model_mle)
-params_em = parameters(model_em)
-
-for name in param_names(spec)
-    mle_val = getproperty(params_mle, name)
-    em_val = getproperty(params_em, name)
-    println("  $name: MLE=$(round(mle_val, digits=4)), EM=$(round(em_val, digits=4))")
-end
-
-println("\nLog-likelihoods:")
-println("  MLE: ", round(loglikelihood(model_mle), digits=2))
-println("  EM:  ", round(loglikelihood(model_em), digits=2))
-```
+ARMA models are estimated with `fit!(MLE(), …)`. The MA coefficients θ₁, θ₂
+enter the selection matrix `R`, and the EM M-step does not update `R`, so
+`fit!(EM(), model, y)` on an `arma(p, q)` spec with `q > 0` throws an
+`ArgumentError` naming the parameters it cannot estimate.
 
 ## Complete Working Example
 

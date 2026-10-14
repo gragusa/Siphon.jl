@@ -23,6 +23,18 @@ kalman_filter
 KalmanFilterResult
 ```
 
+### Exact Diffuse Initialization
+
+Supplying `P1_inf` to `kalman_filter` selects the exact diffuse filter, which
+returns a `DiffuseFilterResult`.
+
+```@docs
+DiffuseFilterResult
+diffuse_period
+diffuse_flags
+diffuse_covariances
+```
+
 ## Kalman Smoother
 
 ```@docs
@@ -69,6 +81,16 @@ ismissing_period
 isincomplete_period
 count_missing_periods
 count_incomplete_periods
+```
+
+## Plotting
+
+With Plots.jl loaded, filter, smoother and forecast results have plot recipes;
+see the Visualization tutorial.
+
+```@docs
+ObservablePlot
+Siphon.confidence_bands
 ```
 
 ## StaticArrays

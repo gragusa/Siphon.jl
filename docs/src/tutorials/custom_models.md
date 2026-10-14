@@ -261,14 +261,12 @@ println("Parameters: ", param_names(spec))
 
 For advanced models where matrix elements depend on parameters in complex ways (e.g., yield curve models), use `MatrixExpr`:
 
-```julia
-struct MatrixExpr
-    params::Vector{SSMParameter}  # Parameters used
-    data::NamedTuple              # Static data (e.g., maturities)
-    builder::Function             # Function to build the matrix
-    dims::Tuple{Int,Int}          # Matrix dimensions
-end
-```
+A `MatrixExpr` holds
+
+- `params`: the `SSMParameter`s the matrix depends on,
+- `data`: a `NamedTuple` of fixed data (for example, maturities),
+- `builder`: a function `(θ, data) -> matrix`, where `θ` maps parameter names to values,
+- `dims`: the size of the matrix.
 
 ### Example: Nelson-Siegel Yield Curve Model
 
@@ -328,12 +326,15 @@ spec = custom_ssm(
 Siphon.jl provides convenience functions for DNS models:
 
 ```julia
-# Build DNS Z matrix directly
-Z = Siphon.build_dns_loadings(maturities, :λ; λ_init=0.0609)
+# DNS loadings as a MatrixExpr with the free decay parameter :λ
+Z = Siphon.build_dns_loadings(maturities; λ_init=0.0609)
 
-# Or Svensson (4-factor) loadings
-Z = Siphon.build_svensson_loadings(maturities, :λ1, :λ2; λ1_init=0.05, λ2_init=0.10)
+# Svensson (4-factor) loadings with decay parameters :λ1 and :λ2
+Z = Siphon.build_svensson_loadings(maturities; λ1_init=0.05, λ2_init=0.10)
 ```
+
+Both return a `MatrixExpr` that can be passed as `Z` to `custom_ssm`.
+[`dns_model`](@ref) builds the complete DNS specification.
 
 ## Putting It All Together: A Complete Example
 

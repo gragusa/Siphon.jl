@@ -1003,8 +1003,31 @@ Other author answers, verbatim:
     - `templates.jl:21-22` (leftover draft text).
   - **Tutorials**: `initial_state.md`, `dynamic_factor.md:194-232,393-401`, `custom_models.md:132`, `estimation_methods.md:86-110`.
   - **README**: make the feature list match the package (EKF, simulation smoother, forecasting, plotting, DFM).
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-031
+- **Cluster**: release
+- **Notes**:
+  - `docs/make.jl`: `checkdocs = :public` (exported + `public` names only) and no `warnonly`, so missing docs and broken cross-references fail the build. The strict build passes. New pages: `api/inplace.md` (workspaces, setters, dims, masks, companion/rank-revealing, simulation smoother, PSD factor) and `api/dfm.md`. Exact diffuse result/accessors and the plotting helpers (`ObservablePlot`, `confidence_bands`) went to `core.md`; `dns_model`, `SSMMatrixSpec`, `param_index`, `uses_exact_diffuse`, `build_kfparms`, `build_initial_state`, `AbstractMatrixExpr`, `CovMatrixExpr` to `dsl.md`; `isconverged`, `niterations`, `isfitted` and the low-level EM layer to `optimization.md`.
+  - Per-method vs whole-binding (open question): whole-binding entries for `kalman_filter!`/`kalman_smoother!` (in `inplace.md`) and `kalman_loglik` (in `core.md`); the `StateSpaceModel` method entries in `optimization.md` were replaced by links. `fit!`/`loglikelihood` pulling in StatsAPI's docstrings does not break the build.
+  - Docstring examples: all 69 fenced blocks in `src/` were checked; runnable ones were executed. Fixed `build_transformation` (`transform` needs `using TransformVariables`; shows `transform_to_constrained`), `optimize_ssm` (`using OptimizationOptimJL: Optim`; `BFGS()` instead of `Newton()`, which warns about second-order AD) and `custom_ekf` (now self-contained, uses the default `ADJacobian()`). The plan's listed line numbers were stale; the other listed examples were already correct.
+  - Tutorials, run block by block (a subagent first, then a rerun after the fixes): removed `include("src/inplace.jl")` (dynamic_factor), fixed `build_*_loadings` calls and the shadowing `struct MatrixExpr` listing (custom_models), `Matrix{Any}`/`;;` in the manual ARMA build and replaced the ARMA MLE-vs-EM section (EM cannot estimate MA coefficients in `R`), internal fields `model.theta_values`/`.converged`/`.iterations`/`.att` → accessors, the Complete DNS Example (6 vs 8 maturities; manual smoothing/forecast → `StateSpaceModel` + `forecast`), Nile `Float64` conversion and missing `spec` (getting_started), the in-place diffuse block, `TransformVariables.transform` import and `var_state` prior name (transformations), the EKF example's pure `measurement_jacobian` (needed by `AnalyticJacobian()` on the functional path) and its quoted loglik. Pseudo-code blocks are left as is.
+  - Still failing, package bugs → new chunks: `estimation_methods.md` DNS MLE blocks (lines ~91/116/174/232) hit CHUNK-042; `fit!(EM())` on `arma(2, 0)` hits CHUNK-043 (the tutorial no longer runs it).
+  - `index.md`: install via URL (not registered), Julia 1.13, feature list, full page list incl. conversion guide; Quick Start uses `parameters(model)`. README: features, a runnable example, docs/conversion-guide pointers.
+  - `docs/Manifest.toml` was re-resolved (the stale manifest failed to load Siphon's `Random` dependency).
+
+### CHUNK-042: fix-static-kernel-numerics
+- **Kind**: `implement`
+- **Description**: Found by CHUNK-032 when running `docs/src/tutorials/estimation_methods.md`. On the DNS example (8 maturities, 3 states, `P1 = 1e7`, H ≈ 1e-4), the static multivariate kernel returns `-Inf` at the starting values and at the profile-EM optimum ("innovation covariance not positive definite in period 2"), while `static = :off` gives 2881 / 3662. Under `static = :auto` this affects `ssm_loglik`, `optimize_ssm`, `fit!(MLE())` and `kalman_filter!(::StateSpaceModel)`. Second defect: `optimize_ssm` then reports `converged = true` with `loglik = -Inf` and θ equal to the starting values, which is a silent failure. Fix the static kernel numerics (see the `inv(cholesky(F))` open question; the dynamic path symmetrizes the filtered covariance, the static one may not), and make MLE throw or warn when the objective is `-Inf` at θ0 or at the returned optimum. Test: the DNS case at `:on` matches `:off`; `optimize_ssm` with a `-Inf` start does not report convergence. Verify by running `estimation_methods.md`.
+- **Status**: `not-started`
+- **Depends on**: CHUNK-032
+- **Cluster**: release
+- **Notes**:
+
+### CHUNK-043: fix-em-arma-smoother-posdef
+- **Kind**: `implement`
+- **Description**: Found by CHUNK-032. `fit!(EM(), StateSpaceModel(arma(2, 0), n), y)` on simulated AR(2) data throws `PosDefException` from `cholesky!` in `_kalman_smoother_cov!` (`inplace.jl` ~1356), called from `em_estimate!`. The ARMA state has H = 0 and a singular R Q Rᵀ. Find which matrix is factorized, make the smoother handle a singular (PSD) covariance or report a clear error, and decide whether EM should support AR templates. Add a regression test.
+- **Status**: `not-started`
+- **Depends on**: CHUNK-032
 - **Cluster**: release
 - **Notes**:
 
@@ -1024,7 +1047,7 @@ Other author answers, verbatim:
 - **Description**: Bump `Project.toml` from 0.1.0 to 0.2.0, the breaking minor release for 0.x. Run the full test suite, Aqua and `detect_ambiguities`, and compare the results with the CHUNK-001 baseline.
 - **Status**: `not-started`
 - **Breaking**: yes
-- **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-033, CHUNK-037, CHUNK-038, CHUNK-039
+- **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-033, CHUNK-037, CHUNK-038, CHUNK-039, CHUNK-042, CHUNK-043
 - **Cluster**: release
 - **Notes**:
 
@@ -1064,18 +1087,19 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-041 (ekf-statespacemodel) → next: CHUNK-030
 - 2026-10-14 CHUNK-030 (remove-dead-exports-and-utilities) → next: CHUNK-031
 - 2026-10-14 CHUNK-031 (annotate-public-api) → next: CHUNK-032
+- 2026-10-14 CHUNK-032 (sync-docs; added CHUNK-042, CHUNK-043) → next: CHUNK-042
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
-- `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
+- (Resolved in CHUNK-032) `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
 - (Resolved in CHUNK-027) `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
-- Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
+- (Resolved in CHUNK-032: whole-binding entries) Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
 - (Resolved in CHUNK-027) `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - (Resolved in CHUNK-031: `julia = "1.13"`; the package targets Julia 1.13+ only) Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
-- The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
+- (Moved to CHUNK-042) The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
 - (Resolved in CHUNK-030) `fit!(MLE(), …; verbose = true)` still prints with `println`; switch to `@info` in CHUNK-030. (The DFM header uses `@info` since CHUNK-020.)
 - `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
@@ -1086,7 +1110,7 @@ Other author answers, verbatim:
 - (Resolved in CHUNK-024) `using Siphon, Distributions` no longer clashes on `loglikelihood`. `test/dsl_tests.jl` still uses `using Distributions: Distributions`, which is now optional.
 - `coeftable` is exported, but without StatsBase loaded `coeftable(model)` is a bare `MethodError`. A `Base.Experimental.register_error_hint` saying "load StatsBase" would make the failure self-explanatory.
 - StatsAPI extras not implemented: `informationmatrix` (observed information only), `response`/`residuals` (from the stored data and `prediction_errors`), `fitted`/`predict(model)` (one-step-ahead predicted observations). There is also no `coef`/`dof` for `DynamicFactorModel`, so `aic(dfm)`/`bic(dfm)` are `MethodError`s.
-- The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
+- (Resolved in CHUNK-032: the build passes) The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
 - (Resolved in CHUNK-030) `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
 - (Resolved in CHUNK-030) `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
 - `SimulationSmootherWorkspace`/`simulation_smoother` and `EMWorkspace` still reject a `DiffuseKalmanWorkspace`. The simulation smoother would need an exact diffuse initial draw (Durbin & Koopman 2002, Section 5 of that paper), and EM would need diffuse cross-lag covariances. These are possible feature chunks.
@@ -1094,3 +1118,6 @@ Other author answers, verbatim:
 - The disturbance smoother rejects exact diffuse output. Supporting it means exporting r⁽⁰⁾/N⁽⁰⁾ (and the diffuse-period u/D terms, Durbin & Koopman Section 5.3) from `_diffuse_smoother_backward!`. It is a possible feature chunk.
 - (Resolved in CHUNK-030) The `_require_filter`/`_fit_hint` messages on an unrun or unfitted EKF model still suggest `fit!(EM(), model, y)`, which throws for EKF specs. Make the hint spec-aware (CHUNK-030 or CHUNK-032).
 - (Resolved in CHUNK-030) `StateSpaceModel` still carries the `kf_workspace_allocated` field and a `Ref{Any}` for the workspaces; CHUNK-030 removes the former. A typed `Union{Nothing, StateSpaceModelWorkspaces{T}}` field would avoid the `Any`.
+- `custom_ssm` reads a `Vector` R as a row (1 × r), so `R = [1.0; FreeParam(:θ1); …]` fails with a `_to_matrix(::Vector{Any})` MethodError; the docs use `;;`. Accepting a column vector for an r-state, 1-shock `R` (or a clearer error) would help.
+- Several template docstrings document `diffuse = true` as "Approximate diffuse (P1 = 1e7)". With small observation variances this P1 makes the innovation covariance badly conditioned (see CHUNK-042); consider whether 1e7 is the right default.
+- `docs/build/` is listed in `.gitignore` but 23 generated files under it are tracked, so every docs build dirties the tree. `git rm -r --cached docs/build` would untrack them.

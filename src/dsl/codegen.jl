@@ -27,8 +27,12 @@ spec = local_level()
 t = build_transformation(spec)
 # t transforms ℝ² → (var_obs = ..., var_level = ...)
 
+using TransformVariables: transform
 θ_nt = transform(t, randn(2))
 # θ_nt is a NamedTuple with positive values
+
+# Without loading TransformVariables, use transform_to_constrained:
+θ_nt, logjac = transform_to_constrained(spec, randn(2))
 ```
 """
 function build_transformation(spec::AbstractSSMSpec)
