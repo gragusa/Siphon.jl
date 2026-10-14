@@ -73,3 +73,9 @@ Siphon.build_nonlinear_state_space
 
 `ssm_loglik(spec, θ, y)`, `optimize_ssm(spec, y)` and `SSMLogDensity(spec, y; prior)`
 accept an `EKFSpec` as well as an `SSMSpec`; see [Optimization](optimization.md).
+
+`StateSpaceModel(spec::EKFSpec, n)` supports `fit!(MLE(), model, y)`,
+`kalman_filter!(model, y)`, the filter and smoother accessors, `forecast(model, h)` and
+the StatsAPI accessors (`coef`, `vcov`, `stderror`, `aic`, …). `fit!(EM(), …)`,
+`disturbance_smoother(model)` and `obs_matrix(model)` throw; `system_matrices(model)`
+returns the `EKFParms`.

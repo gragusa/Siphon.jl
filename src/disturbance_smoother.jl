@@ -346,11 +346,13 @@ end
     disturbance_smoother(model::StateSpaceModel) -> DisturbanceSmootherResult
 
 Smooth the disturbances of `model` at its current parameters, from the filter output it
-stores. Needs `fit!` or `kalman_filter!(model, y)` first. Models with
+stores. Needs `fit!` or `kalman_filter!(model, y)` first. EKF models and models with
 `diffuse = :exact` are not supported.
 """
 function disturbance_smoother(model::StateSpaceModel)
     _require_filter(model)
+    model.spec isa EKFSpec && throw(ArgumentError(
+        "disturbance_smoother: EKF models are not supported."))
     uses_exact_diffuse(model.spec) && throw(ArgumentError(
         "disturbance_smoother: models with diffuse = :exact are not supported."))
     p = build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))

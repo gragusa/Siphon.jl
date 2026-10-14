@@ -228,6 +228,10 @@ function _spec_init(spec::SSMSpec, ::Type{T}) where {T}
     for prm in spec.params))
 end
 
+function _require_em_spec(::EKFSpec, caller::AbstractString)
+    throw(ArgumentError(
+        "$caller does not support EKF models; use fit!(MLE(), ...)."))
+end
 function _require_em_spec(spec::SSMSpec, caller::AbstractString)
     uses_exact_diffuse(spec) && throw(ArgumentError(
         "$caller does not support exact diffuse initialisation (diffuse = :exact). " *

@@ -236,6 +236,13 @@ used to throw. Siphon now exports `LinearMeasurement`, so code that defines its 
 type of that name, as the EKF tutorial used to, should use the built-in one or rename
 its type.
 
+`StateSpaceModel` accepts an `EKFSpec`, for `fit!(MLE())`, filtering, smoothing and
+forecasting; before, an EKF model had to be fitted with `optimize_ssm` and filtered
+through `EKFParms`. The model type gained a second parameter, the specification type:
+`StateSpaceModel{T, S}`. `StateSpaceModel{Float64}` still matches every model with
+`Float64` storage in dispatch and `isa`, but `typeof(model) == StateSpaceModel{Float64}`
+is now `false`.
+
 ### Models with one state and one series
 
 A `KFParms` whose fields are numbers selects the scalar kernel. It returns an ordinary

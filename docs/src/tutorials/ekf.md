@@ -157,6 +157,21 @@ spec = custom_ekf(measurement = mexpr, ...)
 through `asℝ₊`, bounded reals through `as(Real, lo, hi)`, etc.), so you only
 declare bounds on the parameters and the optimizer handles the rest.
 
+An `EKFSpec` also goes into a `StateSpaceModel`, with the same workflow as a linear
+model:
+
+```julia
+model = StateSpaceModel(spec, size(y, 2))
+fit!(MLE(), model, y)
+parameters(model)        # NamedTuple of estimates
+stderror(model)          # observed-information standard errors
+smoothed_states(model)   # extended RTS smoother at the estimates
+forecast(model, 12)      # observation forecasts h(aₙ₊ⱼ, n + j)
+```
+
+`fit!(EM(), …)`, `disturbance_smoother(model)` and `obs_matrix(model)` throw for an
+EKF model, and `static` accepts `:auto` and `:off` only.
+
 ## Worked Example — Shadow-Rate DNS
 
 Opschoor & van der Wel (2024) propose four "smooth shadow-rate" dynamic
@@ -287,8 +302,10 @@ neighbourhood of the true parameter values from the warm-start initial values.
 
 ### Filtered and smoothed state paths
 
-After fitting, build a workspace at the optimum to obtain ``\beta_t`` paths and
-their smoothed counterparts:
+After fitting, `StateSpaceModel(spec, result.θ, n)` followed by
+`kalman_filter!(model, y)` gives the filtered and smoothed paths through the model
+accessors. For the in-place smoother, with cross-lag covariances, build a workspace
+at the optimum:
 
 ```julia
 # Build EKFParms at the optimum

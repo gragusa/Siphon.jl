@@ -585,6 +585,111 @@ end
         prior = ParameterPriors(var_obs = NormalPrior(0.0, 1.0)))
 end
 
+@testset "EKF DSL — StateSpaceModel matches the linear spec" begin
+    s = _ekf_test_linear_setup()
+    kw = (H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, s.m, s.m),
+        Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
+        a1 = zeros(s.m),
+        P1 = 10.0 .* Matrix(I, s.m, s.m))
+    spec_ssm = custom_ssm(; Z = s.Z, kw...)
+    spec_ekf = custom_ekf(; measurement = LinearMeasurement(s.Z), kw...)
+    n = size(s.y, 2)
+    y = copy(s.y)
+    y[:, 10:12] .= NaN
+
+    θ = (σh_1 = 0.1, σh_2 = 0.12, ψ_1 = 0.7, ψ_2 = 0.65, ψ_3 = 0.72,
+        σq_1 = 0.05, σq_2 = 0.04, σq_3 = 0.06)
+    ml = StateSpaceModel(spec_ssm, θ, n)
+    me = StateSpaceModel(spec_ekf, θ, n)
+    @test me isa StateSpaceModel{Float64, typeof(spec_ekf)}
+    @test kalman_filter!(me, y) ≈ kalman_filter!(ml, y) rtol = 1e-12
+    @test kalman_loglik(me, y) ≈ kalman_loglik(ml, y) rtol = 1e-12
+    @test filtered_states(me) ≈ filtered_states(ml) rtol = 1e-10
+    pe, pl = prediction_errors(me), prediction_errors(ml)
+    @test isnan.(pe) == isnan.(pl)
+    @test filter(!isnan, pe) ≈ filter(!isnan, pl) rtol = 1e-10
+    @test Siphon.observed_mask(me) == Siphon.observed_mask(ml)
+    kalman_smoother!(me)
+    @test smoothed_states(me) ≈ smoothed_states(ml) rtol = 1e-10
+    @test smoothed_states_cov(me) ≈ smoothed_states_cov(ml) rtol = 1e-10
+    fe, fl = forecast(me, 4), forecast(ml, 4)
+    @test forecast_observations(fe) ≈ forecast_observations(fl) rtol = 1e-10
+    @test forecast_observations_cov(fe) ≈ forecast_observations_cov(fl) rtol = 1e-10
+    @test system_matrices(me) isa EKFParms
+    @test obs_cov(me) ≈ obs_cov(ml)
+    @test transition_matrix(me) ≈ transition_matrix(ml)
+
+    fit_l = fit!(MLE(), StateSpaceModel(spec_ssm, n), s.y; static = :off)
+    fit_e = fit!(MLE(), StateSpaceModel(spec_ekf, n), s.y)
+    @test isconverged(fit_e)
+    @test loglikelihood(fit_e) ≈ loglikelihood(fit_l) rtol = 1e-6
+    @test coef(fit_e) ≈ coef(fit_l) rtol = 1e-3
+    @test coefnames(fit_e) == coefnames(fit_l)
+    @test dof(fit_e) == dof(fit_l)
+    @test vcov(fit_e) ≈ vcov(fit_l; static = :off) rtol = 1e-2
+    @test aic(fit_e) ≈ aic(fit_l) rtol = 1e-6
+end
+
+@testset "EKF DSL — StateSpaceModel on a nonlinear measurement" begin
+    Random.seed!(7)
+    m, p, n = 2, 3, 60
+    Λ = [1.0 0.0; 1.0 0.5; 1.0 1.0]
+    meas = EKFTestSoftplusMeasurement(Λ, 0.0)
+    spec = custom_ekf(; measurement = meas,
+        H = diag_free(p, :var_obs; init = 0.01, lower = 0.0),
+        T = diag_free(m, :ψ; init = 0.8, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, m, m),
+        Q = diag_free(m, :var_q; init = 0.05, lower = 0.0),
+        a1 = zeros(m),
+        P1 = Matrix(1.0I, m, m))
+    α = zeros(m, n)
+    y = zeros(p, n)
+    for t in 1:n
+        α[:, t] = t == 1 ? 0.3 .* randn(m) : 0.9 .* α[:, t - 1] .+ 0.2 .* randn(m)
+        y[:, t] = Siphon.measurement(meas, α[:, t], t) .+ 0.1 .* randn(p)
+    end
+    θ = (var_obs_1 = 0.01, var_obs_2 = 0.01, var_obs_3 = 0.01,
+        ψ_1 = 0.9, ψ_2 = 0.9, var_q_1 = 0.04, var_q_2 = 0.04)
+    model = StateSpaceModel(spec, θ, n)
+    ll = kalman_filter!(model, y)
+
+    ss = Siphon.build_nonlinear_state_space(spec, θ, y)
+    filt, sm = kalman_filter_and_smooth(ss.p, y, ss.a1, ss.P1)
+    @test ll ≈ loglikelihood(filt)
+    @test filtered_states(model) ≈ filtered_states(filt)
+    @test smoothed_states(model) ≈ smoothed_states(sm)
+    @test smoothed_states_cov(model) ≈ smoothed_states_cov(sm)
+    fc = forecast(model, 3)
+    @test forecast_observations(fc) ≈ forecast_observations(forecast(filt, 3))
+    @test SmootherResult(model) isa SmootherResult
+
+    fitted = fit!(MLE(), StateSpaceModel(spec, n), y)
+    @test isfinite(loglikelihood(fitted))
+    @test loglikelihood(fitted) >= ll - 1e-8
+    @test all(isfinite, stderror(fitted))
+end
+
+@testset "EKF DSL — StateSpaceModel rejects linear-only operations" begin
+    s = _ekf_test_linear_setup()
+    spec = custom_ekf(; measurement = LinearMeasurement(s.Z),
+        H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = 0.7 .* Matrix(1.0I, s.m, s.m), R = Matrix(1.0I, s.m, s.m),
+        Q = 0.05 .* Matrix(1.0I, s.m, s.m), a1 = zeros(s.m),
+        P1 = Matrix(1.0I, s.m, s.m))
+    n = size(s.y, 2)
+    @test_throws "does not support EKF models" fit!(EM(), StateSpaceModel(spec, n), s.y)
+    @test_throws "static = :on is not available for an EKF model" fit!(
+        MLE(), StateSpaceModel(spec, n), s.y; static = :on)
+    model = StateSpaceModel(spec, (σh_1 = 0.1, σh_2 = 0.1), n)
+    @test_throws "Filter not run" smoothed_states(model)
+    kalman_filter!(model, s.y)
+    @test_throws "an EKF model has no observation matrix" obs_matrix(model)
+    @test_throws "EKF models are not supported" disturbance_smoother(model)
+    @test_throws "static must be :auto, :on or :off" kalman_loglik(model, s.y; static = :x)
+end
+
 @testset "EKF DSL — MeasurementExpr nonlinear MLE recovers parameters" begin
     Random.seed!(99)
     λ = 0.069

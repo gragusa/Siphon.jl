@@ -235,7 +235,8 @@ end
 # and the Hessian of the negative log-likelihood in the unconstrained
 # coordinates. The covariance is NaN, with a warning, when that Hessian cannot be
 # inverted or the result has a negative diagonal.
-function _param_vcov(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+function _param_vcov(spec::AbstractSSMSpec, θ::NamedTuple, y::AbstractMatrix,
+        static::Symbol)
     t = build_transformation(spec)
     θ_u = transform_to_unconstrained(spec, θ)
     to_θ(x) = collect(TransformVariables.transform(t, x))

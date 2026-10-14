@@ -3325,11 +3325,15 @@ struct StateSpaceModelWorkspaces{T <: Real}
 end
 
 """
-    StateSpaceModel{T}
+    StateSpaceModel{T, S <: AbstractSSMSpec}
 
-Mutable state-space model container wrapping an SSMSpec.
+Mutable state-space model container wrapping a model specification `S`: an `SSMSpec`
+for a linear model, or an `EKFSpec` for a nonlinear measurement handled by the
+extended Kalman filter.
 
-Supports both MLE and EM estimation.
+Linear models support MLE and EM estimation. EKF models support MLE only:
+`fit!(EM(), ...)` throws. The filter, smoother and forecast accessors work for both;
+`obs_matrix` throws for an EKF model, which has no single observation matrix.
 
 # Usage
 ```julia
@@ -3352,16 +3356,12 @@ s = smoothed_states(model)         # computed on-demand
 fc = forecast(model, 10)
 ```
 
-# Backend Selection for EM
-- If max(n_states, n_obs) > 13: uses in-place KalmanWorkspace (zero allocations)
-- Otherwise: uses pure StaticArrays implementation
-
 # Fields (internal)
 See source for field documentation.
 """
-mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
+mutable struct StateSpaceModel{T <: Real, S <: AbstractSSMSpec} <: AbstractStateSpaceModel
     # Specification
-    spec::SSMSpec
+    spec::S
     n_times::Int
 
     # Fitted parameters
@@ -3392,7 +3392,7 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     smoothed_alpha::Matrix{T}
     smoothed_V::Array{T, 3}
 
-    # In-place workspaces (for large EM)
+    # In-place workspaces for EM; `nothing` for an EKF model
     kf_workspace_allocated::Bool
     workspaces_ref::Base.RefValue{Any}
 
@@ -3402,19 +3402,21 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, n_times::Int)
-    StateSpaceModel{T}(spec::SSMSpec, n_times::Int)
+    StateSpaceModel(spec, n_times::Int)
+    StateSpaceModel{T}(spec, n_times::Int)
 
-Construct a StateSpaceModel from an SSMSpec, with element type `T` (default
-`Float64`).
+Construct a StateSpaceModel from a model specification, with element type `T`
+(default `Float64`).
 
 # Arguments
-- `spec::SSMSpec`: Model specification from DSL (local_level, ar1, custom_ssm, etc.)
+- `spec`: an `SSMSpec` (`local_level`, `ar1`, `custom_ssm`, …) or an `EKFSpec`
+  (`custom_ekf`)
 - `n_times::Int`: Number of time periods
 
 # Behavior
 - Pre-allocates filter storage
-- Pre-allocates the KalmanWorkspace and EMWorkspace used by `fit!(EM(), ...)`
+- For an `SSMSpec`, pre-allocates the KalmanWorkspace and EMWorkspace used by
+  `fit!(EM(), ...)`
 
 # Example
 ```julia
@@ -3423,30 +3425,6 @@ model = StateSpaceModel(spec, 200)
 ```
 """
 function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
-    m = spec.n_states
-    p = spec.n_obs
-    r = spec.n_shocks
-    n = n_times
-
-    # Pre-allocate filter storage
-    at = zeros(T, m, n)
-    Pt = zeros(T, m, m, n)
-    att = zeros(T, m, n)
-    Ptt = zeros(T, m, m, n)
-    vt = zeros(T, p, n)
-    Ft = zeros(T, p, p, n)
-    Kt = zeros(T, m, p, n)
-    missing_mask = falses(n)
-    observed_mask = falses(p, n)
-
-    # Smoother storage (allocated but not valid until computed)
-    smoothed_alpha = zeros(T, m, n)
-    smoothed_V = zeros(T, m, m, n)
-
-    # Parameter storage
-    n_params = length(spec.params)
-    theta_values = zeros(T, n_params)
-
     # Always allocate the in-place Kalman/EM workspace. Benchmarks (see
     # benchmark/em_paths.jl) show in-place EM beats the pure-static path on
     # every model size, including m = p = 1, because the per-iteration
@@ -3461,33 +3439,44 @@ function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
     kfparms = Siphon.build_kfparms(spec, theta_nt)
     a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
 
-    kf_ws = KalmanWorkspace{T}(kfparms, a1_init, P1_init, n)
+    kf_ws = KalmanWorkspace{T}(kfparms, a1_init, P1_init, n_times)
     em_ws = EMWorkspace(kf_ws)
-    workspaces_ref = Ref{Any}(StateSpaceModelWorkspaces{T}(kf_ws, em_ws))
+    return _empty_model(T, spec, n_times, Ref{Any}(StateSpaceModelWorkspaces{T}(kf_ws, em_ws)))
+end
 
-    StateSpaceModel{T}(
+# EKF models are estimated by MLE only, so they have no EM workspace.
+function StateSpaceModel{T}(spec::EKFSpec, n_times::Int) where {T <: Real}
+    return _empty_model(T, spec, n_times, Ref{Any}(nothing))
+end
+
+# A model with zeroed filter and smoother storage, no parameters and no data.
+function _empty_model(::Type{T}, spec::AbstractSSMSpec, n::Int,
+        workspaces_ref::Base.RefValue{Any}) where {T <: Real}
+    m = spec.n_states
+    p = spec.n_obs
+    return StateSpaceModel{T, typeof(spec)}(
         spec,
         n,
-        theta_values,
+        zeros(T, length(spec.params)),  # theta_values
         false,  # theta not fitted
         T(-Inf),
         false,
         false,
         0,
-        at,
-        Pt,
-        att,
-        Ptt,
-        vt,
-        Ft,
-        Kt,
-        missing_mask,
-        observed_mask,
+        zeros(T, m, n),  # at
+        zeros(T, m, m, n),  # Pt
+        zeros(T, m, n),  # att
+        zeros(T, m, m, n),  # Ptt
+        zeros(T, p, n),  # vt
+        zeros(T, p, p, n),  # Ft
+        zeros(T, m, p, n),  # Kt
+        falses(n),  # missing_mask
+        falses(p, n),  # observed_mask
         _NOT_RUN,  # filter_status
         false,
-        smoothed_alpha,
-        smoothed_V,
-        true,  # kf_workspace_allocated: always true now
+        zeros(T, m, n),  # smoothed_alpha
+        zeros(T, m, m, n),  # smoothed_V
+        workspaces_ref[] !== nothing,  # kf_workspace_allocated
         workspaces_ref,
         zeros(T, p, n),
         false
@@ -3495,13 +3484,13 @@ function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int)
-    StateSpaceModel{T}(spec::SSMSpec, θ::NamedTuple, n_times::Int)
+    StateSpaceModel(spec, θ::NamedTuple, n_times::Int)
+    StateSpaceModel{T}(spec, θ::NamedTuple, n_times::Int)
 
 Construct a StateSpaceModel with known (externally provided) parameters.
 
 # Arguments
-- `spec::SSMSpec`: Model specification from DSL
+- `spec`: an `SSMSpec` or `EKFSpec`
 - `θ::NamedTuple`: Parameter values (e.g., `(var_obs=100.0, var_level=50.0)`)
 - `n_times::Int`: Number of time periods
 
@@ -3517,7 +3506,8 @@ spec = local_level()
 model = StateSpaceModel(spec, θ, 200)
 ```
 """
-function StateSpaceModel{T}(spec::SSMSpec, θ::NamedTuple, n_times::Int) where {T <: Real}
+function StateSpaceModel{T}(spec::AbstractSSMSpec, θ::NamedTuple, n_times::Int) where {T <:
+                                                                                       Real}
     # Create base model
     model = StateSpaceModel{T}(spec, n_times)
 
@@ -3532,8 +3522,8 @@ function StateSpaceModel{T}(spec::SSMSpec, θ::NamedTuple, n_times::Int) where {
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, θ_vec::AbstractVector, n_times::Int)
-    StateSpaceModel{T}(spec::SSMSpec, θ_vec::AbstractVector, n_times::Int)
+    StateSpaceModel(spec, θ_vec::AbstractVector, n_times::Int)
+    StateSpaceModel{T}(spec, θ_vec::AbstractVector, n_times::Int)
 
 Construct a StateSpaceModel with known parameters provided as a Vector.
 
@@ -3546,7 +3536,7 @@ spec = local_level()
 model = StateSpaceModel(spec, θ_vec, 200)
 ```
 """
-function StateSpaceModel{T}(spec::SSMSpec, θ_vec::AbstractVector{<:Real},
+function StateSpaceModel{T}(spec::AbstractSSMSpec, θ_vec::AbstractVector{<:Real},
         n_times::Int) where {T <: Real}
     length(θ_vec) == length(spec.params) ||
         throw(ArgumentError("θ_vec length ($(length(θ_vec))) must match number of parameters ($(length(spec.params)))"))
@@ -3558,8 +3548,11 @@ function StateSpaceModel{T}(spec::SSMSpec, θ_vec::AbstractVector{<:Real},
     return StateSpaceModel{T}(spec, θ, n_times)
 end
 
-StateSpaceModel(spec::SSMSpec, n_times::Int) = StateSpaceModel{Float64}(spec, n_times)
-function StateSpaceModel(spec::SSMSpec, θ::Union{NamedTuple, AbstractVector{<:Real}},
+function StateSpaceModel(spec::AbstractSSMSpec, n_times::Int)
+    StateSpaceModel{Float64}(spec, n_times)
+end
+function StateSpaceModel(
+        spec::AbstractSSMSpec, θ::Union{NamedTuple, AbstractVector{<:Real}},
         n_times::Int)
     StateSpaceModel{Float64}(spec, θ, n_times)
 end
@@ -3608,6 +3601,46 @@ end
 
 function _store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult})
     copyto!(mask, filt.observed_mask)
+end
+_store_observed_mask!(mask, filt::EKFFilterResult) = copyto!(mask, _observed_mask(filt))
+
+# Spec-dependent pieces of the model methods: the system container, the filter run
+# and the maximum likelihood fit.
+_model_parms(spec::SSMSpec, θ::NamedTuple) = build_kfparms(spec, θ)
+_model_parms(spec::EKFSpec, θ::NamedTuple) = build_ekfparms(spec, θ)
+
+function _model_filter(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    return _ss_filter(build_linear_state_space(spec, θ, y; static), y)
+end
+function _model_filter(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    _check_ekf_static(static)
+    ss = build_nonlinear_state_space(spec, θ, y)
+    return kalman_filter(ss.p, y, ss.a1, ss.P1)
+end
+
+function _model_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    _spec_loglik(spec, θ, y, static)
+end
+function _model_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    _check_ekf_static(static)
+    return _spec_loglik(spec, θ, y, static)
+end
+
+function _model_optimize(spec::SSMSpec, y, static; kwargs...)
+    optimize_ssm(spec, y; static, kwargs...)
+end
+function _model_optimize(spec::EKFSpec, y, static; kwargs...)
+    _check_ekf_static(static)
+    return optimize_ssm(spec, y; kwargs...)
+end
+
+function _check_ekf_static(static::Symbol)
+    static === :on && throw(ArgumentError(
+        "static = :on is not available for an EKF model, which has no StaticArrays " *
+        "specialization; use static = :auto or :off."))
+    static in (:auto, :off) ||
+        throw(ArgumentError("static must be :auto, :on or :off, got :$(static)"))
+    return nothing
 end
 
 """Copy filter results from KalmanWorkspace to model."""
@@ -3697,6 +3730,7 @@ function vcov(model::StateSpaceModel; static::Symbol = :auto)
     model.has_data || throw(ArgumentError(
         "No data stored in the model. Call fit!(MLE(), model, y), " *
         "fit!(EM(), model, y) or kalman_filter!(model, y) first."))
+    model.spec isa EKFSpec && _check_ekf_static(static)
     V, _ = _param_vcov(model.spec, _ssm_get_theta_namedtuple(model), model.data, static)
     return V
 end
@@ -3754,7 +3788,12 @@ function _ssm_compute_smoother!(model::StateSpaceModel)
     _require_filter(model)
     theta_nt = _ssm_get_theta_namedtuple(model)
 
-    sm = if Siphon.uses_exact_diffuse(model.spec)
+    sm = if model.spec isa EKFSpec
+        # The EKF smoother needs the per-period measurement Jacobians, which the
+        # model does not keep; the filter is rerun on the stored data.
+        ss = build_nonlinear_state_space(model.spec, theta_nt, model.data)
+        kalman_smoother(kalman_filter(ss.p, model.data, ss.a1, ss.P1))
+    elseif Siphon.uses_exact_diffuse(model.spec)
         # The exact diffuse smoother needs the diffuse-period covariances, which
         # the model does not keep; the filter is rerun on the stored data.
         model.has_data || throw(ArgumentError(
@@ -3811,10 +3850,11 @@ end
 # ============================================
 
 """
-    system_matrices(model::StateSpaceModel) -> KFParms
+    system_matrices(model::StateSpaceModel) -> KFParms or EKFParms
 
 Return the system matrices at the fitted parameters as a `KFParms` (fields `Z`, `H`,
-`T`, `R`, `Q`). Throws if the model is not fitted.
+`T`, `R`, `Q`), or as an `EKFParms` for an EKF model, which holds the measurement
+in place of `Z`. Throws if the model is not fitted.
 
 # Example
 ```julia
@@ -3825,7 +3865,14 @@ filt = kalman_filter(p, y, initial_state(model), initial_state_cov(model))
 """
 function system_matrices(model::StateSpaceModel)
     _require_fitted(model)
-    return Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
+    return _model_parms(model.spec, _ssm_get_theta_namedtuple(model))
+end
+
+function obs_matrix(::StateSpaceModel{<:Real, <:EKFSpec})
+    throw(ArgumentError(
+        "an EKF model has no observation matrix; the measurement is " *
+        "system_matrices(model).measurement, and kalman_filter gives its linearisation " *
+        "at each period"))
 end
 
 """
@@ -3862,7 +3909,8 @@ Compute log-likelihood for observations without storing filter results.
 # Arguments
 - `model`: StateSpaceModel with fitted parameters (via constructor with θ or fit!)
 - `y`: Observations (p × n matrix), missing values as NaN
-- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
+- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref).
+  An EKF model accepts `:auto` and `:off` only.
 
 # Returns
 Log-likelihood value (Float64)
@@ -3883,10 +3931,7 @@ function kalman_loglik(
 
     _check_model_obs(model, "kalman_loglik", y)
 
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
-
-    return _ss_loglik(ss, y)
+    return _model_loglik(model.spec, _ssm_get_theta_namedtuple(model), y, static)
 end
 
 """
@@ -3897,7 +3942,8 @@ Run Kalman filter and store results in model.
 # Arguments
 - `model`: StateSpaceModel with fitted parameters
 - `y`: Observations (p × n matrix), missing values as NaN
-- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref)
+- `static`: `:auto`, `:on` or `:off`, passed to [`build_linear_state_space`](@ref).
+  An EKF model accepts `:auto` and `:off` only.
 
 # Returns
 Log-likelihood value (Float64)
@@ -3925,10 +3971,7 @@ function kalman_filter!(
 
     _check_model_obs(model, "kalman_filter!", y)
 
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
-
-    filt = _ss_filter(ss, y)
+    filt = _model_filter(model.spec, _ssm_get_theta_namedtuple(model), y, static)
 
     # Store results
     _ssm_store_filter_results!(model, filt)
@@ -3999,7 +4042,8 @@ filter loop runs without heap allocations and the compiler can unroll.
   - `:off`  — force the dynamic-`Matrix` path. Useful when you do nested
     `ForwardDiff` or want to avoid the per-`Dual{...}` SMatrix recompile.
   The choice affects speed; the estimates agree up to rounding error, which an
-  ill-conditioned innovation covariance amplifies.
+  ill-conditioned innovation covariance amplifies. An EKF model has no static
+  specialization and accepts `:auto` and `:off` only.
 - `method`: Optimization algorithm (default: LBFGS from Optim.jl)
 - `verbose`: Print optimization progress (default: false)
 - Additional kwargs passed to `optimize_ssm`.
@@ -4033,15 +4077,13 @@ function fit!(
     y = _nan_obs(y)
     _check_model_obs(model, "fit!(MLE(), ...)", y)
 
-    result = Siphon.optimize_ssm(model.spec, y; static, kwargs...)
+    result = _model_optimize(model.spec, y, static; kwargs...)
 
     # Store fitted parameters
     _ssm_store_theta!(model, result.θ)
 
     # Run full filter to get filter results
-    theta_nt = _ssm_get_theta_namedtuple(model)
-    ss = Siphon.build_linear_state_space(model.spec, theta_nt, y; static)
-    filt = _ss_filter(ss, y)
+    filt = _model_filter(model.spec, _ssm_get_theta_namedtuple(model), y, static)
 
     # Copy filter results to model storage
     _ssm_store_filter_results!(model, filt)
@@ -4071,7 +4113,9 @@ end
     forecast(model::StateSpaceModel, h::Integer) -> ForecastResult
 
 Forecast the `h` periods after the sample from a fitted model, starting from the
-filtered state of the last period. See [`ForecastResult`](@ref).
+filtered state of the last period. See [`ForecastResult`](@ref). For an EKF model the
+observation forecast is `h(aₙ₊ⱼ, n + j)`, as in
+[`forecast(::AbstractFilterResult, ::Integer)`](@ref).
 
 # Example
 ```julia
@@ -4085,9 +4129,9 @@ function forecast(model::StateSpaceModel, h::Integer)
     _require_fitted(model)
     _require_filter(model)
 
-    kfparms = Siphon.build_kfparms(model.spec, _ssm_get_theta_namedtuple(model))
+    p = _model_parms(model.spec, _ssm_get_theta_namedtuple(model))
     n = model.n_times
-    return _forecast_from_filtered(kfparms, model.att[:, n], model.Ptt[:, :, n], n, h)
+    return _forecast_from_filtered(p, model.att[:, n], model.Ptt[:, :, n], n, h)
 end
 
 # ============================================

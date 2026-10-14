@@ -929,10 +929,17 @@ Other author answers, verbatim:
 ### CHUNK-041: ekf-statespacemodel
 - **Kind**: `implement`
 - **Description**: Split from CHUNK-029. Generalize `StateSpaceModel` to hold an `EKFSpec` (`StateSpaceModel{T, S<:AbstractSSMSpec}`): `StateSpaceModel(ekf_spec, n)`, `fit!(MLE(), model, y)` (via the EKF log-likelihood), `kalman_filter!(model, y)`, `smoothed_states`/`smoothed_states_cov` (via the functional EKF smoother), `forecast(model, h)`, and the StatsAPI accessors that apply. `fit!(EM())` on an EKF spec throws an `ArgumentError`. Linear-only accessors (`obs_matrix`, …) throw as they do on `EKFFilterResult`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-029
 - **Cluster**: missing-operations
 - **Notes**:
+  - `StateSpaceModel{T, S <: AbstractSSMSpec}`; field `spec::S`. A shared `_empty_model` builds the storage. The `SSMSpec` constructor still allocates the Kalman/EM workspaces; the `EKFSpec` one stores `nothing` in `workspaces_ref` (and `kf_workspace_allocated = false`). The θ constructors take any `AbstractSSMSpec`.
+  - Spec dispatch lives in four small helpers in `inplace.jl`: `_model_parms` (`build_kfparms`/`build_ekfparms`), `_model_filter`, `_model_loglik`, `_model_optimize`. `kalman_loglik`, `kalman_filter!`, `fit!(MLE())`, `forecast` and `system_matrices` go through them. For an EKF model, `static = :on` throws, and `:auto`/`:off` are accepted and ignored.
+  - The EKF smoother reruns the functional EKF filter on the stored data, because the model does not keep the per-period Jacobians (same approach as the exact diffuse path).
+  - `_param_vcov` now takes any `AbstractSSMSpec`, so `vcov`/`stderror`/`aic`/… work for EKF models (nested ForwardDiff through `ADJacobian` works).
+  - Throws with clear `ArgumentError`s: `fit!(EM())` (via a `_require_em_spec(::EKFSpec, …)` method), `obs_matrix(model)`, `disturbance_smoother(model)`. `system_matrices(model)` returns the `EKFParms`, so `obs_cov`/`transition_matrix`/`state_cov` work.
+  - Tests (`test/ekf_tests.jl`, 3 new testsets): linear equivalence vs the `custom_ssm` model with missing periods (filter, loglik, prediction errors, smoother, forecast, MLE, vcov, aic); a softplus measurement checked against the functional `kalman_filter_and_smooth`; error messages.
+  - Docs: `tutorials/ekf.md`, `api/ekf.md`, conversion guide (new capability, plus the extra type parameter on `StateSpaceModel`).
 
 ### CHUNK-030: remove-dead-exports-and-utilities
 - **Kind**: `implement`
@@ -1040,6 +1047,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-027 (add-diffuse-smoother) → next: CHUNK-028
 - 2026-10-14 CHUNK-028 (add-disturbance-smoother) → next: CHUNK-029
 - 2026-10-14 CHUNK-029 (add-ekf-smoother-and-model; split, model part → CHUNK-041) → next: CHUNK-041
+- 2026-10-14 CHUNK-041 (ekf-statespacemodel) → next: CHUNK-030
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1068,3 +1076,5 @@ Other author answers, verbatim:
 - `SimulationSmootherWorkspace`/`simulation_smoother` and `EMWorkspace` still reject a `DiffuseKalmanWorkspace`. The simulation smoother would need an exact diffuse initial draw (Durbin & Koopman 2002, Section 5 of that paper), and EM would need diffuse cross-lag covariances. These are possible feature chunks.
 - `_diffuse_step_flag!` keeps the existing criterion `|det Finf| > tol`, which is not scale-invariant (Finf in large units always counts as invertible). A relative criterion, such as the smallest Cholesky pivot relative to the largest, would be more robust.
 - The disturbance smoother rejects exact diffuse output. Supporting it means exporting r⁽⁰⁾/N⁽⁰⁾ (and the diffuse-period u/D terms, Durbin & Koopman Section 5.3) from `_diffuse_smoother_backward!`. It is a possible feature chunk.
+- The `_require_filter`/`_fit_hint` messages on an unrun or unfitted EKF model still suggest `fit!(EM(), model, y)`, which throws for EKF specs. Make the hint spec-aware (CHUNK-030 or CHUNK-032).
+- `StateSpaceModel` still carries the `kf_workspace_allocated` field and a `Ref{Any}` for the workspaces; CHUNK-030 removes the former. A typed `Union{Nothing, StateSpaceModelWorkspaces{T}}` field would avoid the `Any`.
