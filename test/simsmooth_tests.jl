@@ -99,7 +99,7 @@ flattened to a single `m·n` vector so the covariance covers across-period
 dependence as well as within-period.
 """
 function _draw_moments(ws, y, n_draws::Int, seed::Int)
-    D = simulation_smoother(ws, y; rng = Xoshiro(seed), n_draws = n_draws)
+    D = simulation_smoother(ws, y, n_draws; rng = Xoshiro(seed))
     flat = reshape(D, size(D, 1) * size(D, 2), n_draws)
     return vec(mean(flat, dims = 2)), cov(flat, dims = 2)
 end
@@ -255,7 +255,7 @@ end
     y = reshape([0.3, -0.1, 0.8, NaN, 0.2, -0.4], 1, n)
 
     ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
-    draws = simulation_smoother(ws, y; rng = Xoshiro(21), n_draws = 25)
+    draws = simulation_smoother(ws, y, 25; rng = Xoshiro(21))
     for d in 1:25, t in 1:n
 
         if !isnan(y[1, t])
@@ -269,9 +269,9 @@ end
 @testset "simulation smoother — an explicit rng makes a draw reproducible" begin
     s = _simsmooth_setup()
     ws = KalmanWorkspace(s.Z, s.H, s.Tm, s.R, s.Q, s.a1, s.P1, s.n)
-    d1 = simulation_smoother(ws, s.y; rng = Xoshiro(4), n_draws = 3)
-    d2 = simulation_smoother(ws, s.y; rng = Xoshiro(4), n_draws = 3)
-    d3 = simulation_smoother(ws, s.y; rng = Xoshiro(5), n_draws = 3)
+    d1 = simulation_smoother(ws, s.y, 3; rng = Xoshiro(4))
+    d2 = simulation_smoother(ws, s.y, 3; rng = Xoshiro(4))
+    d3 = simulation_smoother(ws, s.y, 3; rng = Xoshiro(5))
     @test d1 == d2
     @test d1 != d3
 end
@@ -281,10 +281,10 @@ end
     ws = KalmanWorkspace(s.Z, s.H, s.Tm, s.R, s.Q, s.a1, s.P1, s.n)
 
     @test size(simulation_smoother(ws, s.y; rng = Xoshiro(1))) == (s.m, s.n)
-    @test size(simulation_smoother(ws, s.y; rng = Xoshiro(1), n_draws = 4)) ==
+    @test size(simulation_smoother(ws, s.y, 4; rng = Xoshiro(1))) ==
           (s.m, s.n, 4)
     @test_throws "n_draws must be at least 1" simulation_smoother(
-        ws, s.y; n_draws = 0)
+        ws, s.y, 0)
 
     sws = SimulationSmootherWorkspace(ws)
     out = zeros(s.m, s.n)

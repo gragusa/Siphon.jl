@@ -854,11 +854,19 @@ Other author answers, verbatim:
   - **`rng`.** Add an `rng` keyword wherever randomness occurs; `forecast_paths` is handled in CHUNK-017 and the DFM constructor in CHUNK-020.
   - **`simulation_smoother`.** Its return type depends on the value of `n_draws` (m×n vs m×n×draws). Make it type-stable: always return 3-D, or offer a separate single-draw method.
   - **Workspace constructors.** `EMWorkspace(ws)` and `SimulationSmootherWorkspace(ws)` should accept a `DiffuseKalmanWorkspace` too, or say why not. `KalmanWorkspace(kf::KFParms, a1, P1, n)` has a wrong docstring.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-012
 - **Cluster**: composability-with-base
 - **Notes**:
+  - **Element type (implementer's call):** a type parameter everywhere, following the constructor cascade in the style guide. New: `StateSpaceModel{T}(spec, n)` / `(spec, θ, n)`, `DynamicFactorModel{T}(N, k, n; …)`, `EMWorkspace{T}(p, m, r, n)`, `SmootherWorkspace{T}(m, n)`, `KalmanWorkspace{T}(Z, …, n)`, `KalmanWorkspace{T}(kf, a1, P1, n)`, `DiffuseKalmanWorkspace{T}(Z, …, n)`. The `T =` keywords and the positional `::Type{T}` arguments are gone. Untyped constructors default to Float64; those taking system arrays use `_float_eltype` (the float of the promoted eltype of every array), so an integer `Z` gives Float64 and a Float32 system gives Float32. `EKFWorkspace(…)` now infers its type the same way instead of always using Float64.
+  - **Bug found:** `StateSpaceModel(spec, n; T = Float32)` used to fail, because its `KalmanWorkspace` was always Float64. `StateSpaceModel{Float32}` now works through MLE and EM fits (tested).
+  - **`rng`:** nothing to add. Every source of randomness (`simulation_smoother`/`simulation_smoother!`, `forecast_paths`, `DynamicFactorModel`) already took `rng`; a grep for `rand` found no other uses.
+  - **`simulation_smoother` (implementer's call):** `simulation_smoother(ws, y; rng)` returns an m × n matrix and `simulation_smoother(ws, y, n_draws; rng)` always returns m × n × n_draws, following the `rand(d)` / `rand(d, n)` convention. Both are `@inferred` in the tests. The `n_draws` keyword is gone.
+  - **Diffuse workspaces:** `EMWorkspace(::DiffuseKalmanWorkspace)`, `SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)` and `simulation_smoother(::DiffuseKalmanWorkspace, …)` throw an `ArgumentError` explaining that they need the smoother, which the exact diffuse filter lacks (CHUNK-027 may lift this for the simulation smoother).
+  - **Docstrings:** `KalmanWorkspace(kf::KFParms, a1, P1, n)` documented correctly; the `KalmanWorkspace(p, m, r, n)` comment that claimed type inference was removed.
+  - **Conversion guide:** new section "Element types and constructors".
+  - **Tests:** `test/construction_tests.jl`; `n_draws =` call sites in the simulation-smoother, companion and singular-innovation tests migrated.
 
 ### CHUNK-027: add-diffuse-smoother
 - **Kind**: `implement`
@@ -999,6 +1007,7 @@ Other author answers, verbatim:
 - 2026-10-13 CHUNK-023 (rework-priors) → next: CHUNK-024
 - 2026-10-14 CHUNK-024 (extend-statsapi-and-logdensityproblems) → next: CHUNK-025
 - 2026-10-14 CHUNK-025 (add-show-equality-hash) → next: CHUNK-026
+- 2026-10-14 CHUNK-026 (unify-construction-conventions) → next: CHUNK-027
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1023,3 +1032,5 @@ Other author answers, verbatim:
 - StatsAPI extras not implemented: `informationmatrix` (observed information only), `response`/`residuals` (from the stored data and `prediction_errors`), `fitted`/`predict(model)` (one-step-ahead predicted observations). There is also no `coef`/`dof` for `DynamicFactorModel`, so `aic(dfm)`/`bic(dfm)` are `MethodError`s.
 - The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
 - `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
+- `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
+- After CHUNK-027 adds a diffuse smoother, `SimulationSmootherWorkspace`/`simulation_smoother` (and possibly `EMWorkspace`) could accept a `DiffuseKalmanWorkspace`; they now throw an `ArgumentError` naming the missing smoother.

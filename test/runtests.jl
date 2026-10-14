@@ -387,6 +387,9 @@ include("statsapi_tests.jl")
 # Display, value equality and hashing
 include("show_tests.jl")
 
+# Element types and constructor conventions
+include("construction_tests.jl")
+
 # Known bugs, pinned with @test_broken
 include("known_bugs_tests.jl")
 

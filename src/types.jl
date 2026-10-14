@@ -247,7 +247,10 @@ Allows in-place computation to avoid allocations when smoothing repeatedly.
 - `N`: Smoothing recursion auxiliary matrix (m × m × n)
 
 # Constructor
-    SmootherWorkspace(m::Int, n::Int, ::Type{T}=Float64) where T
+    SmootherWorkspace(m::Int, n::Int)
+    SmootherWorkspace{T}(m::Int, n::Int)
+
+`T` is the element type (default `Float64`).
 """
 mutable struct SmootherWorkspace{T <: Real}
     alpha::Matrix{T}       # m × n: smoothed states
@@ -256,7 +259,7 @@ mutable struct SmootherWorkspace{T <: Real}
     N::Array{T, 3}          # m × m × n: smoothing recursion auxiliary
 end
 
-function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
+function SmootherWorkspace{T}(m::Int, n::Int) where {T <: Real}
     SmootherWorkspace{T}(
         Matrix{T}(undef, m, n),
         Array{T}(undef, m, m, n),
@@ -264,6 +267,8 @@ function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
         Array{T}(undef, m, m, n)
     )
 end
+
+SmootherWorkspace(m::Int, n::Int) = SmootherWorkspace{Float64}(m, n)
 
 """
     smoothed_states(w::SmootherWorkspace) -> Matrix

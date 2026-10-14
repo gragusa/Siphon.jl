@@ -169,9 +169,12 @@ end
 # ============================================================================
 
 """
+    EKFWorkspace(measurement, jacobian_mode, H, Tmat, R, Q, a1, P1, n)
     EKFWorkspace{T}(measurement, jacobian_mode, H, Tmat, R, Q, a1, P1, n)
 
-Construct an `EKFWorkspace` from system matrices and a measurement model.
+Construct an `EKFWorkspace` from system matrices and a measurement model. The
+element type is `T` when given, and otherwise the floating-point type that holds
+`H`, `Tmat`, `R`, `Q`, `a1` and `P1`.
 
 Dimensions are inferred from `H` (p), `Tmat` (m), and `Q` (r). For
 `ADJacobian()`, builds a `ForwardDiff.JacobianConfig` once and stores it; for
@@ -263,7 +266,7 @@ function EKFWorkspace{T}(
     return ws
 end
 
-# Default T = Float64
+# The element type holds every system array; the measurement model does not take part.
 function EKFWorkspace(
         measurement_model,
         jacobian_mode::AbstractEKFJacobianMode,
@@ -275,8 +278,8 @@ function EKFWorkspace(
         P1::AbstractMatrix,
         n::Int
 )
-    EKFWorkspace{Float64}(measurement_model, jacobian_mode, H, Tmat, R, Q,
-        a1, P1, n)
+    EKFWorkspace{_float_eltype(H, Tmat, R, Q, a1, P1)}(measurement_model, jacobian_mode,
+        H, Tmat, R, Q, a1, P1, n)
 end
 
 """

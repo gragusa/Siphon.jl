@@ -114,6 +114,9 @@ end
     SimulationSmootherWorkspace(ws::KalmanWorkspace)
 
 Build simulation-smoother storage sized to `ws` and factor its `(P1, Q, H)`.
+
+There is no method for a `DiffuseKalmanWorkspace`: each draw runs the smoother,
+and the exact diffuse filter has no smoother.
 """
 function SimulationSmootherWorkspace(ws::KalmanWorkspace{T}) where {T}
     m, p, r, n = ws.state_dim, ws.obs_dim, ws.shock_dim, ws.n_times
@@ -125,6 +128,12 @@ function SimulationSmootherWorkspace(ws::KalmanWorkspace{T}) where {T}
         Vector{T}(undef, m), Vector{T}(undef, r), Vector{T}(undef, p),
         Vector{T}(undef, m), Vector{T}(undef, r), Vector{T}(undef, p)
     )
+end
+
+function SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)
+    throw(ArgumentError("the simulation smoother needs a KalmanWorkspace: each draw " *
+                        "runs the smoother, and DiffuseKalmanWorkspace has no smoother. " *
+                        "Use a KalmanWorkspace with a large P1 instead."))
 end
 
 """
@@ -275,12 +284,12 @@ function simulation_smoother!(
 end
 
 """
-    simulation_smoother(ws::KalmanWorkspace, y; rng=Random.default_rng(), n_draws=1)
+    simulation_smoother(ws::KalmanWorkspace, y; rng=Random.default_rng()) -> Matrix
+    simulation_smoother(ws::KalmanWorkspace, y, n_draws::Integer; rng=Random.default_rng()) -> Array{T,3}
 
-Draw from `p(α₁:ₙ | y₁:ₙ)` and return the draws.
-
-With `n_draws == 1` returns an `m × n` matrix; otherwise an `m × n × n_draws`
-array. The smoothing pass over `y` is shared across draws.
+Draw from `p(α₁:ₙ | y₁:ₙ)`. Without `n_draws`, return one draw as an `m × n`
+matrix; with it, return `n_draws` draws as an `m × n × n_draws` array, sharing
+the smoothing pass over `y` across draws.
 
 `ws` must already carry the model parameters and initial conditions, and is left
 holding filter and smoother results for the last synthetic dataset.
@@ -288,13 +297,22 @@ holding filter and smoother results for the last synthetic dataset.
 # Example
 ```julia
 ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
-draws = simulation_smoother(ws, y; rng = MersenneTwister(1), n_draws = 100)
+draw = simulation_smoother(ws, y; rng = MersenneTwister(1))
+draws = simulation_smoother(ws, y, 100; rng = MersenneTwister(1))
 ```
 """
 function simulation_smoother(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
-        rng::Random.AbstractRNG = Random.default_rng(),
-        n_draws::Integer = 1) where {T}
+        rng::Random.AbstractRNG = Random.default_rng()) where {T}
+    y = _nan_obs(y)
+    sws = SimulationSmootherWorkspace(ws)
+    out = Matrix{T}(undef, ws.state_dim, ws.n_times)
+    return simulation_smoother!(out, sws, ws, y; rng)
+end
+
+function simulation_smoother(
+        ws::KalmanWorkspace{T}, y::AbstractMatrix, n_draws::Integer;
+        rng::Random.AbstractRNG = Random.default_rng()) where {T}
     y = _nan_obs(y)
     n_draws >= 1 || throw(ArgumentError("n_draws must be at least 1, got $n_draws"))
     m, n = ws.state_dim, ws.n_times
@@ -303,16 +321,17 @@ function simulation_smoother(
     kalman_filter_and_smooth!(ws, y; covariances = false)
     α_hat = copy(smoothed_states(ws))
 
-    if n_draws == 1
-        out = Matrix{T}(undef, m, n)
-        return simulation_smoother!(out, sws, ws, y; rng = rng, smoothed = α_hat)
-    end
-
     draws = Array{T, 3}(undef, m, n, n_draws)
     out = Matrix{T}(undef, m, n)
     for d in 1:n_draws
-        simulation_smoother!(out, sws, ws, y; rng = rng, smoothed = α_hat)
+        simulation_smoother!(out, sws, ws, y; rng, smoothed = α_hat)
         copyto!(view(draws, :, :, d), out)
     end
     return draws
+end
+
+# Throws the explanation in `SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)`.
+function simulation_smoother(ws::DiffuseKalmanWorkspace, y::AbstractMatrix, n_draws...;
+        rng::Random.AbstractRNG = Random.default_rng())
+    SimulationSmootherWorkspace(ws)
 end

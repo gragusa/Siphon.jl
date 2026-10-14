@@ -509,3 +509,34 @@ of the spec, and parameters without a prior get a flat one.
 
 All priors are subtypes of `AbstractPrior`. `SSMLogDensity` also accepts a plain
 function `θ -> log p(θ)` as `prior`.
+
+## Element types and constructors
+
+The element type of a workspace or model is a type parameter everywhere. Without
+one, `Float64` is used, or, for constructors that take system matrices, the
+floating-point type that holds all of them.
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `StateSpaceModel(spec, n; T = Float32)` | `StateSpaceModel{Float32}(spec, n)` |
+| `StateSpaceModel(spec, θ, n; T = Float32)` | `StateSpaceModel{Float32}(spec, θ, n)` |
+| `DynamicFactorModel(N, k, n; T = Float32, …)` | `DynamicFactorModel{Float32}(N, k, n; …)` |
+| `Siphon.EMWorkspace(p, m, r, n, Float32)` | `Siphon.EMWorkspace{Float32}(p, m, r, n)` |
+| `SmootherWorkspace(m, n, Float32)` | `SmootherWorkspace{Float32}(m, n)` |
+| `KalmanWorkspace(Z, …)` with an integer `Z`: a `KalmanWorkspace{Int}` | a `KalmanWorkspace{Float64}`; the type holds every argument, not only `Z` |
+| `EKFWorkspace(meas, mode, H, …)`: always `Float64` | the floating-point type of `H`, `Tmat`, `R`, `Q`, `a1`, `P1`; `EKFWorkspace{T}(…)` forces one |
+
+`KalmanWorkspace{T}(Z, H, T, R, Q, a1, P1, n)`, `KalmanWorkspace{T}(kf::KFParms, a1, P1, n)`
+and `DiffuseKalmanWorkspace{T}(…)` set the element type explicitly.
+
+`simulation_smoother` takes the number of draws as a positional argument, so its
+return type no longer depends on a keyword value:
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `simulation_smoother(ws, y)`: `m × n` matrix | unchanged |
+| `simulation_smoother(ws, y; n_draws = k)`: `m × n` when `k == 1`, else `m × n × k` | `simulation_smoother(ws, y, k)`: always `m × n × k` |
+
+`Siphon.EMWorkspace`, `SimulationSmootherWorkspace` and `simulation_smoother` throw
+an `ArgumentError` for a `DiffuseKalmanWorkspace`: they run the smoother, which the
+exact diffuse filter does not have. Use a `KalmanWorkspace` with a large `P1`.

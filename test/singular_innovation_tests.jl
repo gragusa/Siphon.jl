@@ -210,7 +210,7 @@ end
     ws = _workspace(s; rank_revealing = true)
     kalman_filter!(ws, s.y)
 
-    draws = simulation_smoother(ws, s.y; rng = Xoshiro(31), n_draws = 4)
+    draws = simulation_smoother(ws, s.y, 4; rng = Xoshiro(31))
     @test size(draws) == (s.m, s.n, 4)
     @test all(isfinite, draws)
 

@@ -284,16 +284,21 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
     )
 end
 
-# Convenience constructor inferring T from inputs
 KalmanWorkspace(p::Int, m::Int, r::Int, n::Int) = KalmanWorkspace{Float64}(p, m, r, n)
+
+# Floating-point element type able to hold every array in `xs`.
+_float_eltype(xs...) = float(promote_type(map(eltype, xs)...))
 
 """
     KalmanWorkspace(Z, H, T, R, Q, a1, P1, n::Int)
+    KalmanWorkspace{T}(Z, H, T, R, Q, a1, P1, n::Int)
 
-Create workspace from parameter matrices and set parameters.
+Create a workspace for `n` periods holding the system matrices and the initial
+state. The element type is `T` when given, and otherwise the floating-point type
+that holds every argument, so integer matrices give a `KalmanWorkspace{Float64}`.
 """
-function KalmanWorkspace(
-        Z::AbstractMatrix{T},
+function KalmanWorkspace{T}(
+        Z::AbstractMatrix,
         H::AbstractMatrix,
         Tmat::AbstractMatrix,
         R::AbstractMatrix,
@@ -301,7 +306,7 @@ function KalmanWorkspace(
         a1::AbstractVector,
         P1::AbstractMatrix,
         n::Int
-) where {T}
+) where {T <: Real}
     p, m = size(Z)
     r = size(Q, 1)
 
@@ -312,11 +317,26 @@ function KalmanWorkspace(
     return ws
 end
 
-"""
-    KalmanWorkspace(kf::KFParms, n::Int)
+function KalmanWorkspace(Z::AbstractMatrix, H::AbstractMatrix, Tmat::AbstractMatrix,
+        R::AbstractMatrix, Q::AbstractMatrix, a1::AbstractVector, P1::AbstractMatrix,
+        n::Int)
+    T = _float_eltype(Z, H, Tmat, R, Q, a1, P1)
+    return KalmanWorkspace{T}(Z, H, Tmat, R, Q, a1, P1, n)
+end
 
-Create workspace from KFParms.
 """
+    KalmanWorkspace(kf::KFParms, a1, P1, n::Int)
+    KalmanWorkspace{T}(kf::KFParms, a1, P1, n::Int)
+
+Create a workspace for `n` periods from the system matrices in `kf` and the
+initial state `a1`, `P1`. The element type is chosen as in
+`KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)`.
+"""
+function KalmanWorkspace{T}(kf::KFParms, a1::AbstractVector, P1::AbstractMatrix,
+        n::Int) where {T <: Real}
+    KalmanWorkspace{T}(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n)
+end
+
 function KalmanWorkspace(kf::KFParms, a1::AbstractVector, P1::AbstractMatrix, n::Int)
     KalmanWorkspace(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n)
 end
@@ -1555,16 +1575,19 @@ function DiffuseKalmanWorkspace{T}(
 end
 
 function DiffuseKalmanWorkspace(p::Int, m::Int, r::Int, n::Int; tol::Real = 1e-8)
-    DiffuseKalmanWorkspace{Float64}(p, m, r, n; tol = tol)
+    DiffuseKalmanWorkspace{Float64}(p, m, r, n; tol)
 end
 
 """
     DiffuseKalmanWorkspace(Z, H, T, R, Q, a1, P1_star, P1_inf, n; tol=1e-8)
+    DiffuseKalmanWorkspace{T}(Z, H, T, R, Q, a1, P1_star, P1_inf, n; tol=1e-8)
 
-Create workspace from parameter matrices and set parameters.
+Create a workspace for `n` periods holding the system matrices and the exact
+diffuse initial state. The element type is `T` when given, and otherwise the
+floating-point type that holds every argument.
 """
-function DiffuseKalmanWorkspace(
-        Z::AbstractMatrix{T},
+function DiffuseKalmanWorkspace{T}(
+        Z::AbstractMatrix,
         H::AbstractMatrix,
         Tmat::AbstractMatrix,
         R::AbstractMatrix,
@@ -1574,15 +1597,22 @@ function DiffuseKalmanWorkspace(
         P1_inf::AbstractMatrix,
         n::Int;
         tol::Real = 1e-8
-) where {T}
+) where {T <: Real}
     p, m = size(Z)
     r = size(Q, 1)
 
-    ws = DiffuseKalmanWorkspace{T}(p, m, r, n; tol = tol)
+    ws = DiffuseKalmanWorkspace{T}(p, m, r, n; tol)
     set_params!(ws, Z, H, Tmat, R, Q)
     set_initial_diffuse!(ws, a1, P1_star, P1_inf)
 
     return ws
+end
+
+function DiffuseKalmanWorkspace(Z::AbstractMatrix, H::AbstractMatrix,
+        Tmat::AbstractMatrix, R::AbstractMatrix, Q::AbstractMatrix, a1::AbstractVector,
+        P1_star::AbstractMatrix, P1_inf::AbstractMatrix, n::Int; tol::Real = 1e-8)
+    T = _float_eltype(Z, H, Tmat, R, Q, a1, P1_star, P1_inf)
+    return DiffuseKalmanWorkspace{T}(Z, H, Tmat, R, Q, a1, P1_star, P1_inf, n; tol)
 end
 
 # ============================================
@@ -2152,11 +2182,13 @@ mutable struct EMWorkspace{T <: Real}
 end
 
 """
-    EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T}=Float64) where T
+    EMWorkspace(p::Int, m::Int, r::Int, n::Int)
+    EMWorkspace{T}(p::Int, m::Int, r::Int, n::Int)
 
-Create EM workspace with given dimensions.
+Create an EM workspace for `p` series, `m` states, `r` shocks and `n` periods,
+with element type `T` (default `Float64`).
 """
-function EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T} = Float64) where {T}
+function EMWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
     EMWorkspace{T}(
         p,
         m,
@@ -2197,13 +2229,24 @@ function EMWorkspace(p::Int, m::Int, r::Int, n::Int, ::Type{T} = Float64) where 
     )
 end
 
-"""
-    EMWorkspace(kf_ws::KalmanWorkspace{T}) where T
+EMWorkspace(p::Int, m::Int, r::Int, n::Int) = EMWorkspace{Float64}(p, m, r, n)
 
-Create EM workspace matching dimensions of Kalman workspace.
+"""
+    EMWorkspace(kf_ws::KalmanWorkspace)
+
+Create an EM workspace with the dimensions and element type of `kf_ws`.
+
+There is no method for a `DiffuseKalmanWorkspace`: the E-step needs the smoothed
+states, and the exact diffuse filter has no smoother.
 """
 function EMWorkspace(kf_ws::KalmanWorkspace{T}) where {T}
-    EMWorkspace(kf_ws.obs_dim, kf_ws.state_dim, kf_ws.shock_dim, kf_ws.n_times, T)
+    EMWorkspace{T}(kf_ws.obs_dim, kf_ws.state_dim, kf_ws.shock_dim, kf_ws.n_times)
+end
+
+function EMWorkspace(::DiffuseKalmanWorkspace)
+    throw(ArgumentError("EMWorkspace needs a KalmanWorkspace: the E-step uses the " *
+                        "smoothed states, and DiffuseKalmanWorkspace has no smoother. " *
+                        "Use a KalmanWorkspace with a large P1 instead."))
 end
 
 # ============================================
@@ -3295,16 +3338,15 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real}=Float64)
+    StateSpaceModel(spec::SSMSpec, n_times::Int)
+    StateSpaceModel{T}(spec::SSMSpec, n_times::Int)
 
-Construct a StateSpaceModel from an SSMSpec.
+Construct a StateSpaceModel from an SSMSpec, with element type `T` (default
+`Float64`).
 
 # Arguments
 - `spec::SSMSpec`: Model specification from DSL (local_level, ar1, custom_ssm, etc.)
 - `n_times::Int`: Number of time periods
-
-# Keyword Arguments
-- `T::Type{<:Real}`: Element type (default: Float64)
 
 # Behavior
 - Pre-allocates filter storage
@@ -3316,7 +3358,7 @@ spec = local_level()
 model = StateSpaceModel(spec, 200)
 ```
 """
-function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
+function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
     m = spec.n_states
     p = spec.n_obs
     r = spec.n_shocks
@@ -3355,16 +3397,7 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
     kfparms = Siphon.build_kfparms(spec, theta_nt)
     a1_init, P1_init = Siphon.build_initial_state(spec, theta_nt)
 
-    kf_ws = KalmanWorkspace(
-        kfparms.Z,
-        kfparms.H,
-        kfparms.T,
-        kfparms.R,
-        kfparms.Q,
-        a1_init,
-        P1_init,
-        n
-    )
+    kf_ws = KalmanWorkspace{T}(kfparms, a1_init, P1_init, n)
     em_ws = EMWorkspace(kf_ws)
     workspaces_ref = Ref{Any}(StateSpaceModelWorkspaces{T}(kf_ws, em_ws))
 
@@ -3398,7 +3431,8 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:Real}=Float64)
+    StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int)
+    StateSpaceModel{T}(spec::SSMSpec, θ::NamedTuple, n_times::Int)
 
 Construct a StateSpaceModel with known (externally provided) parameters.
 
@@ -3419,9 +3453,9 @@ spec = local_level()
 model = StateSpaceModel(spec, θ, 200)
 ```
 """
-function StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:Real} = Float64)
+function StateSpaceModel{T}(spec::SSMSpec, θ::NamedTuple, n_times::Int) where {T <: Real}
     # Create base model
-    model = StateSpaceModel(spec, n_times; T = T)
+    model = StateSpaceModel{T}(spec, n_times)
 
     # Store parameters
     _ssm_store_theta!(model, θ)
@@ -3434,7 +3468,8 @@ function StateSpaceModel(spec::SSMSpec, θ::NamedTuple, n_times::Int; T::Type{<:
 end
 
 """
-    StateSpaceModel(spec::SSMSpec, θ_vec::Vector, n_times::Int; T::Type{<:Real}=Float64)
+    StateSpaceModel(spec::SSMSpec, θ_vec::AbstractVector, n_times::Int)
+    StateSpaceModel{T}(spec::SSMSpec, θ_vec::AbstractVector, n_times::Int)
 
 Construct a StateSpaceModel with known parameters provided as a Vector.
 
@@ -3447,7 +3482,8 @@ spec = local_level()
 model = StateSpaceModel(spec, θ_vec, 200)
 ```
 """
-function StateSpaceModel(spec::SSMSpec, θ_vec::AbstractVector{<:Real}, n_times::Int; T::Type{<:Real} = Float64)
+function StateSpaceModel{T}(spec::SSMSpec, θ_vec::AbstractVector{<:Real},
+        n_times::Int) where {T <: Real}
     length(θ_vec) == length(spec.params) ||
         throw(ArgumentError("θ_vec length ($(length(θ_vec))) must match number of parameters ($(length(spec.params)))"))
 
@@ -3455,7 +3491,13 @@ function StateSpaceModel(spec::SSMSpec, θ_vec::AbstractVector{<:Real}, n_times:
     names = Tuple(prm.name for prm in spec.params)
     θ = NamedTuple{names}(Tuple(θ_vec))
 
-    return StateSpaceModel(spec, θ, n_times; T = T)
+    return StateSpaceModel{T}(spec, θ, n_times)
+end
+
+StateSpaceModel(spec::SSMSpec, n_times::Int) = StateSpaceModel{Float64}(spec, n_times)
+function StateSpaceModel(spec::SSMSpec, θ::Union{NamedTuple, AbstractVector{<:Real}},
+        n_times::Int)
+    StateSpaceModel{Float64}(spec, θ, n_times)
 end
 
 # ============================================
@@ -4631,9 +4673,11 @@ end
 """
     DynamicFactorModel(n_obs::Int, n_factors::Int, n_times::Int;
                        loading_lags::Int=0, factor_lags::Int=1, error_lags::Int=0,
-                       T::Type{<:Real}=Float64, rng::AbstractRNG=Random.default_rng())
+                       rng::AbstractRNG=Random.default_rng())
+    DynamicFactorModel{T}(n_obs, n_factors, n_times; kwargs...)
 
-Construct a dynamic factor model with pre-allocated workspaces.
+Construct a dynamic factor model with pre-allocated workspaces and element type
+`T` (default `Float64`).
 
 # Arguments
 - `n_obs`: Number of observables (N)
@@ -4644,7 +4688,6 @@ Construct a dynamic factor model with pre-allocated workspaces.
 - `loading_lags`: Lags in λ(L), p=0 means static loadings (default: 0)
 - `factor_lags`: Lags in factor VAR Ψ(L) (default: 1)
 - `error_lags`: Lags in AR errors δ(L), r=0 means white noise (default: 0)
-- `T`: Element type for matrices (default: Float64)
 - `rng`: Random number generator for the starting values of the contemporaneous
   loadings (default: `Random.default_rng()`)
 
@@ -4657,16 +4700,15 @@ Construct a dynamic factor model with pre-allocated workspaces.
 model = DynamicFactorModel(100, 6, 200; factor_lags=3)
 ```
 """
-function DynamicFactorModel(
+function DynamicFactorModel{T}(
         n_obs::Int,
         n_factors::Int,
         n_times::Int;
         loading_lags::Int = 0,
         factor_lags::Int = 1,
         error_lags::Int = 0,
-        T::Type{<:Real} = Float64,
         rng::AbstractRNG = Random.default_rng()
-)
+) where {T <: Real}
     n_obs >= 1 || throw(ArgumentError("n_obs must be at least 1, got $n_obs"))
     n_factors >= 1 || throw(ArgumentError("n_factors must be at least 1, got $n_factors"))
     n_times >= 2 || throw(ArgumentError("n_times must be at least 2, got $n_times"))
@@ -4688,6 +4730,10 @@ function DynamicFactorModel(
         T(-Inf),         # loglik
         T[]              # loglik_history
     )
+end
+
+function DynamicFactorModel(n_obs::Int, n_factors::Int, n_times::Int; kwargs...)
+    DynamicFactorModel{Float64}(n_obs, n_factors, n_times; kwargs...)
 end
 
 # ============================================

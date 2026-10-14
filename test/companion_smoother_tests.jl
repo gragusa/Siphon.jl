@@ -290,8 +290,8 @@ end
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
 
-    dg = simulation_smoother(wg, s.y; rng = Xoshiro(11), n_draws = 3)
-    dc = simulation_smoother(wc, s.y; rng = Xoshiro(11), n_draws = 3)
+    dg = simulation_smoother(wg, s.y, 3; rng = Xoshiro(11))
+    dc = simulation_smoother(wc, s.y, 3; rng = Xoshiro(11))
 
     @test maximum(abs, dg - dc) < 1e-12 * max(1, maximum(abs, dg))
 end
@@ -306,8 +306,8 @@ end
     wc = _companion_workspace(s; block = s.nser)
 
     nd = 4000
-    dg = simulation_smoother(wg, s.y; rng = Xoshiro(13), n_draws = nd)
-    dc = simulation_smoother(wc, s.y; rng = Xoshiro(13), n_draws = nd)
+    dg = simulation_smoother(wg, s.y, nd; rng = Xoshiro(13))
+    dc = simulation_smoother(wc, s.y, nd; rng = Xoshiro(13))
     fg = reshape(dg, s.m * s.n, nd)
     fc = reshape(dc, s.m * s.n, nd)
 
