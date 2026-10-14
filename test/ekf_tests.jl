@@ -683,7 +683,9 @@ end
     @test_throws "static = :on is not available for an EKF model" fit!(
         MLE(), StateSpaceModel(spec, n), s.y; static = :on)
     model = StateSpaceModel(spec, (σh_1 = 0.1, σh_2 = 0.1), n)
-    @test_throws "Filter not run" smoothed_states(model)
+    @test_throws "Filter not run. Call fit!(MLE(), model, y), or kalman_filter!" smoothed_states(model)
+    @test_throws "Model not fitted. Call fit!(MLE(), model, y) first." coef(
+        StateSpaceModel(spec, n))
     kalman_filter!(model, s.y)
     @test_throws "an EKF model has no observation matrix" obs_matrix(model)
     @test_throws "EKF models are not supported" disturbance_smoother(model)

@@ -18,8 +18,6 @@ Siphon.measurement!(out, m::ConstructionTestMeasurement, a, t) = mul!(out, m.Z, 
     @test DiffuseKalmanWorkspace{Float32}(1, 2, 2, 5) isa DiffuseKalmanWorkspace{Float32}
     @test Siphon.EMWorkspace(1, 2, 2, 5) isa Siphon.EMWorkspace{Float64}
     @test Siphon.EMWorkspace{Float32}(1, 2, 2, 5) isa Siphon.EMWorkspace{Float32}
-    @test SmootherWorkspace(2, 5) isa SmootherWorkspace{Float64}
-    @test SmootherWorkspace{Float32}(2, 5) isa SmootherWorkspace{Float32}
 end
 
 @testset "Element type: from system matrices" begin

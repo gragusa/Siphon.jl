@@ -128,6 +128,9 @@ Estimation that ends without converging now warns. Pass `warn = false` to silenc
 
 `isconverged(model)` and the `converged` fields are unchanged.
 
+`fit!(MLE(), model, y; verbose = true)` reports the final log-likelihood and
+convergence flag through `@info` instead of printing to standard output.
+
 ## Missing data
 
 Every filter, smoother, forecasting function and estimator now accepts observations
@@ -329,7 +332,7 @@ Every function that builds a linear system from a spec takes one keyword,
 - `fit!(MLE(), model, y)`, `kalman_loglik(model, y)` and `kalman_filter!(model, y)`.
 
 `:auto` uses StaticArrays when the numbers of states, observed series and shocks are all
-at most `STATIC_THRESHOLD` (13). The conversion covers all system matrices and the
+at most `Siphon.STATIC_THRESHOLD` (13). The conversion covers all system matrices and the
 initial state, or none of them. The choice affects speed. Results agree up to rounding
 error, which an ill-conditioned innovation covariance (for example under a large
 approximate diffuse `P1`) can amplify.
@@ -338,11 +341,12 @@ approximate diffuse `P1`) can amplify.
 |:-----------|:----|
 | `use_static = true` (DSL functions, `SSMLogDensity`) | `static = :auto` (the default) |
 | `use_static = false` | `static = :off` |
-| `fit!(MLE(), …; static, static_threshold = k)` | `fit!(MLE(), …; static)`; the threshold is fixed at `STATIC_THRESHOLD` |
+| `fit!(MLE(), …; static, static_threshold = k)` | `fit!(MLE(), …; static)`; the threshold is fixed at `Siphon.STATIC_THRESHOLD` |
 | `EKFLogDensity(spec, y; use_static)`, `optimize_ssm(::EKFSpec, y; use_static)`, `build_nonlinear_state_space(…; use_static)` | no keyword: the extended Kalman filter has no StaticArrays specialization |
 | `KFParms_static(Z, H, T, R, Q)` | `build_linear_state_space(spec, θ, y).p`, or `KFParms(SMatrix{m, n}(Z), …)` |
 | `to_static_if_small(x)` | `SMatrix{m, n}(x)` / `SVector{n}(x)` from StaticArrays |
 | `select_backend(n_states, n_obs, backend)` | removed |
+| `STATIC_THRESHOLD` (exported) | `Siphon.STATIC_THRESHOLD` (not exported) |
 | `backend(model)`, `model.backend` | removed; `isfitted(model)` reports whether the model was fitted |
 
 Changed behavior:
@@ -438,6 +442,18 @@ in `Siphon` itself, with the same exported names.
 | `Siphon.DSL.build_kfparms`, `Siphon.DSL.build_initial_state`, `Siphon.DSL.param_index` | `Siphon.build_kfparms`, `Siphon.build_initial_state`, `Siphon.param_index` (not exported) |
 | A matrix element given as an `Expr` in an `SSMMatrixSpec` | a `MatrixExpr` for the whole matrix |
 | Any object with `params`, `builder` and `dims` fields passed as a matrix to `custom_ssm` | a `MatrixExpr` |
+
+## Removed names and utilities
+
+| Siphon 0.1 | Now |
+|:-----------|:----|
+| `SmootherWorkspace(m, n)` | removed; no function filled it. Smooth with `kalman_smoother` or with `kalman_smoother!(ws)` on a `KalmanWorkspace` |
+| `ParamExpr(params, data, expr)` | removed; no matrix specification accepted it. Use `MatrixExpr` for a matrix that depends on parameters and data |
+| `confidence_bands(mean, var, level)` (exported) | `Siphon.confidence_bands` (not exported); `forecast_interval` for forecasts |
+| `quantile_normal(p)` | removed; `quantile(Normal(), p)` from Distributions |
+| `select_vars(vars, n)` | removed; the plot recipes still accept the same `vars` keyword |
+| `Siphon.numstates(T)`, `Siphon.nummeasur(Z)` | `size(T, 1)`, `size(Z, 1)` |
+| `model.kf_workspace_allocated`, `model.workspaces_ref[]` (internal fields of `StateSpaceModel`) | removed; `model.workspaces` holds the EM workspaces, or `nothing` for an EKF model |
 
 ## Free parameters and matrix helpers
 
@@ -544,7 +560,6 @@ floating-point type that holds all of them.
 | `StateSpaceModel(spec, θ, n; T = Float32)` | `StateSpaceModel{Float32}(spec, θ, n)` |
 | `DynamicFactorModel(N, k, n; T = Float32, …)` | `DynamicFactorModel{Float32}(N, k, n; …)` |
 | `Siphon.EMWorkspace(p, m, r, n, Float32)` | `Siphon.EMWorkspace{Float32}(p, m, r, n)` |
-| `SmootherWorkspace(m, n, Float32)` | `SmootherWorkspace{Float32}(m, n)` |
 | `KalmanWorkspace(Z, …)` with an integer `Z`: a `KalmanWorkspace{Int}` | a `KalmanWorkspace{Float64}`; the type holds every argument, not only `Z` |
 | `EKFWorkspace(meas, mode, H, …)`: always `Float64` | the floating-point type of `H`, `Tmat`, `R`, `Q`, `a1`, `P1`; `EKFWorkspace{T}(…)` forces one |
 

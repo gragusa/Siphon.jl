@@ -89,7 +89,7 @@ const P1_cov = [1e7;;]
     @testset "forecast_interval" begin
         fc = forecast(p_cov, y_cov, a1_cov, P1_cov, 3)
         lo, hi = forecast_interval(fc, 0.9)
-        z = Siphon.quantile_normal(0.95)
+        z = Siphon._quantile_normal(0.95)
         @test lo ≈ fc.yhat .- z .* sqrt.(fc.F[1, 1, :])'
         @test hi ≈ fc.yhat .+ z .* sqrt.(fc.F[1, 1, :])'
         slo, shi = forecast_interval(fc; what = :states)
@@ -184,7 +184,7 @@ const P1_cov = [1e7;;]
 
         # One observable dimension above the threshold keeps every array dynamic,
         # including the 1 × 1 state arrays.
-        p_big = STATIC_THRESHOLD + 1
+        p_big = Siphon.STATIC_THRESHOLD + 1
         spec_big = custom_ssm(
             Z = ones(p_big, 1),
             H = Matrix(1.0I, p_big, p_big),
@@ -256,3 +256,16 @@ const P1_cov = [1e7;;]
         @test size(smoothed_states_cov(model)) == (1, 1, n)
     end
 end # API coverage
+
+@testset "Removed and unexported names" begin
+    for name in (:SmootherWorkspace, :ParamExpr, :numstates, :nummeasur,
+        :quantile_normal, :select_vars)
+        @test !isdefined(Siphon, name)
+    end
+    for name in (:STATIC_THRESHOLD, :confidence_bands)
+        @test isdefined(Siphon, name)
+        @test !Base.isexported(Siphon, name)
+    end
+    model = StateSpaceModel(local_level(), 10)
+    @test model.workspaces isa Siphon.StateSpaceModelWorkspaces{Float64}
+end

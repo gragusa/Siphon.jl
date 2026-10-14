@@ -484,7 +484,7 @@ end
     fit!(EM(), model, y; maxiter = 100, tol = 1e-8)
 
     # The workspace's Z and T must remain at their spec-fixed values.
-    kf_ws = model.workspaces_ref[].kf_ws
+    kf_ws = model.workspaces.kf_ws
     @test kf_ws.Z[1, 1] ≈ 1.0 atol = 0
     @test kf_ws.Tmat[1, 1] ≈ 1.0 atol = 0
 
@@ -517,7 +517,7 @@ end
     model = StateSpaceModel(spec, n)
     fit!(EM(), model, y; maxiter = 30, tol = 0.0)
 
-    kf_ws = model.workspaces_ref[].kf_ws
+    kf_ws = model.workspaces.kf_ws
     @test kf_ws.Z[1, 2] == 0.0   # column 2 of Z stays zero
     @test kf_ws.Z[2, 2] == 0.0
     # And the structurally-fixed T elements stay put.
@@ -583,7 +583,7 @@ end
     model = StateSpaceModel(spec, n)
     fit!(EM(), model, y; maxiter = 50, tol = 1e-8)
 
-    kf_ws = model.workspaces_ref[].kf_ws
+    kf_ws = model.workspaces.kf_ws
     @test kf_ws.a1[1] == 0.0
     @test kf_ws.P1[1, 1] == 1e7
 end
@@ -628,7 +628,7 @@ end
 
     # The fitted (a1, P1) in the workspace match the parameters that
     # fit!(EM()) stores on the model.
-    kf_ws = model.workspaces_ref[].kf_ws
+    kf_ws = model.workspaces.kf_ws
     @test kf_ws.a1[1] ≈ θ.mu0
     @test kf_ws.P1[1, 1] ≈ θ.p0
 
@@ -697,7 +697,7 @@ end
     model = StateSpaceModel(spec, n)
     fit!(EM(), model, y; maxiter = 30, tol = 0.0)
 
-    kf_ws = model.workspaces_ref[].kf_ws
+    kf_ws = model.workspaces.kf_ws
     # Fixed cells unchanged
     @test kf_ws.P1[2, 2] == 10.0
     @test kf_ws.P1[1, 2] == 0.0

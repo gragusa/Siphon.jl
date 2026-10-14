@@ -53,13 +53,6 @@ function _check_system_dims(caller, Z::AbstractMatrix, H::AbstractMatrix,
 end
 _check_system_dims(caller, Z, H, T, R, Q) = nothing
 
-# Size utilities
-numstates(T::AbstractMatrix) = size(T, 1)
-numstates(T::Real) = 1
-
-nummeasur(Z::AbstractMatrix) = size(Z, 1)
-nummeasur(Z::Real) = 1
-
 # ============================================
 # StaticArrays specialization
 # ============================================
@@ -78,7 +71,7 @@ const STATIC_THRESHOLD = 13
 
 Resolve the `static = :auto | :on | :off` keyword accepted by the spec-level
 entry points. `:auto` selects StaticArrays when every dimension is at most
-[`STATIC_THRESHOLD`](@ref); `:on` forces them, warning above the threshold.
+[`Siphon.STATIC_THRESHOLD`](@ref); `:on` forces them, warning above the threshold.
 """
 function _use_static(static::Symbol, n_states::Integer, n_obs::Integer, n_shocks::Integer)
     max_dim = max(n_states, n_obs, n_shocks)
@@ -87,7 +80,7 @@ function _use_static(static::Symbol, n_states::Integer, n_obs::Integer, n_shocks
     elseif static === :on
         if max_dim > STATIC_THRESHOLD
             @warn "static = :on requested but the model has dimension $(max_dim) > " *
-                  "STATIC_THRESHOLD = $(STATIC_THRESHOLD). StaticArrays above this " *
+                  "Siphon.STATIC_THRESHOLD = $(STATIC_THRESHOLD). StaticArrays above this " *
                   "size typically lose to BLAS and compile slowly; consider " *
                   "static = :auto or :off." maxlog = 1
         end
@@ -228,61 +221,6 @@ observed_mask(r::KalmanFilterResult) = _require_output(r, :observed_mask).observ
 Return the indices of the rows observed in period `t`, in increasing order.
 """
 observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
-
-# ============================================
-# SmootherWorkspace - Pre-allocated smoother storage
-# ============================================
-
-"""
-    SmootherWorkspace{T<:Real}
-
-Pre-allocated workspace for Kalman smoother operations.
-
-Allows in-place computation to avoid allocations when smoothing repeatedly.
-
-# Fields
-- `alpha`: Smoothed state means E[αₜ | y₁:ₙ] (m × n)
-- `V`: Smoothed state covariances Var[αₜ | y₁:ₙ] (m × m × n)
-- `r`: Smoothing recursion auxiliary vector (m × n)
-- `N`: Smoothing recursion auxiliary matrix (m × m × n)
-
-# Constructor
-    SmootherWorkspace(m::Int, n::Int)
-    SmootherWorkspace{T}(m::Int, n::Int)
-
-`T` is the element type (default `Float64`).
-"""
-mutable struct SmootherWorkspace{T <: Real}
-    alpha::Matrix{T}       # m × n: smoothed states
-    V::Array{T, 3}          # m × m × n: smoothed covariances
-    r::Matrix{T}           # m × n: smoothing recursion auxiliary
-    N::Array{T, 3}          # m × m × n: smoothing recursion auxiliary
-end
-
-function SmootherWorkspace{T}(m::Int, n::Int) where {T <: Real}
-    SmootherWorkspace{T}(
-        Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n),
-        Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n)
-    )
-end
-
-SmootherWorkspace(m::Int, n::Int) = SmootherWorkspace{Float64}(m, n)
-
-"""
-    smoothed_states(w::SmootherWorkspace) -> Matrix
-
-Return smoothed state means E[αₜ | y₁:ₙ] from workspace.
-"""
-smoothed_states(w::SmootherWorkspace) = w.alpha
-
-"""
-    smoothed_states_cov(w::SmootherWorkspace) -> Array{T,3}
-
-Return smoothed state covariances Var[αₜ | y₁:ₙ] from workspace.
-"""
-smoothed_states_cov(w::SmootherWorkspace) = w.V
 
 # ============================================
 # DiffuseFilterResult - Exact diffuse initialization

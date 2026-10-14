@@ -74,5 +74,5 @@ count_incomplete_periods
 ## StaticArrays
 
 ```@docs
-STATIC_THRESHOLD
+Siphon.STATIC_THRESHOLD
 ```

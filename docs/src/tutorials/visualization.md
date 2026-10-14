@@ -271,5 +271,4 @@ The default color scheme uses consistent colors across plot types:
 
 ### Helper Functions
 
-- `confidence_bands`: Compute confidence interval bounds
-- `select_vars`: Parse variable selection keywords
+- `Siphon.confidence_bands`: Compute confidence interval bounds

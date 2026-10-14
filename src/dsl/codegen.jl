@@ -432,7 +432,7 @@ Accepts either a Vector or NamedTuple of parameters.
 - `y`: Observations (used for dimension inference in some models)
 - `static::Symbol=:auto`: Whether to store the system as StaticArrays, which lets
   the filter run without heap allocations. `:auto` does so when the numbers of
-  states, observed series and shocks are all at most [`STATIC_THRESHOLD`](@ref);
+  states, observed series and shocks are all at most [`Siphon.STATIC_THRESHOLD`](@ref);
   `:on` and `:off` force the choice. All matrices and the initial state are
   converted together. Exact diffuse models are never converted, and `:on` throws
   for them.

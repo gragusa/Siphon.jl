@@ -12,14 +12,9 @@ using RecipesBase
 # Helper Functions
 # ============================================================================
 
-"""
-    quantile_normal(p::Real)
-
-Quantile (inverse CDF) of the standard normal distribution: the `z` with
-`P(Z ≤ z) = p` for `Z ~ N(0, 1)`. Requires `0 < p < 1`.
-"""
-function quantile_normal(p::Real)
-    0 < p < 1 || throw(DomainError(p, "quantile_normal requires 0 < p < 1"))
+# Standard normal quantile: the `z` with `P(Z ≤ z) = p` for `Z ~ N(0, 1)`.
+function _quantile_normal(p::Real)
+    0 < p < 1 || throw(DomainError(p, "the normal quantile requires 0 < p < 1"))
     return -sqrt(oftype(float(p), 2)) * erfcinv(2 * p)
 end
 
@@ -82,33 +77,12 @@ end
 
 function _band_quantile(level::Real)
     0 < level < 1 || throw(DomainError(level, "confidence level must be in (0, 1)"))
-    return quantile_normal((1 + level) / 2)
+    return _quantile_normal((1 + level) / 2)
 end
 
-"""
-    select_vars(vars, n_vars::Int) -> AbstractVector{Int}
-
-Parse variable selection keyword into vector of indices.
-
-# Arguments
-- `vars`: Variable selection - can be:
-  - `:all` or `nothing`: Select all variables (1:n_vars)
-  - `Int`: Single variable index
-  - `Vector{Int}` or `AbstractRange`: Multiple variable indices
-- `n_vars`: Total number of variables available
-
-# Returns
-- Vector or range of selected variable indices
-
-# Examples
-```julia
-select_vars(:all, 5)     # 1:5
-select_vars(3, 5)        # [3]
-select_vars([1,3], 5)    # [1, 3]
-select_vars(2:4, 5)      # 2:4
-```
-"""
-function select_vars(vars, n_vars::Int)
+# Indices selected by a `vars` plot keyword: `:all`/`nothing` (every index), an
+# integer, a vector of integers or a range, each checked against `1:n_vars`.
+function _select_vars(vars, n_vars::Int)
     if vars === :all || vars === nothing
         return 1:n_vars
     elseif vars isa Integer
@@ -232,7 +206,7 @@ plot(result, filtered=false)    # Predicted instead of filtered
     end
 
     m, n = size(states)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -342,7 +316,7 @@ plot(ws, vars=1, level=0.90)    # State 1 with 90% CI
     end
 
     m, n = size(states)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -421,7 +395,7 @@ plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
     V = result.Vs
 
     m, n = size(alpha)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -510,7 +484,7 @@ plot(fc, level=0.90)               # 90% CI
     end
 
     dim, h = size(means)
-    var_indices = select_vars(vars, dim)
+    var_indices = _select_vars(vars, dim)
     n_vars = length(var_indices)
 
     time_axis = get(plotattributes, :time, nothing)
@@ -586,7 +560,7 @@ plot(kalman_filter_and_smooth(p, y, a1, P1), vars=1)  # Compare state 1
     time_axis = get(plotattributes, :time, nothing)
 
     m, n = size(filt.att)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -697,7 +671,7 @@ plot(result, ObservablePlot, actual=y)      # With actual data overlay
     # Compute predictions
     yhat = Z * at  # p × n
 
-    var_indices = select_vars(vars, p_obs)
+    var_indices = _select_vars(vars, p_obs)
     n_vars = length(var_indices)
 
     t_axis = time_axis !== nothing ? time_axis : 1:n

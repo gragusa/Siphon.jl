@@ -27,8 +27,8 @@ include("ekf_types.jl")
 include("ekf_ad.jl")
 
 # Core Kalman filter/smoother exports
-export KFParms, STATIC_THRESHOLD
-export KalmanFilterResult, SmootherResult, SmootherWorkspace
+export KFParms
+export KalmanFilterResult, SmootherResult
 export DiffuseFilterResult  # Exact diffuse initialization
 export kalman_loglik
 export kalman_filter
@@ -120,7 +120,7 @@ export cov_free, CovFree, CovMatrixExpr
 export block_diag
 
 # Functional expressions (for DNS, Svensson, etc.)
-export ParamExpr, MatrixExpr
+export MatrixExpr
 export build_dns_loadings, build_svensson_loadings
 export dns_loading1, dns_loading2
 
@@ -178,6 +178,5 @@ export isconverged, niterations, factor_innovation_cov, ar_coefficients,
 
 # Plotting recipes (RecipesBase)
 export ObservablePlot
-export confidence_bands, select_vars, quantile_normal
 
 end # module

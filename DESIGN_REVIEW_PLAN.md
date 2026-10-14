@@ -947,11 +947,19 @@ Other author answers, verbatim:
   - **Dead exports**: `SmootherWorkspace` (`types.jl:406`), `select_backend`, `ParamExpr`, `uses_exact_diffuse` (unless CHUNK-008 uses it), `numstates`/`nummeasur`, and the `kf_workspace_allocated` field.
   - **General utilities** to demote to public-unexported or remove: `quantile_normal`, `select_vars` (an internal keyword parser), `confidence_bands`, `block_diag`, and the `STATIC_THRESHOLD`/`to_static_if_small` internals.
   - **Comments and docstrings**: stale ones, such as the `inplace.jl:13-40` line map, the `StateSpaceModel` backend list at `:2775`, and the `KalmanWorkspace` field list.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-012, CHUNK-016, CHUNK-018, CHUNK-019, CHUNK-021, CHUNK-022
 - **Cluster**: release
 - **Notes**:
+  - Removed: `SmootherWorkspace` (no function filled it, so the undef concern is moot), `ParamExpr` (no matrix spec accepted it), `numstates`/`nummeasur`, the stray `src/api/*.md`. `select_backend`/`to_static_if_small` were already gone.
+  - Unexported: `STATIC_THRESHOLD` and `confidence_bands` (CHUNK-031 should declare both `public`). `quantile_normal`/`select_vars` are now private `_quantile_normal`/`_select_vars` (the StatsBase extension uses `Siphon._quantile_normal`).
+  - Kept exported, diverging from the description: `block_diag` is a DSL helper for `custom_ssm` that understands `FreeParam`, so there is no Base equivalent ("easiest" front door). `uses_exact_diffuse` is used by CHUNK-008's code paths.
+  - `StateSpaceModel`: `kf_workspace_allocated` was removed and `workspaces_ref::Ref{Any}` became `const workspaces::Union{Nothing, StateSpaceModelWorkspaces{T}}` (resolves that Open Question).
+  - Stale text: the `inplace.jl` line map was rewritten without line numbers, the `KalmanWorkspace` field list was fixed (`n_times`, `Tmat`, `n_obs_rows`), and the `benchmark/em_paths.jl` reference was dropped. The "backend list" in the `StateSpaceModel` docstring was already gone.
+  - Open-question pickups: `fit!(MLE(); verbose)` now uses `@info`; `_fit_hint`/`_require_filter` are spec-aware (an EKF model suggests `fit!(MLE(), …)` only); `benchmark/em_benchmark.jl` was ported to `custom_ssm` + `fit!(EM())` (the Julia side was run on simulated data; the R/MARSS side was not run).
+  - Not done: the DNS loading builders (`dns_loading1/2`, `build_*_loadings`) are still exported, despite CHUNK-002's "public, unexported". Unexport them in CHUNK-031 along with the `public` declarations. The static-kernel `inv(cholesky(F))` numerics also stay open (separate chunk).
+  - Conversion guide: new "Removed names and utilities" section, plus a `STATIC_THRESHOLD` row and the `verbose` note.
 
 ### CHUNK-031: annotate-public-api
 - **Kind**: `implement`
@@ -1048,6 +1056,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-028 (add-disturbance-smoother) → next: CHUNK-029
 - 2026-10-14 CHUNK-029 (add-ekf-smoother-and-model; split, model part → CHUNK-041) → next: CHUNK-041
 - 2026-10-14 CHUNK-041 (ekf-statespacemodel) → next: CHUNK-030
+- 2026-10-14 CHUNK-030 (remove-dead-exports-and-utilities) → next: CHUNK-031
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1060,21 +1069,21 @@ Other author answers, verbatim:
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
 - The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
-- `fit!(MLE(), …; verbose = true)` still prints with `println`; switch to `@info` in CHUNK-030. (The DFM header uses `@info` since CHUNK-020.)
+- (Resolved in CHUNK-030) `fit!(MLE(), …; verbose = true)` still prints with `println`; switch to `@info` in CHUNK-030. (The DFM header uses `@info` since CHUNK-020.)
 - `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
 - Implementing the `identification =` option of `DynamicFactorModel` (named-factor / lower-triangular Λ₀ restrictions in the DFM M-step) was dropped from the docs in CHUNK-020; it can become a separate feature chunk. The deleted tests are at `git show 746f82d:test/em_tests.jl`, lines 905–1072.
-- `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
+- (Resolved in CHUNK-030) `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
 - (Resolved in CHUNK-025) `FreeParam` prints as constructor syntax showing only the set fields.
 - `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`/`λ_lower`/`λ_upper` keywords, unlike the templates. Consider `λ = FreeParam(…)` there for consistency (CHUNK-026 or CHUNK-030).
 - (Resolved in CHUNK-024) `using Siphon, Distributions` no longer clashes on `loglikelihood`. `test/dsl_tests.jl` still uses `using Distributions: Distributions`, which is now optional.
 - `coeftable` is exported, but without StatsBase loaded `coeftable(model)` is a bare `MethodError`. A `Base.Experimental.register_error_hint` saying "load StatsBase" would make the failure self-explanatory.
 - StatsAPI extras not implemented: `informationmatrix` (observed information only), `response`/`residuals` (from the stored data and `prediction_errors`), `fitted`/`predict(model)` (one-step-ahead predicted observations). There is also no `coef`/`dof` for `DynamicFactorModel`, so `aic(dfm)`/`bic(dfm)` are `MethodError`s.
 - The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
-- `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
-- `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
+- (Resolved in CHUNK-030) `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
+- (Resolved in CHUNK-030) `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
 - `SimulationSmootherWorkspace`/`simulation_smoother` and `EMWorkspace` still reject a `DiffuseKalmanWorkspace`. The simulation smoother would need an exact diffuse initial draw (Durbin & Koopman 2002, Section 5 of that paper), and EM would need diffuse cross-lag covariances. These are possible feature chunks.
 - `_diffuse_step_flag!` keeps the existing criterion `|det Finf| > tol`, which is not scale-invariant (Finf in large units always counts as invertible). A relative criterion, such as the smallest Cholesky pivot relative to the largest, would be more robust.
 - The disturbance smoother rejects exact diffuse output. Supporting it means exporting r⁽⁰⁾/N⁽⁰⁾ (and the diffuse-period u/D terms, Durbin & Koopman Section 5.3) from `_diffuse_smoother_backward!`. It is a possible feature chunk.
-- The `_require_filter`/`_fit_hint` messages on an unrun or unfitted EKF model still suggest `fit!(EM(), model, y)`, which throws for EKF specs. Make the hint spec-aware (CHUNK-030 or CHUNK-032).
-- `StateSpaceModel` still carries the `kf_workspace_allocated` field and a `Ref{Any}` for the workspaces; CHUNK-030 removes the former. A typed `Union{Nothing, StateSpaceModelWorkspaces{T}}` field would avoid the `Any`.
+- (Resolved in CHUNK-030) The `_require_filter`/`_fit_hint` messages on an unrun or unfitted EKF model still suggest `fit!(EM(), model, y)`, which throws for EKF specs. Make the hint spec-aware (CHUNK-030 or CHUNK-032).
+- (Resolved in CHUNK-030) `StateSpaceModel` still carries the `kf_workspace_allocated` field and a `Ref{Any}` for the workspaces; CHUNK-030 removes the former. A typed `Union{Nothing, StateSpaceModelWorkspaces{T}}` field would avoid the `Any`.

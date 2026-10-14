@@ -7,40 +7,6 @@ complex functions of parameters and external data.
 """
 
 """
-    ParamExpr(params, data, expr)
-
-A matrix element that is a function of parameters and external data.
-
-# Arguments
-- `params`: Symbol or tuple of Symbols for parameter names
-- `data`: NamedTuple of external data used in the expression
-- `expr`: Function `(param_values..., data...) -> scalar`
-
-# Example: Nelson-Siegel loading
-```julia
-τ = 30  # maturity in months
-# Loading: (1 - exp(-τ*λ)) / (τ*λ)
-elem = ParamExpr(:λ, (τ=τ,), (λ, τ) -> (1 - exp(-τ*λ)) / (τ*λ))
-```
-"""
-struct ParamExpr
-    params::Tuple{Vararg{Symbol}}
-    data::NamedTuple
-    expr::Function
-end
-
-# Convenience constructors
-ParamExpr(param::Symbol, data::NamedTuple, expr::Function) = ParamExpr((param,), data, expr)
-
-function ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function)
-    ParamExpr(params, (val = data,), (args...) -> expr(args[1:length(params)]..., data))
-end
-
-function ParamExpr(param::Symbol, data::Real, expr::Function)
-    ParamExpr((param,), (val = data,), (p, v) -> expr(p, data))
-end
-
-"""
     MatrixExpr(params, data, builder)
 
 A full matrix that is built from parameters and external data.

@@ -10,34 +10,12 @@ This module provides zero-allocation implementations designed for:
 
 # Contents
 
-## KalmanWorkspace (lines ~25-340)
-Pre-allocated workspace for in-place Kalman filter and smoother operations.
-- `KalmanWorkspace{T}` struct with all storage
-- `kalman_filter!` - in-place filter with missing data handling
-- `kalman_smoother!` - in-place RTS smoother with cross-lag covariances
-- `kalman_filter_and_smooth!` - combined operation
-
-## EMWorkspace (lines ~890-1400)
-EM algorithm infrastructure:
-- `EMWorkspace{T}` - sufficient statistics storage
-- `compute_sufficient_stats!` - E-step computation
-- `update_Z!`, `update_H!`, `update_T!`, `update_Q!` - M-step updates
-- `em_estimate!` - main EM algorithm
-
-## StateSpaceModel (lines ~1400-2600)
-High-level model interface:
-- `StateSpaceModel{T}` - mutable model container
-- `fit!(MLE(), model, y)` - MLE via numerical optimization
-- `fit!(EM(), model, y)` - EM algorithm
-- Accessors: `parameters`, `filtered_states`, `smoothed_states`, etc.
-- `forecast(model, h)` - h-step ahead forecasting
-
-## DynamicFactorModel (lines ~2600-end)
-Specialized dynamic factor model:
-- `DynamicFactorModel{T}` - DFM with optional AR errors
-- `DynamicFactorModelSpec` - model specification
-- EM estimation with AR error dynamics
-- Factor extraction and forecasting
+- `KalmanWorkspace{T}`: storage for the in-place filter and smoother
+  (`kalman_filter!`, `kalman_smoother!`, `kalman_filter_and_smooth!`)
+- `EMWorkspace{T}`: sufficient statistics and M-step updates for `em_estimate!`
+- `StateSpaceModel{T, S}`: the model container behind `fit!(MLE(), …)`,
+  `fit!(EM(), …)`, the accessors and `forecast`
+- `DynamicFactorModel{T}`: dynamic factor model with AR errors, estimated by EM
 """
 
 # ============================================
@@ -58,12 +36,12 @@ enabling zero-allocation iterations after initial construction.
 - `obs_dim`: Number of observables (p)
 - `state_dim`: Number of states (m)
 - `shock_dim`: Number of state shocks (r)
-- `n_obs`: Number of time periods (n)
+- `n_times`: Number of time periods (n)
 
 ## Parameters (owned copies)
 - `Z`: Observation matrix (p × m)
 - `H`: Observation noise covariance (p × p)
-- `T`: State transition matrix (m × m)
+- `Tmat`: State transition matrix (m × m)
 - `R`: State noise selection matrix (m × r)
 - `Q`: State noise covariance (r × r)
 - `a1`: Initial state mean (m)
@@ -108,7 +86,12 @@ original row each leading position corresponds to. The accessors `prediction_err
 
 ## Scalars
 - `loglik`: Log-likelihood value
-- `n_obs_valid`: Count of non-missing observations
+- `n_obs_valid`: Number of periods with at least one observed row
+- `n_obs_rows`: Total number of observed rows
+
+The remaining fields hold the companion-form and rank-revealing settings and the
+run status; use `companion_block`, `rank_revealing` and the accessors rather than
+reading them directly.
 """
 mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Dimensions
@@ -3393,8 +3376,7 @@ mutable struct StateSpaceModel{T <: Real, S <: AbstractSSMSpec} <: AbstractState
     smoothed_V::Array{T, 3}
 
     # In-place workspaces for EM; `nothing` for an EKF model
-    kf_workspace_allocated::Bool
-    workspaces_ref::Base.RefValue{Any}
+    const workspaces::Union{Nothing, StateSpaceModelWorkspaces{T}}
 
     # Copy of the data from the last fit! or kalman_filter!, NaN where missing
     data::Matrix{T}
@@ -3425,13 +3407,9 @@ model = StateSpaceModel(spec, 200)
 ```
 """
 function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
-    # Always allocate the in-place Kalman/EM workspace. Benchmarks (see
-    # benchmark/em_paths.jl) show in-place EM beats the pure-static path on
-    # every model size, including m = p = 1, because the per-iteration
-    # allocation cost of the result-returning kalman_filter swamps the
-    # state-side static-arithmetic savings. The workspace is a one-time
-    # allocation of order n × max(m², p²) words, negligible vs. the EM
-    # iteration count.
+    # EM always runs on the in-place workspaces, at every model size: the
+    # per-iteration allocations of the functional filter cost more than the
+    # StaticArrays arithmetic saves, even for m = p = 1.
     theta_init = [prm.init for prm in spec.params]
     names = Tuple(prm.name for prm in spec.params)
     theta_nt = NamedTuple{names}(Tuple(theta_init))
@@ -3441,17 +3419,17 @@ function StateSpaceModel{T}(spec::SSMSpec, n_times::Int) where {T <: Real}
 
     kf_ws = KalmanWorkspace{T}(kfparms, a1_init, P1_init, n_times)
     em_ws = EMWorkspace(kf_ws)
-    return _empty_model(T, spec, n_times, Ref{Any}(StateSpaceModelWorkspaces{T}(kf_ws, em_ws)))
+    return _empty_model(T, spec, n_times, StateSpaceModelWorkspaces{T}(kf_ws, em_ws))
 end
 
 # EKF models are estimated by MLE only, so they have no EM workspace.
 function StateSpaceModel{T}(spec::EKFSpec, n_times::Int) where {T <: Real}
-    return _empty_model(T, spec, n_times, Ref{Any}(nothing))
+    return _empty_model(T, spec, n_times, nothing)
 end
 
 # A model with zeroed filter and smoother storage, no parameters and no data.
 function _empty_model(::Type{T}, spec::AbstractSSMSpec, n::Int,
-        workspaces_ref::Base.RefValue{Any}) where {T <: Real}
+        workspaces::Union{Nothing, StateSpaceModelWorkspaces{T}}) where {T <: Real}
     m = spec.n_states
     p = spec.n_obs
     return StateSpaceModel{T, typeof(spec)}(
@@ -3476,8 +3454,7 @@ function _empty_model(::Type{T}, spec::AbstractSSMSpec, n::Int,
         false,
         zeros(T, m, n),  # smoothed_alpha
         zeros(T, m, m, n),  # smoothed_V
-        workspaces_ref[] !== nothing,  # kf_workspace_allocated
-        workspaces_ref,
+        workspaces,
         zeros(T, p, n),
         false
     )
@@ -3739,12 +3716,14 @@ end
 # StateSpaceModel Filter Accessors
 # ============================================
 
+# EKF models are estimated by MLE only.
+_fit_hint(::StateSpaceModel{<:Real, <:EKFSpec}) = "fit!(MLE(), model, y)"
+
 function _require_filter(model::StateSpaceModel)
     status = model.filter_status
     status == 0 && return nothing
     status == _NOT_RUN && throw(ArgumentError(
-        "Filter not run. Call fit!(MLE(), model, y), fit!(EM(), model, y) or " *
-        "kalman_filter!(model, y) first."))
+        "Filter not run. Call $(_fit_hint(model)), or kalman_filter!(model, y), first."))
     throw(ArgumentError("At the model's parameters $(_failure_message(status))."))
 end
 
@@ -4036,7 +4015,7 @@ filter loop runs without heap allocations and the compiler can unroll.
 - `static::Symbol = :auto`: Controls whether the optimization uses the
   StaticArrays specialization of the Kalman filter.
   - `:auto` — use it when `n_states`, `n_obs` and `n_shocks` are all at most
-    [`STATIC_THRESHOLD`](@ref).
+    [`Siphon.STATIC_THRESHOLD`](@ref).
   - `:on`   — force the static path. Warns if any dimension exceeds
     `STATIC_THRESHOLD`; StaticArrays above that size typically lose to BLAS.
   - `:off`  — force the dynamic-`Matrix` path. Useful when you do nested
@@ -4096,11 +4075,7 @@ function fit!(
     model.iterations = 0  # MLE doesn't have iteration count in same sense
     model.smoother_computed = false
 
-    if verbose
-        println("MLE fitting complete:")
-        println("  Log-likelihood: ", round(model.loglik, digits = 4))
-        println("  Converged: ", model.converged)
-    end
+    verbose && @info "MLE fit complete" loglik=model.loglik converged=model.converged
 
     return model
 end

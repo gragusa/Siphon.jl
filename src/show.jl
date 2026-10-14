@@ -287,11 +287,6 @@ function Base.show(io::IO, ws::Union{
     (_workspace_dims(io, nameof(typeof(ws)), ws, T); print(io, ")"))
 end
 
-function Base.show(io::IO, ws::SmootherWorkspace{T}) where {T}
-    print(io, "SmootherWorkspace{", T, "}(m = ", size(ws.alpha, 1), ", n = ",
-        size(ws.alpha, 2), ")")
-end
-
 # ============================================
 # Models
 # ============================================
@@ -384,7 +379,7 @@ end
 # type name without parameters, so a `KFParms` of `SMatrix` and one of `Matrix`
 # holding the same values are equal and hash alike.
 for S in (:SSMMatrixSpec, :SSMSpec, :EKFSpec, :MatrixExpr, :CovMatrixExpr,
-    :MeasurementExpr, :ParamExpr, :KFParms, :EKFParms)
+    :MeasurementExpr, :KFParms, :EKFParms)
     @eval begin
         function Base.:(==)(a::$S, b::$S)
             return all(f -> getfield(a, f) == getfield(b, f), fieldnames(typeof(a)))

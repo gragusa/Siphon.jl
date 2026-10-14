@@ -311,7 +311,7 @@ spec-level function accepts (`optimize_ssm`, `ssm_loglik`, `SSMLogDensity`,
 
 ```julia
 fit!(MLE(), model, y; static = :auto)
-# :auto — promote when n_states, n_obs and n_shocks are all ≤ STATIC_THRESHOLD
+# :auto — promote when n_states, n_obs and n_shocks are all ≤ Siphon.STATIC_THRESHOLD
 #         (currently 13). This is the default.
 # :on   — force the static path (warns if a dimension exceeds the threshold).
 # :off  — force the regular `Matrix`/`Vector` path.

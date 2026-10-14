@@ -1,6 +1,6 @@
 module SiphonStatsBaseExt
 
-using Siphon: Siphon, StateSpaceModel, quantile_normal
+using Siphon: Siphon, StateSpaceModel, _quantile_normal
 using LinearAlgebra: diag
 using SpecialFunctions: erfc
 using StatsBase: StatsBase, CoefTable
@@ -19,7 +19,7 @@ function StatsBase.coeftable(model::StateSpaceModel; level::Real = 0.95,
     se = sqrt.(diag(StatsBase.vcov(model; static)))
     z = θ ./ se
     p = erfc.(abs.(z) ./ sqrt(2))
-    q = quantile_normal((1 + level) / 2)
+    q = _quantile_normal((1 + level) / 2)
     pct = round(100 * level; digits = 2)
     pct_str = isinteger(pct) ? string(Int(pct)) : string(pct)
     return CoefTable(hcat(θ, se, z, p, θ .- q .* se, θ .+ q .* se),

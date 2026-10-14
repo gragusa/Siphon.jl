@@ -4,31 +4,27 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-041: ekf-statespacemodel
-`StateSpaceModel` is now `StateSpaceModel{T, S <: AbstractSSMSpec}` and accepts an `EKFSpec`. It supports `fit!(MLE())`, `kalman_filter!`/`kalman_loglik`, the filter and smoother accessors, `forecast` and the StatsAPI accessors, including `vcov`/`stderror`. `fit!(EM())`, `obs_matrix` and `disturbance_smoother` throw clear `ArgumentError`s for EKF models.
+CHUNK-030: remove-dead-exports-and-utilities
+Removed `SmootherWorkspace`, `ParamExpr`, `numstates`/`nummeasur` and the stray `src/api/*.md`. Unexported `STATIC_THRESHOLD` and `confidence_bands`, and made `quantile_normal`/`select_vars` private (`_`-prefixed). `StateSpaceModel` lost `kf_workspace_allocated` and now holds a typed `const workspaces` field. Stale comments and docstrings were fixed, and the open-question items assigned to this chunk were picked up (`@info` for MLE verbose output, an EKF-aware fit hint, the ported EM benchmark).
 
 ## Key decisions / shim choices
-- Spec dispatch is in four small helpers in `inplace.jl` (`_model_parms`, `_model_filter`, `_model_loglik`, `_model_optimize`), not in branches inside each method.
-- EKF smoothing reruns the functional EKF filter on the stored data, because the model does not keep the per-period Jacobians. This is the same approach as the exact diffuse path.
-- For EKF models, `static = :on` throws, and `:auto`/`:off` are accepted.
-- The EKF constructor stores `nothing` in `workspaces_ref` (no EM workspace).
-- `_param_vcov` now takes any `AbstractSSMSpec`.
-- No shims. The conversion guide notes the new type parameter: `typeof(model) == StateSpaceModel{Float64}` is now false, but dispatch and `isa` on `StateSpaceModel{Float64}` still work.
+- `block_diag` and `uses_exact_diffuse` stay exported (both are used; `block_diag` is a FreeParam-aware DSL helper).
+- No shims. The conversion guide has a new "Removed names and utilities" section.
+- DNS loading builders are still exported; CHUNK-031 should unexport them and declare them `public`.
 
 ## State of the codebase
-- Files modified: src/inplace.jl, src/em_spec.jl, src/disturbance_smoother.jl, src/dsl/optimization.jl, test/ekf_tests.jl, docs/src/tutorials/ekf.md, docs/src/api/ekf.md, docs/src/conversion_guide.md, DESIGN_REVIEW_PLAN.md
-- Test suite: full `Pkg.test()` passes (4.3 min; 36 new tests in 3 new EKF testsets)
+- Files modified: src/Siphon.jl, src/types.jl, src/show.jl, src/recipes.jl, src/inplace.jl, src/em_spec.jl, src/dsl/expressions.jl, src/dsl/codegen.jl, ext/SiphonStatsBaseExt.jl, benchmark/em_benchmark.jl, test/{api_coverage,construction,recipe,em,ekf}_tests.jl, docs/src/{conversion_guide.md, api/core.md, api/dsl.md, tutorials/visualization.md, tutorials/estimation_methods.md}; deleted src/api/*.md
+- Test suite: full `Pkg.test()` passes (4.3 min, Aqua included); new testset "Removed and unexported names" (11 tests)
 - Ambiguity count: 0 (no change)
-- Staged but uncommitted: no (all changes unstaged)
+- Staged but uncommitted: no (the `src/api` deletions are staged through `git rm`; everything else is unstaged)
 
 ## Cluster status
-- missing-operations: 4 of 4 complete
-- release: 0 of 5 complete
+- release: 1 of 5 complete
 
 ## Next chunk
-CHUNK-030: remove-dead-exports-and-utilities. Removes dead exports (`SmootherWorkspace`, `select_backend`, `ParamExpr`, …), the `kf_workspace_allocated` field, and stale comments and docstrings. Breaking; the conversion guide must be updated in the same commit.
+CHUNK-031: annotate-public-api. Declare `public` for every user-facing unexported name. New from CHUNK-030: `STATIC_THRESHOLD`, `confidence_bands`, `StateSpaceModelWorkspaces`(?), and the DNS builders, which also need unexporting.
 
 ## Watch out for
-- The new testset "EKF DSL — StateSpaceModel matches the linear spec" takes about 40 s, almost all of it compilation (the EKF MLE and the nested-AD Hessian for an 8-parameter model). If suite time matters, use a smaller model there.
-- The `_require_filter`/`_fit_hint` messages still suggest `fit!(EM(), …)` to EKF models (Open Questions).
-- Removing `kf_workspace_allocated` in CHUNK-030 means editing `_empty_model` (positional field list) and needs an MCP restart. `workspaces_ref` is still a `Ref{Any}`.
+- `public` needs Julia ≥ 1.11 or `Compat.@compat public`; the compat bound question (1.10 vs 1.12) is still open.
+- Docstrings link `[`Siphon.STATIC_THRESHOLD`](@ref)`; the docs build hasn't been run (CHUNK-032).
+- The R/MARSS half of `benchmark/em_benchmark.jl` was not run.

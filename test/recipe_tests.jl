@@ -3,7 +3,7 @@ Tests for RecipesBase plotting recipes.
 """
 
 using Siphon
-using Siphon: quantile_normal, select_vars, confidence_bands, SmootherResult,
+using Siphon: _quantile_normal, _select_vars, confidence_bands, SmootherResult,
               ForecastResult, ObservablePlot
 using RecipesBase
 using LinearAlgebra
@@ -11,46 +11,46 @@ using CSV
 using DataFrames
 
 @testset "Plotting recipes" begin
-    @testset "quantile_normal" begin
+    @testset "_quantile_normal" begin
 
         # Standard values
-        @test quantile_normal(0.975) ≈ 1.96 atol=0.01
-        @test quantile_normal(0.95) ≈ 1.645 atol=0.01
-        @test quantile_normal(0.90) ≈ 1.28 atol=0.01
-        @test quantile_normal(0.5 + eps()) ≈ 0.0 atol=0.01
+        @test _quantile_normal(0.975) ≈ 1.96 atol=0.01
+        @test _quantile_normal(0.95) ≈ 1.645 atol=0.01
+        @test _quantile_normal(0.90) ≈ 1.28 atol=0.01
+        @test _quantile_normal(0.5 + eps()) ≈ 0.0 atol=0.01
 
         # Exact on both sides of the median
-        @test quantile_normal(0.975) ≈ 1.959963984540054
-        @test quantile_normal(0.025) ≈ -1.959963984540054
-        @test quantile_normal(0.5) == 0.0
-        @test quantile_normal(1e-10) ≈ -6.361340902404056
-        @test_throws DomainError quantile_normal(0.0)
-        @test_throws DomainError quantile_normal(1.0)
+        @test _quantile_normal(0.975) ≈ 1.959963984540054
+        @test _quantile_normal(0.025) ≈ -1.959963984540054
+        @test _quantile_normal(0.5) == 0.0
+        @test _quantile_normal(1e-10) ≈ -6.361340902404056
+        @test_throws DomainError _quantile_normal(0.0)
+        @test_throws DomainError _quantile_normal(1.0)
     end
 
-    @testset "select_vars" begin
+    @testset "_select_vars" begin
 
         # :all and nothing
-        @test select_vars(:all, 5) == 1:5
-        @test select_vars(nothing, 5) == 1:5
+        @test _select_vars(:all, 5) == 1:5
+        @test _select_vars(nothing, 5) == 1:5
 
         # Single integer
-        @test select_vars(3, 5) == [3]
-        @test select_vars(1, 5) == [1]
+        @test _select_vars(3, 5) == [3]
+        @test _select_vars(1, 5) == [1]
 
         # Vector of integers
-        @test select_vars([1, 3], 5) == [1, 3]
-        @test select_vars([2, 4, 5], 5) == [2, 4, 5]
+        @test _select_vars([1, 3], 5) == [1, 3]
+        @test _select_vars([2, 4, 5], 5) == [2, 4, 5]
 
         # Range
-        @test select_vars(2:4, 5) == 2:4
-        @test select_vars(1:5, 5) == 1:5
+        @test _select_vars(2:4, 5) == 2:4
+        @test _select_vars(1:5, 5) == 1:5
 
         # Error cases
-        @test_throws ArgumentError select_vars(6, 5)
-        @test_throws ArgumentError select_vars([1, 6], 5)
-        @test_throws ArgumentError select_vars(3:7, 5)
-        @test_throws ArgumentError select_vars("invalid", 5)
+        @test_throws ArgumentError _select_vars(6, 5)
+        @test_throws ArgumentError _select_vars([1, 6], 5)
+        @test_throws ArgumentError _select_vars(3:7, 5)
+        @test_throws ArgumentError _select_vars("invalid", 5)
     end
 
     @testset "confidence_bands validates and accepts mixed array types" begin
@@ -60,7 +60,7 @@ using DataFrames
 
         # Float64 means with Float32 covariances, and a view as the mean
         lower, upper = confidence_bands(view(zeros(2, 4), :, 1:3), ones(Float32, 2, 2, 3), 0.9)
-        @test upper ≈ fill(quantile_normal(0.95), 2, 3)
+        @test upper ≈ fill(_quantile_normal(0.95), 2, 3)
         @test lower ≈ -upper
     end
 

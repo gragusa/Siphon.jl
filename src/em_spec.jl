@@ -303,7 +303,7 @@ function fit!(
         "Use fit!(MLE(), ...), which handles them.")
     _require_em_spec(model.spec, "fit!(EM(), ...)")
 
-    ws = model.workspaces_ref[]::StateSpaceModelWorkspaces{T}
+    ws = model.workspaces::StateSpaceModelWorkspaces{T}
     θ, result = _em_fit_spec!(ws, model.spec, _spec_init(model.spec, T), y;
         caller = "fit!(EM(), ...)", maxiter, tol, verbose, warn,
         allow_degen, degen_lim, min_degen_iter)

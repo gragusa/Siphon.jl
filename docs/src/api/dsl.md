@@ -71,7 +71,6 @@ Siphon.FreeParam
 ## Parameter Expressions
 
 ```@docs
-Siphon.ParamExpr
 Siphon.MatrixExpr
 ```
 
