@@ -77,6 +77,7 @@ include("simsmooth.jl")
 
 # Plotting recipes (depends on filter/smoother types and inplace types)
 include("recipes.jl")
+include("show.jl")
 
 # Prediction and forecasting exports
 export predict, forecast, forecast_paths

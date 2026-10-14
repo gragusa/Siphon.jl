@@ -835,10 +835,17 @@ Other author answers, verbatim:
   - **`show`.** There is no custom `show` anywhere. `KalmanWorkspace` and `StateSpaceModel` print 15–17k characters, including uninitialised memory; `local_level()` prints about 1.1k. Add compact 2-argument and `text/plain` `show` methods for every user-facing type: specs, `SSMParameter`, `FreeParam`, `KFParms`, results, workspaces, models, EM and forecast results, and priors. The summary should cover dimensions, parameter names and values, fitted/converged status, the backend, and the log-likelihood.
   - **Equality.** Spec and parameter types compare by identity: `local_level() == local_level()` is `false`. Add value `==` **and** a matching `hash` for `SSMSpec`, `EKFSpec`, `SSMMatrixSpec`, `KFParms`, `EKFParms` and the matrix-expression types where well defined.
   - **Round-tripping.** Where feasible, make the 2-argument `show` of small value types valid constructor syntax. In particular, `SSMParameter` must be reconstructible; its inner constructor currently blocks the default one.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-012, CHUNK-022
 - **Cluster**: composability-with-base
 - **Notes**:
+  - **File:** new `src/show.jl`, included last in `src/Siphon.jl`, holds all `show`, `==`, `isequal` and `hash` methods.
+  - **Two-argument `show`:** one line per object. `SSMParameter`, `FreeParam`, `NormalPrior`, `InverseGammaPrior`, `ParameterPriors`, `CompositePrior` print valid constructor calls (tested with `eval(Meta.parse(repr(x)))`). `SSMParameter` uses the keyword form, omits infinite bounds, omits `init` when it equals the bound-derived default, and otherwise adds `default_init = true` when it is a template default. Other types follow the `EMResult` style `Type(key = value, …, status)`: specs, `SSMMatrixSpec`, `MatrixExpr`, `CovMatrixExpr`, `MeasurementExpr`, `KFParms`/`EKFParms`, the filter results, `SmootherResult`, `ForecastResult`, all workspaces, `StateSpaceModel`, `DynamicFactorModel`, `SSMLogDensity`. Filter outputs print `loglik = …`, `not run`, or `failed in period t`.
+  - **`text/plain`:** specs list parameters with bounds/init and which parameters each matrix uses; `SSMMatrixSpec` prints a cell grid (summary above 400 cells); `KFParms`/`EKFParms` print their matrices; `StateSpaceModel` prints parameter values; `DynamicFactorModel` prints its lag orders.
+  - **No backend in the summary:** CHUNK-018 removed the `backend` field.
+  - **Equality:** field-wise `==`, `isequal` and `hash` for `SSMMatrixSpec`, `SSMSpec`, `EKFSpec`, `MatrixExpr`, `CovMatrixExpr`, `MeasurementExpr`, `ParamExpr`, `KFParms`, `EKFParms`. The hash salt is the unparameterized type name, so a `KFParms` of `SMatrix` and one of `Matrix` with equal values are `==` and hash alike. Templates with closures (`dns_model`) compare equal because the closures capture equal values. Small immutable types (`SSMParameter`, `FreeParam`, `FixedValue`, `ParameterRef`, priors) already had correct value semantics through `===`. Models and workspaces are mutable and keep identity equality.
+  - **`SSMParameter` constructors:** the inner constructor is now `SSMParameter{T}(name, lower, upper, init, default_init = false)` with unconstrained arguments; the untyped positional form promotes the three numbers and forwards to it. The keyword and 2-argument forms are unchanged.
+  - **Tests:** `test/show_tests.jl`.
 
 ### CHUNK-026: unify-construction-conventions
 - **Kind**: `implement`
@@ -991,6 +998,7 @@ Other author answers, verbatim:
 - 2026-10-13 CHUNK-040 (migrate-template-keywords) → next: CHUNK-023
 - 2026-10-13 CHUNK-023 (rework-priors) → next: CHUNK-024
 - 2026-10-14 CHUNK-024 (extend-statsapi-and-logdensityproblems) → next: CHUNK-025
+- 2026-10-14 CHUNK-025 (add-show-equality-hash) → next: CHUNK-026
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1008,7 +1016,7 @@ Other author answers, verbatim:
 - EM with a partially fixed full `H` (some off-diagonal cells fixed, others free) updates cell by cell, which is not the restricted maximizer. No template produces this today.
 - Implementing the `identification =` option of `DynamicFactorModel` (named-factor / lower-triangular Λ₀ restrictions in the DFM M-step) was dropped from the docs in CHUNK-020; it can become a separate feature chunk. The deleted tests are at `git show 746f82d:test/em_tests.jl`, lines 905–1072.
 - `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
-- `FreeParam` has no custom `show`, so error messages print `FreeParam(nothing, 0.0, nothing, nothing)`. CHUNK-025 should print it as constructor syntax that shows only the set fields (`FreeParam(lower = 0.0)`).
+- (Resolved in CHUNK-025) `FreeParam` prints as constructor syntax showing only the set fields.
 - `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`/`λ_lower`/`λ_upper` keywords, unlike the templates. Consider `λ = FreeParam(…)` there for consistency (CHUNK-026 or CHUNK-030).
 - (Resolved in CHUNK-024) `using Siphon, Distributions` no longer clashes on `loglikelihood`. `test/dsl_tests.jl` still uses `using Distributions: Distributions`, which is now optional.
 - `coeftable` is exported, but without StatsBase loaded `coeftable(model)` is a bare `MethodError`. A `Base.Experimental.register_error_hint` saying "load StatsBase" would make the failure self-explanatory.

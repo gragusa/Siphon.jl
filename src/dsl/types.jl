@@ -28,13 +28,19 @@ struct SSMParameter{T <: Real}
     init::T
     default_init::Bool
 
-    function SSMParameter(name::Symbol, lower::T, upper::T, init::T,
-            default_init::Bool = false) where {T <: Real}
+    function SSMParameter{T}(name, lower, upper, init,
+            default_init = false) where {T <: Real}
         lower < upper || throw(
             ArgumentError("lower bound $lower for $name must be below upper bound $upper"))
         _check_init(name, lower, upper, init)
         new{T}(name, lower, upper, init, default_init)
     end
+end
+
+function SSMParameter(name::Symbol, lower::Real, upper::Real, init::Real,
+        default_init::Bool = false)
+    SSMParameter{promote_type(typeof(lower), typeof(upper), typeof(init))}(
+        name, lower, upper, init, default_init)
 end
 
 # A starting value on a finite bound maps to ±Inf in unconstrained space.

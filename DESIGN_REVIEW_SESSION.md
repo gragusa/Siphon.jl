@@ -4,31 +4,29 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-024: extend-statsapi-and-logdensityproblems
-Siphon now depends on StatsAPI and extends its generics instead of owning same-named functions. `AbstractStateSpaceModel <: StatsAPI.StatisticalModel`, so `aic`/`aicc`/`bic`/`stderror` come from StatsAPI's fallbacks. `StateSpaceModel` gains `coef`, `coefnames`, `dof`, `nobs` and a lazily computed `vcov`, and `coeftable` comes from a StatsBase weak-dependency extension. `logdensity` is now `LogDensityProblems.logdensity`.
+CHUNK-025: add-show-equality-hash
+A new `src/show.jl` gives every user-facing type a one-line `show`. Specs, matrix specs, system matrices and models also get a multi-line `text/plain` display. Parameter and prior types print as valid constructor calls. Specs, matrix specs, matrix expressions, `KFParms` and `EKFParms` now compare and hash by value.
 
 ## Key decisions / shim choices
-- Author chose to store a copy of the data in `StateSpaceModel` at `fit!`/`kalman_filter!(model, y)` and compute `vcov` on demand (recorded in Decisions).
-- `nobs` = `n_times` (includes all-missing periods).
-- `coeftable` lives in `ext/SiphonStatsBaseExt.jl`, because `CoefTable` is a StatsBase type.
-- `informationmatrix`, `response`, `residuals`, `fitted` and DFM `coef`/`dof` were not added (Open Questions).
-- No shims needed: user-facing names are unchanged.
+- One-line format follows the existing `EMResult` style: `Type(key = value, …, status)`.
+- `SSMParameter` prints in keyword form. It omits infinite bounds and a bound-derived default init, and prints `default_init = true` for template defaults that differ from the bound-derived one. Every template parameter round-trips through `repr`.
+- The hash salt is the unparameterized type name, so a static `KFParms` and a dense one holding equal values are equal and hash alike.
+- `SSMParameter`'s inner constructor is now the typed `SSMParameter{T}(…)` with unconstrained arguments; the untyped positional form promotes and forwards to it.
+- Mutable models and workspaces keep identity equality.
 
 ## State of the codebase
-- Files modified: Project.toml, src/Siphon.jl, src/inplace.jl, src/em_spec.jl, src/dsl/bayesian.jl, src/dsl/optimization.jl, test/runtests.jl, docs/src/api/optimization.md, DESIGN_REVIEW_PLAN.md
-- New files: ext/SiphonStatsBaseExt.jl, test/statsapi_tests.jl
-- Untracked from the previous chunk: ext/SiphonDistributionsExt.jl was never committed with 55f853f. It must go in (amend or include in this commit).
-- Test suite: full `Pkg.test()` passes
+- Files modified: src/Siphon.jl, src/dsl/types.jl, test/runtests.jl, DESIGN_REVIEW_PLAN.md
+- New files: src/show.jl, test/show_tests.jl
+- Test suite: full `Pkg.test()` passes (includes the new `show_tests.jl`)
 - Ambiguity count: 0 (no change)
 - Staged but uncommitted: no (all changes unstaged)
 
 ## Cluster status
-- composability-with-base: 1 of 3 complete (CHUNK-025 and CHUNK-026 remain)
+- composability-with-base: 2 of 3 complete (CHUNK-026 remains)
 
 ## Next chunk
-CHUNK-025: add-show-equality-hash. Add compact `show` methods for user-facing types, plus value `==`/`hash` for spec and parameter types, and make `SSMParameter`/`FreeParam` round-trip as constructor syntax.
+CHUNK-026: unify-construction-conventions. Pick one way to pass the element type (`KalmanWorkspace{T}`, `EMWorkspace(…, T)` and `StateSpaceModel(…; T=)` now differ), add `rng` keywords, make `simulation_smoother` type-stable, and extend `EMWorkspace`/`SimulationSmootherWorkspace` constructors to `DiffuseKalmanWorkspace`. Breaking: add entries to `docs/src/conversion_guide.md`.
 
 ## Watch out for
-- `Pkg.test()` prints "Precompiled image … not available with flags" errors for both extensions during precompilation. They come from Pkg's parallel precompile ordering; the extensions load correctly at test time.
-- The MCP Julia session currently has a temporary environment activated (Siphon dev'd plus StatsBase/Distributions); a fresh session starts in the project env.
-- Adding fields to `StateSpaceModel` (CHUNK-025 may touch `show` for it) requires a session restart; Revise cannot redefine structs.
+- `src/show.jl` reads struct fields directly (`ws.obs_dim`, `model.filter_status`, `model.theta_values`, …). Renaming fields in CHUNK-026 means updating it too; `test/show_tests.jl` will catch mismatches.
+- If CHUNK-026 changes `StateSpaceModel(…; T=)`, the `{T}` printed by the model and workspace `show` methods stays correct, because they read the type parameter.

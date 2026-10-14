@@ -384,6 +384,9 @@ include("api_coverage_tests.jl")
 # StatsAPI and LogDensityProblems generics
 include("statsapi_tests.jl")
 
+# Display, value equality and hashing
+include("show_tests.jl")
+
 # Known bugs, pinned with @test_broken
 include("known_bugs_tests.jl")
 
