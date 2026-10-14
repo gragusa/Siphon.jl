@@ -116,9 +116,10 @@ end
 
 Log-likelihood plus log-prior plus the log-Jacobian of the map from
 unconstrained to constrained parameters, at `θ_unconstrained`. Returns `-Inf`
-when the filter fails or θ lies outside the prior's support.
+when the filter fails or θ lies outside the prior's support. This is the
+`LogDensityProblems.logdensity` method for `SSMLogDensity`.
 """
-function logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
+function LogDensityProblems.logdensity(ld::SSMLogDensity, θ_u::AbstractVector)
     θ_nt, logjac = TransformVariables.transform_and_logjac(ld.transformation, θ_u)
     lp = ld.prior(θ_nt)
     # θ is outside the prior's support; the likelihood cannot change the result.
@@ -135,8 +136,6 @@ function LogDensityProblems.capabilities(::Type{<:SSMLogDensity})
 end
 
 LogDensityProblems.dimension(ld::SSMLogDensity) = n_params(ld.spec)
-
-LogDensityProblems.logdensity(ld::SSMLogDensity, θ::AbstractVector) = logdensity(ld, θ)
 
 # ============================================
 # Priors

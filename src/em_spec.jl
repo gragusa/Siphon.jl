@@ -307,6 +307,7 @@ function fit!(
     copyto!(model.theta_values, values(θ))
     model.theta_fitted = true
     _ssm_copy_from_workspace!(model, ws.kf_ws)
+    _ssm_store_data!(model, y)
     model.loglik = result.loglik
     model.converged = result.converged
     model.iterations = result.iterations

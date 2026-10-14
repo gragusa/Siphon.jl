@@ -218,32 +218,41 @@ function optimize_ssm_with_stderr(
               "Pass `warn = false` to silence this warning."
     end
 
-    t = build_transformation(spec)
-    θ_u_opt = transform_to_unconstrained(spec, opt_result.θ)
-    to_θ(θ_u) = collect(TransformVariables.transform(t, θ_u))
-
-    H = ForwardDiff.hessian(
-        θ_u -> -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, static),
-        θ_u_opt)
-    J = ForwardDiff.jacobian(to_θ, θ_u_opt)
-
-    vcov, se = try
-        V = J * inv(H) * J'
-        V, sqrt.(diag(V))
-    catch e
-        e isa LinearAlgebra.SingularException || e isa DomainError || rethrow()
-        @warn "Failed to compute standard errors: the information matrix is not positive definite"
-        k = length(θ_u_opt)
-        fill(NaN, k, k), fill(NaN, k)
-    end
+    V, H = _param_vcov(spec, opt_result.θ, y, static)
 
     return (
         θ = opt_result.θ,
         loglik = opt_result.loglik,
         result = opt_result.result,
         converged = opt_result.converged,
-        stderr = se,
-        vcov = vcov,
+        stderr = sqrt.(diag(V)),
+        vcov = V,
         hessian = H
     )
+end
+
+# Covariance of the constrained parameters at θ from the observed information,
+# and the Hessian of the negative log-likelihood in the unconstrained
+# coordinates. The covariance is NaN, with a warning, when that Hessian cannot be
+# inverted or the result has a negative diagonal.
+function _param_vcov(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    t = build_transformation(spec)
+    θ_u = transform_to_unconstrained(spec, θ)
+    to_θ(x) = collect(TransformVariables.transform(t, x))
+
+    H = ForwardDiff.hessian(
+        x -> -_spec_loglik(spec, TransformVariables.transform(t, x), y, static), θ_u)
+    J = ForwardDiff.jacobian(to_θ, θ_u)
+
+    V = try
+        V = J * inv(H) * J'
+        all(>=(0), diag(V)) || throw(DomainError(diag(V), "negative variance"))
+        V
+    catch e
+        e isa LinearAlgebra.SingularException || e isa DomainError || rethrow()
+        @warn "Failed to compute standard errors: the information matrix is not positive definite"
+        k = length(θ_u)
+        fill(NaN, k, k)
+    end
+    return V, H
 end

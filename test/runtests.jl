@@ -381,6 +381,9 @@ include("dns_marss_validation_tests.jl")
 # Exported functions without coverage elsewhere
 include("api_coverage_tests.jl")
 
+# StatsAPI and LogDensityProblems generics
+include("statsapi_tests.jl")
+
 # Known bugs, pinned with @test_broken
 include("known_bugs_tests.jl")
 

@@ -3,13 +3,15 @@ module Siphon
 using StaticArrays
 using ForwardDiff
 using LinearAlgebra
-using LogDensityProblems: LogDensityProblems
+using LogDensityProblems: LogDensityProblems, logdensity
 using Optimization: Optimization, OptimizationFunction, OptimizationProblem
 using OptimizationOptimJL: Optim
 using Random: Random, AbstractRNG, randn!
 using RecipesBase
 using SpecialFunctions: erfcinv, loggamma
 using Statistics: mean, var
+using StatsAPI: StatsAPI, StatisticalModel, stderror, aic, aicc, bic, coeftable
+import StatsAPI: fit!, loglikelihood, predict, isfitted, nobs, coef, coefnames, vcov, dof
 using TransformVariables
 using TransformVariables: corr_cholesky_factor
 
@@ -155,6 +157,9 @@ export MLE, EM  # Estimation method markers
 # High-level StateSpaceModel API
 export StateSpaceModel, fit!
 export isfitted
+
+# StatsAPI generics with methods for fitted models (the same bindings StatsBase exports)
+export nobs, coef, coefnames, vcov, stderror, dof, aic, aicc, bic, coeftable
 
 # Dynamic Factor Model
 export DynamicFactorModel

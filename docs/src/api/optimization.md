@@ -127,6 +127,34 @@ Siphon.parameters
 Siphon.loglikelihood
 ```
 
+### Statistical Model Interface
+
+Models are `StatsAPI.StatisticalModel`s. `fit!`, `loglikelihood`, `nobs`, `coef`,
+`vcov` and the other names below are the StatsAPI functions, the same ones
+StatsBase, GLM and Distributions export, so loading those packages next to Siphon
+causes no name clashes. `aic`, `aicc`, `bic` and `stderror` use the StatsAPI
+definitions built on `loglikelihood`, `dof`, `nobs` and `vcov`.
+
+```julia
+fit!(MLE(), model, y)
+coef(model)        # parameter vector, in the order of coefnames(model)
+stderror(model)    # standard errors from the observed information
+aic(model), bic(model)
+```
+
+`vcov` and `stderror` work after either `fit!(MLE(), …)` or `fit!(EM(), …)`; the
+model keeps a copy of the data it was fitted on. With StatsBase loaded,
+`coeftable(model)` prints estimates, standard errors, z statistics, p-values and
+confidence intervals.
+
+```@docs
+Siphon.coef(::Siphon.StateSpaceModel)
+Siphon.coefnames(::Siphon.StateSpaceModel)
+Siphon.vcov(::Siphon.StateSpaceModel)
+Siphon.dof(::Siphon.StateSpaceModel)
+Siphon.nobs(::Siphon.StateSpaceModel)
+```
+
 ### System Matrices
 
 ```@docs
@@ -238,7 +266,7 @@ Siphon.transform_to_unconstrained
 
 ```@docs
 Siphon.SSMLogDensity
-Siphon.logdensity
+Siphon.logdensity(::Siphon.SSMLogDensity, ::AbstractVector)
 ```
 
 ## Prior Distributions

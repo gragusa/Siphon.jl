@@ -96,6 +96,8 @@ Other author answers, verbatim:
   - **Prior API: per-parameter.** Univariate `NormalPrior(μ, σ)` and `InverseGammaPrior(α, β)` are combined by name in `ParameterPriors(; name = prior, …)`. With Distributions loaded, any univariate distribution takes the same slot (weak-dependency extension). `FlatPrior`, `CompositePrior` and plain functions `θ -> log p` are kept; `NormalPriorVec` is dropped. Priors apply to the parameter as estimated (a variance for `var_*`). Names are checked against the spec when `SSMLogDensity` is built.
   - **`EKFLogDensity` folded into `SSMLogDensity`**, which dispatches on the spec type.
 
+- **CHUNK-024** (2026-10-14, author's answer): **`StateSpaceModel` stores a copy of the data** at `fit!` (MLE and EM) and `kalman_filter!(model, y)`; `vcov`/`stderror` compute the observed-information covariance lazily from it (delta method, as in `optimize_ssm_with_stderr`), after either estimator. Rejected: computing vcov at MLE fit time only; deferring standard errors.
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -815,10 +817,17 @@ Other author answers, verbatim:
   - Depend on StatsAPI and extend `StatsAPI.fit!`, `loglikelihood`, `predict`, `isfitted`, `nobs`, `coef`, `stderror`/`vcov` (where `optimize_ssm_with_stderr` provides them), `dof`, `aic`, `bic` and `informationmatrix`, as appropriate. Add `coeftable`.
   - Make `logdensity` the `LogDensityProblems.logdensity` method rather than a Siphon-owned function of the same name.
   - Check that `using Siphon, StatsBase` produces no ambiguity warnings.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-012
 - **Cluster**: composability-with-base
 - **Notes**:
+  - **Deps:** StatsAPI (compat 1.8) is a hard dependency. StatsBase (0.34) is a weak dependency: `ext/SiphonStatsBaseExt.jl` defines `coeftable(::StateSpaceModel; level, static)` returning `StatsBase.CoefTable`, because `CoefTable` lives in StatsBase. StatsBase was added to the test target.
+  - **Bindings:** `import StatsAPI: fit!, loglikelihood, predict, isfitted, nobs, coef, coefnames, vcov, dof`; `stderror`, `aic`, `aicc`, `bic` and `coeftable` are used and re-exported. `AbstractStateSpaceModel <: StatsAPI.StatisticalModel`, so StatsAPI's `aic`/`aicc`/`bic`/`stderror` fallbacks apply. `logdensity` is now `LogDensityProblems.logdensity` (re-exported), and the forwarding method is gone.
+  - **Methods:** `StateSpaceModel` has `coef` (copy of θ), `coefnames` (strings), `dof = n_params(spec)`, `nobs = n_times` (includes missing periods, as statsmodels does) and `vcov(model; static)`. `DynamicFactorModel` has only `nobs`; no `coef`/`vcov`/`dof`, because its parameter count under rotation is not defined (so `aic(dfm)` is a `MethodError`).
+  - **Data:** new fields `data::Matrix{T}`, `has_data::Bool` on `StateSpaceModel`. `vcov` throws "No data stored" before any run. `_param_vcov(spec, θ, y, static)` in `dsl/optimization.jl` is shared with `optimize_ssm_with_stderr`, and now also NaNs (with a warning) a negative diagonal explicitly.
+  - **Not done:** `informationmatrix` (only the observed information is available, while the StatsAPI default is `expected = true`), `response`/`residuals`/`fitted`/`predict(model)`. These are in Open Questions.
+  - **Tests:** `test/statsapi_tests.jl` covers the shared bindings, StateSpaceModel methods vs `optimize_ssm_with_stderr`, the stored-data copy, `coeftable`, the DFM, and a module doing `using Siphon, StatsBase, Distributions` with the shared names unqualified. Fresh-process check: Siphon + StatsBase + Distributions + GLM load with no clash warnings.
+  - **Docs:** api/optimization.md has a new "Statistical Model Interface" section; the `logdensity` `@docs` entry is now per-method.
 
 ### CHUNK-025: add-show-equality-hash
 - **Kind**: `implement`
@@ -981,6 +990,7 @@ Other author answers, verbatim:
 - 2026-10-13 CHUNK-022 (unify-dsl-conventions) → next: CHUNK-040
 - 2026-10-13 CHUNK-040 (migrate-template-keywords) → next: CHUNK-023
 - 2026-10-13 CHUNK-023 (rework-priors) → next: CHUNK-024
+- 2026-10-14 CHUNK-024 (extend-statsapi-and-logdensityproblems) → next: CHUNK-025
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1000,5 +1010,8 @@ Other author answers, verbatim:
 - `benchmark/em_benchmark.jl` imports `em_ssm_diagonal`, which CHUNK-019 deleted (and `Siphon.DSL`, which CHUNK-021 removed); the benchmark does not run. Port it to `fit!(EM())` or `em_estimate!`, or delete it (CHUNK-030).
 - `FreeParam` has no custom `show`, so error messages print `FreeParam(nothing, 0.0, nothing, nothing)`. CHUNK-025 should print it as constructor syntax that shows only the set fields (`FreeParam(lower = 0.0)`).
 - `build_dns_loadings`/`build_svensson_loadings` still take `λ_init`/`λ_lower`/`λ_upper` keywords, unlike the templates. Consider `λ = FreeParam(…)` there for consistency (CHUNK-026 or CHUNK-030).
-- `using Siphon, Distributions` makes `loglikelihood` ambiguous in `Main` (both export it), so unqualified `loglikelihood(model)` fails. The Distributions extension makes this combination common; CHUNK-024 (extend `StatsAPI.loglikelihood`) fixes it.
+- (Resolved in CHUNK-024) `using Siphon, Distributions` no longer clashes on `loglikelihood`. `test/dsl_tests.jl` still uses `using Distributions: Distributions`, which is now optional.
+- `coeftable` is exported, but without StatsBase loaded `coeftable(model)` is a bare `MethodError`. A `Base.Experimental.register_error_hint` saying "load StatsBase" would make the failure self-explanatory.
+- StatsAPI extras not implemented: `informationmatrix` (observed information only), `response`/`residuals` (from the stored data and `prediction_errors`), `fitted`/`predict(model)` (one-step-ahead predicted observations). There is also no `coef`/`dof` for `DynamicFactorModel`, so `aic(dfm)`/`bic(dfm)` are `MethodError`s.
+- The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
 - `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.

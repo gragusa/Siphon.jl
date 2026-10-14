@@ -3161,13 +3161,15 @@ struct MLE end
     AbstractStateSpaceModel
 
 Abstract supertype for all state-space models in Siphon.jl.
-Provides a common interface for fitting, querying, and forecasting.
+Provides a common interface for fitting, querying, and forecasting. It is a
+`StatsAPI.StatisticalModel`, so the StatsAPI generics (`fit!`,
+`loglikelihood`, `nobs`, `aic`, `bic`, …) apply to every model.
 
 Subtypes:
 - `StateSpaceModel` - General state-space model from SSMSpec
 - `DynamicFactorModel` - Dynamic factor model with EM estimation
 """
-abstract type AbstractStateSpaceModel end
+abstract type AbstractStateSpaceModel <: StatisticalModel end
 
 # Every model stores `fitted`, `converged`, `iterations` and `loglik`.
 _fit_hint(::AbstractStateSpaceModel) = "fit!(MLE(), model, y) or fit!(EM(), model, y)"
@@ -3286,6 +3288,10 @@ mutable struct StateSpaceModel{T <: Real} <: AbstractStateSpaceModel
     # In-place workspaces (for large EM)
     kf_workspace_allocated::Bool
     workspaces_ref::Base.RefValue{Any}
+
+    # Copy of the data from the last fit! or kalman_filter!, NaN where missing
+    data::Matrix{T}
+    has_data::Bool
 end
 
 """
@@ -3385,7 +3391,9 @@ function StateSpaceModel(spec::SSMSpec, n_times::Int; T::Type{<:Real} = Float64)
         smoothed_alpha,
         smoothed_V,
         true,  # kf_workspace_allocated: always true now
-        workspaces_ref
+        workspaces_ref,
+        zeros(T, p, n),
+        false
     )
 end
 
@@ -3470,6 +3478,13 @@ function _ssm_get_theta_namedtuple(model::StateSpaceModel)
     return NamedTuple{names}(Tuple(model.theta_values))
 end
 
+"""Keep a copy of the data the model was last fitted or filtered on."""
+function _ssm_store_data!(model::StateSpaceModel, y::AbstractMatrix)
+    copyto!(model.data, y)
+    model.has_data = true
+    return nothing
+end
+
 """Copy KalmanFilterResult to model storage."""
 function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     copyto!(model.at, filt.at)
@@ -3520,6 +3535,64 @@ model is not fitted.
 function parameters(model::StateSpaceModel)
     _require_fitted(model)
     return _ssm_get_theta_namedtuple(model)
+end
+
+# ============================================
+# StateSpaceModel StatsAPI Methods
+# ============================================
+
+"""
+    coef(model::StateSpaceModel) -> Vector
+
+Return the fitted parameters as a vector, in the order of `param_names(model.spec)`.
+[`parameters`](@ref) returns the same values as a NamedTuple. Throws if the model
+is not fitted.
+"""
+coef(model::StateSpaceModel) = (_require_fitted(model); copy(model.theta_values))
+
+"""
+    coefnames(model::StateSpaceModel) -> Vector{String}
+
+Return the parameter names, in the order of [`coef`](@ref).
+"""
+coefnames(model::StateSpaceModel) = [String(prm.name) for prm in model.spec.params]
+
+"""
+    dof(model::StateSpaceModel) -> Int
+
+Return the number of estimated parameters, `n_params(model.spec)`.
+"""
+dof(model::StateSpaceModel) = n_params(model.spec)
+
+"""
+    nobs(model::StateSpaceModel) -> Int
+    nobs(model::DynamicFactorModel) -> Int
+
+Return the number of time periods `n` the model was built for, including periods
+with missing observations. `bic` and `aicc` use it as the sample size.
+"""
+nobs(model::StateSpaceModel) = model.n_times
+
+"""
+    vcov(model::StateSpaceModel; static = :auto) -> Matrix
+
+Return the covariance matrix of the parameters in [`coef`](@ref), from the observed
+information at the fitted values: the Hessian of the negative log-likelihood is
+taken in the unconstrained coordinates and mapped to the parameters with the delta
+method, as in [`optimize_ssm_with_stderr`](@ref). It is computed on each call,
+from the data of the last `fit!` or `kalman_filter!(model, y)`. The matrix is NaN,
+with a warning, when the information matrix is not positive definite. `stderror`
+returns the square roots of its diagonal.
+
+Throws if the model is not fitted or has not seen any data.
+"""
+function vcov(model::StateSpaceModel; static::Symbol = :auto)
+    _require_fitted(model)
+    model.has_data || throw(ArgumentError(
+        "No data stored in the model. Call fit!(MLE(), model, y), " *
+        "fit!(EM(), model, y) or kalman_filter!(model, y) first."))
+    V, _ = _param_vcov(model.spec, _ssm_get_theta_namedtuple(model), model.data, static)
+    return V
 end
 
 # ============================================
@@ -3749,6 +3822,7 @@ function kalman_filter!(
 
     # Store results
     _ssm_store_filter_results!(model, filt)
+    _ssm_store_data!(model, y)
     model.loglik = filt.loglik
     model.smoother_computed = false
 
@@ -3861,6 +3935,7 @@ function fit!(
 
     # Copy filter results to model storage
     _ssm_store_filter_results!(model, filt)
+    _ssm_store_data!(model, y)
 
     # Update model state
     model.loglik = result.loglik
@@ -4773,6 +4848,8 @@ end
 # ============================================
 # fit! (StatsAPI-style interface)
 # ============================================
+
+nobs(model::DynamicFactorModel) = model.kf_ws.n_times
 
 """
     fit!(::EM, model::DynamicFactorModel, y::AbstractMatrix;
