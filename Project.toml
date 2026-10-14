@@ -42,6 +42,7 @@ StaticArrays = "1"
 Statistics = "1.10"
 StatsAPI = "1.8"
 StatsBase = "0.34"
+TOML = "1"
 Test = "1.10"
 TransformVariables = "0.8"
 julia = "1.13"
@@ -54,7 +55,8 @@ Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "Test", "CSV", "DataFrames", "Distributions", "Random", "RecipesBase", "StatsBase"]
+test = ["Aqua", "Test", "CSV", "DataFrames", "Distributions", "Random", "RecipesBase", "StatsBase", "TOML"]

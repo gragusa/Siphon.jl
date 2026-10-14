@@ -266,6 +266,7 @@ end
 
 function Base.show(io::IO, ws::KalmanWorkspace{T}) where {T}
     _workspace_dims(io, nameof(typeof(ws)), ws, T)
+    ws.stores_cov || print(io, ", covariances = false")
     print(io, ", ", _run_string(ws), ws.smoothed && ws.status == 0 ? ", smoothed" : "", ")")
 end
 

@@ -92,6 +92,14 @@ original row each leading position corresponds to. The accessors `prediction_err
 The remaining fields hold the companion-form and rank-revealing settings and the
 run status; use `companion_block`, `rank_revealing` and the accessors rather than
 reading them directly.
+
+## Covariance storage
+A workspace built with `covariances = false` keeps no per-period state covariances:
+`Pt` and `Ptt` hold a single `m × m` slice that the filter overwrites each period,
+and `Vs` and `Pcross` are empty. The filter, the means-only smoother, the
+disturbance smoother and the simulation smoother run as usual; the covariance
+accessors, `KalmanFilterResult`, `SmootherResult` and EM throw. See
+`KalmanWorkspace(p, m, r, n; covariances)`.
 """
 mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Dimensions
@@ -111,6 +119,12 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
 
     # Precomputed
     RQR::Matrix{T}    # m × m: R * Q * R'
+
+    # Transition intercept c and per-period shock scales sₜ: αₜ₊₁ = c + T αₜ + R ηₜ
+    # with Var(ηₜ) = sₜ² Q. Set by `set_transition_intercept!` and
+    # `set_period_scales!`; zero and one by default.
+    c::Vector{T}              # m
+    period_scales::Vector{T}  # n
 
     # Filter storage
     at::Matrix{T}         # m × n: predicted states
@@ -174,10 +188,13 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     smoothed::Bool        # the smoother has run on the current filter output
     smoothed_cov::Bool    # ... and filled Vs
     crosscov::Bool        # ... and filled Pcross
+
+    # Whether Pt, Ptt, Vs and Pcross have a time dimension. Fixed at construction.
+    stores_cov::Bool
 end
 
 """
-    KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where T
+    KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int; covariances = true) where T
 
 Create workspace with specified dimensions. Parameters must be set via `set_params!`.
 
@@ -186,8 +203,24 @@ Create workspace with specified dimensions. Parameters must be set via `set_para
 - `m`: Number of states
 - `r`: Number of state shocks
 - `n`: Number of time periods
+- `covariances`: Whether to store the predicted, filtered and smoothed state
+  covariances of every period (default `true`). Those are four `m × m × n` arrays,
+  which dominate memory for a large state (about 1 GB at `m = 260`, `n = 500`).
+
+With `covariances = false` the filter keeps only the current period's covariance,
+and `kalman_smoother!` computes the smoothed means alone by the fast state smoother
+of Durbin & Koopman (2012, Section 4.6.2), a backward pass for `rₜ` followed by the
+forward pass `α̂₁ = a₁ + P₁ r₀`, `α̂ₜ₊₁ = c + T α̂ₜ + sₜ² R Q R' rₜ`. Neither pass reads
+a stored covariance. The disturbance smoother and the simulation smoother work as
+on a full workspace. `predicted_states_cov`, `filtered_states_cov`,
+`smoothed_states_cov`, `crosslag_covs`, `KalmanFilterResult`, `SmootherResult`,
+`compute_sufficient_stats!` and `em_estimate!` throw an `ArgumentError`.
 """
-function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
+function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int;
+        covariances::Bool = true) where {T <: Real}
+    # Without covariance storage, Pt and Ptt keep one slice: the filter writes the
+    # current period's filtered covariance into Ptt[:, :, 1].
+    n_cov = covariances ? n : 1
     KalmanWorkspace{T}(
         # Dimensions
         p,
@@ -206,12 +239,14 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
 
         # Precomputed
         zeros(T, m, m),      # RQR
+        zeros(T, m),         # c
+        ones(T, n),          # period_scales
 
         # Filter storage
         zeros(T, m, n),      # at
-        zeros(T, m, m, n),  # Pt
+        zeros(T, m, m, n_cov),  # Pt
         zeros(T, m, n),      # att
-        zeros(T, m, m, n),  # Ptt
+        zeros(T, m, m, n_cov),  # Ptt
         zeros(T, p, n),      # vt
         zeros(T, p, p, n),  # Ft
         zeros(T, p, p, n),  # Ft_L
@@ -223,8 +258,8 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
 
         # Smoother storage
         zeros(T, m, n),      # αs
-        zeros(T, m, m, n),  # Vs
-        zeros(T, m, m, max(n-1, 1)),  # Pcross
+        zeros(T, m, m, covariances ? n : 0),  # Vs
+        zeros(T, m, m, covariances ? max(n-1, 1) : 0),  # Pcross
 
         # Scratch space
         zeros(T, m, m),      # tmp_mm1
@@ -261,22 +296,27 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         _NOT_RUN,                    # status
         false,                       # smoothed
         false,                       # smoothed_cov
-        false                        # crosscov
+        false,                       # crosscov
+        covariances                  # stores_cov
     )
 end
 
-KalmanWorkspace(p::Int, m::Int, r::Int, n::Int) = KalmanWorkspace{Float64}(p, m, r, n)
+function KalmanWorkspace(p::Int, m::Int, r::Int, n::Int; covariances::Bool = true)
+    KalmanWorkspace{Float64}(p, m, r, n; covariances)
+end
 
 # Floating-point element type able to hold every array in `xs`.
 _float_eltype(xs...) = float(promote_type(map(eltype, xs)...))
 
 """
-    KalmanWorkspace(Z, H, T, R, Q, a1, P1, n::Int)
-    KalmanWorkspace{T}(Z, H, T, R, Q, a1, P1, n::Int)
+    KalmanWorkspace(Z, H, T, R, Q, a1, P1, n::Int; covariances = true)
+    KalmanWorkspace{T}(Z, H, T, R, Q, a1, P1, n::Int; covariances = true)
 
 Create a workspace for `n` periods holding the system matrices and the initial
 state. The element type is `T` when given, and otherwise the floating-point type
 that holds every argument, so integer matrices give a `KalmanWorkspace{Float64}`.
+`covariances = false` builds a workspace without per-period covariance storage; see
+`KalmanWorkspace(p, m, r, n; covariances)`.
 """
 function KalmanWorkspace{T}(
         Z::AbstractMatrix,
@@ -286,12 +326,13 @@ function KalmanWorkspace{T}(
         Q::AbstractMatrix,
         a1::AbstractVector,
         P1::AbstractMatrix,
-        n::Int
+        n::Int;
+        covariances::Bool = true
 ) where {T <: Real}
     p, m = size(Z)
     r = size(Q, 1)
 
-    ws = KalmanWorkspace{T}(p, m, r, n)
+    ws = KalmanWorkspace{T}(p, m, r, n; covariances)
     set_params!(ws, Z, H, Tmat, R, Q)
     set_initial!(ws, a1, P1)
 
@@ -300,26 +341,27 @@ end
 
 function KalmanWorkspace(Z::AbstractMatrix, H::AbstractMatrix, Tmat::AbstractMatrix,
         R::AbstractMatrix, Q::AbstractMatrix, a1::AbstractVector, P1::AbstractMatrix,
-        n::Int)
+        n::Int; covariances::Bool = true)
     T = _float_eltype(Z, H, Tmat, R, Q, a1, P1)
-    return KalmanWorkspace{T}(Z, H, Tmat, R, Q, a1, P1, n)
+    return KalmanWorkspace{T}(Z, H, Tmat, R, Q, a1, P1, n; covariances)
 end
 
 """
-    KalmanWorkspace(kf::KFParms, a1, P1, n::Int)
-    KalmanWorkspace{T}(kf::KFParms, a1, P1, n::Int)
+    KalmanWorkspace(kf::KFParms, a1, P1, n::Int; covariances = true)
+    KalmanWorkspace{T}(kf::KFParms, a1, P1, n::Int; covariances = true)
 
 Create a workspace for `n` periods from the system matrices in `kf` and the
 initial state `a1`, `P1`. The element type is chosen as in
 `KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)`.
 """
 function KalmanWorkspace{T}(kf::KFParms, a1::AbstractVector, P1::AbstractMatrix,
-        n::Int) where {T <: Real}
-    KalmanWorkspace{T}(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n)
+        n::Int; covariances::Bool = true) where {T <: Real}
+    KalmanWorkspace{T}(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n; covariances)
 end
 
-function KalmanWorkspace(kf::KFParms, a1::AbstractVector, P1::AbstractMatrix, n::Int)
-    KalmanWorkspace(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n)
+function KalmanWorkspace(kf::KFParms, a1::AbstractVector, P1::AbstractMatrix, n::Int;
+        covariances::Bool = true)
+    KalmanWorkspace(kf.Z, kf.H, kf.T, kf.R, kf.Q, a1, P1, n; covariances)
 end
 
 # ============================================
@@ -336,11 +378,16 @@ Copy the filter output of `ws`, with its system matrices, into a `KalmanFilterRe
 Later runs on `ws` don't change the result, which supports everything a result of
 `kalman_filter` does, such as `kalman_smoother(result)`.
 
-Throws an `ArgumentError` if no filter has run on `ws`. After a failed run the result is
-a failed result: its log-likelihood is `-Inf` and its state accessors throw.
+Throws an `ArgumentError` if no filter has run on `ws`, if `ws` has a transition
+intercept or period scales, which a `KalmanFilterResult` cannot carry, or if `ws` was
+built with `covariances = false`. After a failed
+run the result is a failed result: its log-likelihood is `-Inf` and its state
+accessors throw.
 """
 function KalmanFilterResult(ws::KalmanWorkspace)
     ws.status == _NOT_RUN && _require_output(ws, :KalmanFilterResult)
+    _require_plain_transition(ws, "KalmanFilterResult")
+    _require_cov_storage(ws, "KalmanFilterResult")
     p = KFParms(copy(ws.Z), copy(ws.H), copy(ws.Tmat), copy(ws.R), copy(ws.Q))
     return KalmanFilterResult(p, ws.loglik, copy(ws.at), copy(ws.Pt), copy(ws.att),
         copy(ws.Ptt), copy(ws.vt), copy(ws.Ft), copy(ws.Kt), copy(ws.missing_mask),
@@ -472,6 +519,102 @@ Return whether the measurement update uses the rank-revealing factorization of
 `Fₜ`. See [`set_rank_revealing!`](@ref).
 """
 rank_revealing(ws::KalmanWorkspace) = ws.rank_revealing
+
+"""
+    set_transition_intercept!(ws::KalmanWorkspace, c::AbstractVector) -> ws
+
+Set the intercept `c` of the transition equation
+
+    αₜ₊₁ = c + T αₜ + R ηₜ,
+
+so the one-step prediction is `aₜ₊₁ = c + T aₜ|ₜ`. The default is `c = 0`. The
+covariance recursion does not involve `c`, so a declared companion structure
+(see [`set_companion_structure!`](@ref)) stays valid.
+
+`c` must have length `m` and finite entries. Supported by `kalman_filter!`,
+`kalman_smoother!`, `disturbance_smoother` and the simulation smoother on a
+`KalmanWorkspace`. `KalmanFilterResult(ws)`, EM and the exact diffuse filter do not
+support it and throw while it is nonzero; [`system_matrices`](@ref) does not
+include it.
+
+See also: [`transition_intercept`](@ref Siphon.transition_intercept),
+[`set_period_scales!`](@ref Siphon.set_period_scales!).
+"""
+function set_transition_intercept!(ws::KalmanWorkspace, c::AbstractVector)
+    _check_size("set_transition_intercept!", "c", c, (ws.state_dim,))
+    all(isfinite, c) || throw(ArgumentError(
+        "set_transition_intercept!: c must be finite, got $c"))
+    copyto!(ws.c, c)
+    return ws
+end
+
+"""
+    transition_intercept(ws::KalmanWorkspace) -> Vector
+
+Return the transition intercept `c`, as the live buffer the filter reads. See
+[`set_transition_intercept!`](@ref Siphon.set_transition_intercept!).
+"""
+transition_intercept(ws::KalmanWorkspace) = ws.c
+
+"""
+    set_period_scales!(ws::KalmanWorkspace, s::AbstractVector) -> ws
+
+Set per-period scales of the state disturbance: `Var(ηₜ) = sₜ² Q` for
+`t = 1, …, n`, where `ηₜ` moves the state from period `t` to `t + 1`,
+
+    αₜ₊₁ = c + T αₜ + R ηₜ,   ηₜ ~ N(0, sₜ² Q).
+
+The predicted covariance is then `Pₜ₊₁ = T Pₜ|ₜ T' + sₜ² R Q R'`. `s[n]` drives the
+state past the sample: it enters the smoothed disturbance `η̂ₙ` (zero) and its
+variance `sₙ² Q`, and no filtered or smoothed state. The default is `s = 1`.
+
+A model whose disturbance *entering* period `t` has scale `σₜ` (a VAR residual
+`uₜ` scaled by `σₜ`, for instance) has `s[t] = σₜ₊₁`.
+
+`s` must have length `n` and finite, non-negative entries. Supported by the same
+functions as [`set_transition_intercept!`](@ref Siphon.set_transition_intercept!),
+which lists the ones that throw while a scale differs from one.
+
+See also: [`period_scales`](@ref Siphon.period_scales).
+"""
+function set_period_scales!(ws::KalmanWorkspace, s::AbstractVector)
+    _check_size("set_period_scales!", "s", s, (ws.n_times,))
+    all(x -> isfinite(x) && x >= 0, s) || throw(ArgumentError(
+        "set_period_scales!: scales must be finite and non-negative, got $s"))
+    copyto!(ws.period_scales, s)
+    return ws
+end
+
+"""
+    period_scales(ws::KalmanWorkspace) -> Vector
+
+Return the per-period disturbance scales `s`, as the live buffer the filter reads.
+See [`set_period_scales!`](@ref Siphon.set_period_scales!).
+"""
+period_scales(ws::KalmanWorkspace) = ws.period_scales
+
+# Throw unless `ws` has a zero transition intercept and unit period scales. Called by
+# the consumers of a `KalmanWorkspace` that implement only αₜ₊₁ = T αₜ + R ηₜ with
+# Var(ηₜ) = Q.
+function _require_plain_transition(ws::KalmanWorkspace, caller)
+    has_c = any(!iszero, ws.c)
+    has_s = any(!isone, ws.period_scales)
+    (has_c || has_s) || return nothing
+    what = has_c && has_s ? "a transition intercept and period scales" :
+           has_c ? "a transition intercept" : "period scales"
+    throw(ArgumentError(
+        "$caller does not support $what. The workspace sets them through " *
+        "set_transition_intercept! or set_period_scales!; reset them to zero and one " *
+        "to use $caller."))
+end
+
+# Throw unless `ws` stores the per-period state covariances, which `caller` reads.
+function _require_cov_storage(ws::KalmanWorkspace, caller)
+    ws.stores_cov && return nothing
+    throw(ArgumentError(
+        "$caller needs the per-period state covariances, which this workspace does " *
+        "not store. Build it with KalmanWorkspace(...; covariances = true)."))
+end
 
 """
     innovation_ranks(ws::KalmanWorkspace) -> Vector{Int}
@@ -767,9 +910,10 @@ end
 # ============================================
 
 """
-    _propagate_cov!(dest, ws, P, block) -> dest
+    _propagate_cov!(dest, ws, P, block, s2) -> dest
 
-Overwrite `dest` with `T P T' + R Q R'`, the one-step predicted state covariance.
+Overwrite `dest` with `T P T' + s2 R Q R'`, the one-step predicted state covariance,
+where `s2` is the squared period scale of the disturbance.
 
 With `block == 0` this is two general `m × m` products. With `block == b` the
 transition is block-companion,
@@ -785,7 +929,7 @@ and the same shift applies on the right. The two `m³` products collapse to
 """
 function _propagate_cov!(
         dest::AbstractMatrix{T}, ws::KalmanWorkspace{T}, P::AbstractMatrix{T},
-        block::Int) where {T}
+        block::Int, s2::T) where {T}
     m = ws.state_dim
 
     if block == 0
@@ -802,7 +946,7 @@ function _propagate_cov!(
     end
 
     @inbounds for idx in eachindex(dest)
-        dest[idx] += ws.RQR[idx]
+        dest[idx] += s2 * ws.RQR[idx]
     end
     return dest
 end
@@ -830,6 +974,13 @@ Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 
 When `set_companion_structure!` has declared a block-companion transition, the
 covariance propagation uses the structured form; see `_propagate_cov!`.
+
+On a workspace built with `covariances = false`, `Pt` and `Ptt` are not stored per
+period; only the current filtered covariance is kept.
+
+The prediction step is `aₜ₊₁ = c + T aₜ|ₜ` and `Pₜ₊₁ = T Pₜ|ₜ T' + sₜ² R Q R'`, with
+the intercept `c` from `set_transition_intercept!` and the scales `sₜ` from
+`set_period_scales!` (zero and one by default).
 
 When `set_rank_revealing!` has been declared, the measurement update takes a
 symmetric eigendecomposition of `Fₜ` in place of the Cholesky factorization and
@@ -862,11 +1013,14 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     copyto!(P_curr, ws.P1)
 
     log2pi = log(T(2π))
+    stores_cov = ws.stores_cov
 
     @inbounds for t in 1:n
+        s2 = ws.period_scales[t]^2
+
         # Store predicted state/covariance. `copyto!` is contiguous-safe.
         copyto!(view(ws.at, :, t), a_curr)
-        copyto!(view(ws.Pt, :, :, t), P_curr)
+        stores_cov && copyto!(view(ws.Pt, :, :, t), P_curr)
 
         y_t = view(y, :, t)
         obs_rows_t = view(ws.obs_rows, :, t)
@@ -888,13 +1042,14 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
             # Filtered = predicted for missing observations.
             copyto!(view(ws.att, :, t), a_curr)
-            copyto!(view(ws.Ptt, :, :, t), P_curr)
+            stores_cov && copyto!(view(ws.Ptt, :, :, t), P_curr)
 
-            # Propagate: a = T * a, P = T * P * T' + RQR
-            mul!(ws.tmp_m2, ws.Tmat, a_curr)
+            # Propagate: a = c + T * a, P = T * P * T' + s² RQR
+            copyto!(ws.tmp_m2, ws.c)
+            mul!(ws.tmp_m2, ws.Tmat, a_curr, one(T), one(T))
             copyto!(a_curr, ws.tmp_m2)
 
-            _propagate_cov!(ws.tmp_mm3, ws, P_curr, block)
+            _propagate_cov!(ws.tmp_mm3, ws, P_curr, block, s2)
             copyto!(P_curr, ws.tmp_mm3)
         else
             ws.missing_mask[t] = false
@@ -1068,7 +1223,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             # with F⁻¹ (Z_t P), so recompute it once.
             mul!(ZrP, Zr, P_curr)
             mul!(ws.tmp_mm2, Mr, ZrP)                 # M * (Z_t*P) (m×m)
-            Ptt_view = view(ws.Ptt, :, :, t)
+            Ptt_view = view(ws.Ptt, :, :, stores_cov ? t : 1)
             @inbounds for idx in eachindex(P_curr)
                 Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
             end
@@ -1087,9 +1242,10 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 Ptt_view[j, i] = avg
             end
 
-            # Predict next: a = T * a_filt, P = T * P_filt * T' + RQR
-            mul!(a_curr, ws.Tmat, att_view)
-            _propagate_cov!(P_curr, ws, Ptt_view, block)
+            # Predict next: a = c + T * a_filt, P = T * P_filt * T' + s² RQR
+            copyto!(a_curr, ws.c)
+            mul!(a_curr, ws.Tmat, att_view, one(T), one(T))
+            _propagate_cov!(P_curr, ws, Ptt_view, block, s2)
         end
     end
 
@@ -1139,7 +1295,7 @@ function _apply_Finv!(
 end
 
 """
-    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=false, covariances::Bool=true)
+    kalman_smoother!(ws::KalmanWorkspace; crosscov::Bool=false, covariances::Bool)
 
 Run RTS smoother in-place using filter results stored in workspace.
 
@@ -1148,9 +1304,11 @@ Run RTS smoother in-place using filter results stored in workspace.
   `ArgumentError` if the filter has not run or failed)
 - `crosscov`: If true, also compute the cross-lag covariances, which EM needs
   (default: false)
-- `covariances`: If true, compute smoothed covariances (default: true). When
-  false, only the smoothed means are produced, `smoothed_states_cov(ws)` throws
-  until a smoother run computes them, and `crosscov` must also be false.
+- `covariances`: If true, compute smoothed covariances. The default is true for a
+  workspace that stores covariances and false for one built with
+  `covariances = false`, on which true throws. When false, only the smoothed means
+  are produced, `smoothed_states_cov(ws)` throws until a smoother run computes them,
+  and `crosscov` must also be false.
 
 # Stored Results
 - `αs`: Smoothed states E[αₜ|y₁:ₙ]
@@ -1165,19 +1323,26 @@ The mean recursion `r_{t-1} = Zₜ' Fₜ⁻¹ vₜ + Lₜ' rₜ` does not involv
 enters only the covariance. With `covariances=false` the `N` recursion and the
 two `m × m` products forming `Vₜ` are therefore skipped, and `Lₜ' rₜ` is
 evaluated as `T' rₜ - Zₜ'(Kₜ' rₜ)` so that the `m × m` matrix `Lₜ` is never
-formed. What remains is `O(m²)` per period instead of `O(m³)`.
+formed. What remains is `O(m²)` per period instead of `O(m³)`. On a workspace
+without covariance storage the means come from the fast state smoother, which
+reads no stored covariance; see `KalmanWorkspace(p, m, r, n; covariances)`.
 """
 function kalman_smoother!(
         ws::KalmanWorkspace{T}; crosscov::Bool = false,
-        covariances::Bool = true) where {T}
+        covariances::Bool = ws.stores_cov) where {T}
     !covariances && crosscov &&
         throw(ArgumentError(
             "crosscov=true requires covariances=true: the cross-lag covariance " *
             "is built from the smoothed covariance"))
     _require_output(ws, :kalman_smoother!)
+    covariances && _require_cov_storage(ws, "kalman_smoother! with covariances = true")
 
     if !covariances
-        _kalman_smoother_mean!(ws)
+        if ws.stores_cov
+            _kalman_smoother_mean!(ws)
+        else
+            _kalman_smoother_fast_mean!(ws)
+        end
         ws.smoothed = true
         ws.smoothed_cov = false
         ws.crosscov = false
@@ -1382,12 +1547,83 @@ function _kalman_smoother_mean!(ws::KalmanWorkspace{T}, tstop::Int = 0) where {T
     return nothing
 end
 
+"""
+    _kalman_smoother_fast_mean!(ws::KalmanWorkspace) -> nothing
+
+Smoothed means by the fast state smoother of Durbin & Koopman (2012, Section
+4.6.2), writing `ws.αs`.
+
+The backward pass runs the same `rₜ` recursion as `_kalman_smoother_mean!` and
+stores `rₜ₋₁` in column `t` of `ws.αs`. The forward pass then overwrites those
+columns with
+
+    α̂₁ = a₁ + P₁ r₀,    α̂ₜ₊₁ = c + T α̂ₜ + sₜ² R Q R' rₜ,
+
+the second being the transition applied to the smoothed disturbance
+`η̂ₜ = sₜ² Q R' rₜ`. Neither pass reads `Pt`, so this runs on a workspace without
+covariance storage.
+"""
+function _kalman_smoother_fast_mean!(ws::KalmanWorkspace{T}) where {T}
+    m, n = ws.state_dim, ws.n_times
+    αs = ws.αs
+
+    fill!(ws.r_smooth, zero(T))
+
+    @inbounds for t in n:-1:1
+        # r_{t-1} = L_t' r_t (+ the observation term below, when there is one).
+        mul!(ws.tmp_m1, transpose(ws.Tmat), ws.r_smooth)
+
+        if !ws.missing_mask[t]
+            pt = ws.n_observed[t]
+            rows = view(ws.obs_rows, 1:pt, t)
+            v_t = view(ws.vt, 1:pt, t)
+            K_t = view(ws.Kt, :, 1:pt, t)
+
+            tmp_p1r = view(ws.tmp_p1, 1:pt)
+            copyto!(tmp_p1r, v_t)
+            _apply_Finv!(tmp_p1r, ws, t, pt, ws.tmp_p2)
+
+            tmp_p2r = view(ws.tmp_p2, 1:pt)
+            mul!(tmp_p2r, transpose(K_t), ws.r_smooth)
+            for k in 1:pt
+                tmp_p2r[k] = tmp_p1r[k] - tmp_p2r[k]
+            end
+
+            for (k, i) in pairs(rows), j in 1:m
+
+                ws.tmp_m1[j] += ws.Z[i, j] * tmp_p2r[k]
+            end
+        end
+
+        copyto!(ws.r_smooth, ws.tmp_m1)
+        copyto!(view(αs, :, t), ws.r_smooth)
+    end
+
+    # α̂₁ = a₁ + P₁ r₀
+    copyto!(ws.tmp_m1, view(αs, :, 1))
+    α1 = view(αs, :, 1)
+    copyto!(α1, ws.a1)
+    mul!(α1, ws.P1, ws.tmp_m1, one(T), one(T))
+
+    # α̂ₜ₊₁ = c + T α̂ₜ + sₜ² R Q R' rₜ, with rₜ read from column t + 1 before it is
+    # overwritten.
+    @inbounds for t in 1:(n - 1)
+        copyto!(ws.tmp_m1, view(αs, :, t + 1))
+        α_next = view(αs, :, t + 1)
+        copyto!(α_next, ws.c)
+        mul!(α_next, ws.Tmat, view(αs, :, t), one(T), one(T))
+        mul!(α_next, ws.RQR, ws.tmp_m1, ws.period_scales[t]^2, one(T))
+    end
+
+    return nothing
+end
+
 # ============================================
 # Combined filter and smooth
 # ============================================
 
 """
-    kalman_filter_and_smooth!(ws, y::AbstractMatrix; crosscov=false, covariances=true) -> loglik
+    kalman_filter_and_smooth!(ws, y::AbstractMatrix; crosscov=false, covariances) -> loglik
 
 Run filter and smoother in one call.
 
@@ -1397,8 +1633,9 @@ Run filter and smoother in one call.
 
 Keywords are passed to `kalman_smoother!`:
 - `crosscov`: Also compute the cross-lag covariances (default: false)
-- `covariances`: Compute smoothed covariances (default: true; `KalmanWorkspace`
-  only). See `kalman_smoother!` for what is skipped when this is false.
+- `covariances`: Compute smoothed covariances (`KalmanWorkspace` only; the default
+  follows the workspace's covariance storage). See `kalman_smoother!` for what is
+  skipped when this is false.
 
 # Returns
 - `loglik`: Log-likelihood. When the filter fails it is `-Inf` and the smoother is
@@ -1427,6 +1664,7 @@ path it instead holds `G`, with `Fₜ⁺ = G G'`, in its leading
 cholesky_factors(ws::KalmanWorkspace) = _require_output(ws, :cholesky_factors).Ft_L
 
 _has_smoothed_cov(ws::KalmanWorkspace) = ws.smoothed_cov
+_stores_cov(ws::KalmanWorkspace) = ws.stores_cov
 
 """
     n_valid_obs(ws::KalmanWorkspace) -> Int
@@ -1729,6 +1967,7 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
     p, m, n = base.obs_dim, base.state_dim, base.n_times
 
     _check_obs(base, "kalman_filter!", y)
+    _require_plain_transition(base, "the exact diffuse filter")
     base.rank_revealing && throw(ArgumentError(
         "the rank-revealing measurement update is implemented for " *
         "KalmanWorkspace only; clear it with set_rank_revealing!(ws.base, false) " *
@@ -2310,8 +2549,10 @@ function compute_sufficient_stats!(
         kf_ws::KalmanWorkspace{T},
         y::AbstractMatrix
 ) where {T}
+    _require_cov_storage(kf_ws, "compute_sufficient_stats!")
     # Checks that the smoother has run with the cross-lag covariances.
     crosslag_covs(kf_ws)
+    _require_plain_transition(kf_ws, "compute_sufficient_stats!")
     Base.require_one_based_indexing(y)
     p, m, n = em_ws.obs_dim, em_ws.state_dim, em_ws.n_times
     size(y) == (p, n) ||
@@ -3026,6 +3267,8 @@ function em_estimate!(
 ) where {T}
     y = _nan_obs(y)
     _require_no_partial_periods(y, "em_estimate!", "Use fit!(MLE(), ...), which handles them.")
+    _require_plain_transition(kf_ws, "em_estimate!")
+    _require_cov_storage(kf_ws, "em_estimate!")
     loglik_history = Vector{T}(undef, maxiter)
     ll_prev = T(-Inf)
     converged = false

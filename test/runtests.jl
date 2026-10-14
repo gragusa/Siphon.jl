@@ -372,6 +372,12 @@ include("companion_smoother_tests.jl")
 # Rank-revealing measurement update for a singular innovation covariance
 include("singular_innovation_tests.jl")
 
+# Transition intercept and per-period disturbance scales
+include("period_scale_intercept_tests.jl")
+
+# Workspace without per-period covariance storage
+include("lean_workspace_tests.jl")
+
 # Filtering across a transition whose spectral radius exceeds one
 include("explosive_transition_tests.jl")
 

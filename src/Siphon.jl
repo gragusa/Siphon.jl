@@ -183,6 +183,7 @@ public missing_mask, observed_mask, observed_rows, n_observed, n_valid_obs
 public cholesky_factors
 public obs_dim, state_dim, shock_dim, n_times
 public set_Z!, set_H!, set_T!, set_R!, set_Q!
+public set_transition_intercept!, transition_intercept, set_period_scales!, period_scales
 # StaticArrays threshold and confidence bands
 public STATIC_THRESHOLD, confidence_bands
 # Factorization and draws from a positive semi-definite covariance
