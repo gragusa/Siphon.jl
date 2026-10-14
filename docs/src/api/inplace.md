@@ -7,6 +7,11 @@ direct use.
 
 ## Workspaces
 
+A `KalmanWorkspace` built with `covariances = false` stores no per-period state
+covariances. Use it for a large state when only the smoothed means, the
+disturbance smoother or simulation-smoother draws are needed: at `m = 255` and
+`n = 300` it takes about 18 MB instead of about 610 MB.
+
 ```@docs
 KalmanWorkspace
 DiffuseKalmanWorkspace
@@ -63,6 +68,15 @@ rank_revealing
 innovation_ranks
 InnovationSupportError
 Siphon.cholesky_factors
+```
+
+## Transition Intercept and Period Scales
+
+```@docs
+Siphon.set_transition_intercept!
+Siphon.transition_intercept
+Siphon.set_period_scales!
+Siphon.period_scales
 ```
 
 ## Simulation Smoother

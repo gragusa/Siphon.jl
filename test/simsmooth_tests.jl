@@ -120,6 +120,15 @@ end
     @test f.L * f.L' ≈ zeros(3, 3)
 end
 
+@testset "psd_factor — eigenvalues at rounding level are zero" begin
+    # S = I - v v' / |v|² has a null direction v; forming it in floating point
+    # leaves an eigenvalue of order eps there, which must not enter the factor.
+    v = [1.0, 2.0, 3.0]
+    S = Matrix(1.0I, 3, 3) - v * v' / (v' * v)
+    f = Siphon.psd_factor(S)
+    @test maximum(abs, f.L' * v) < 1e-14
+end
+
 @testset "psd_factor — rejects a negative eigenvalue" begin
     # A negative variance is a modeling error; clamping it would hide the cause.
     @test_throws "not positive semi-definite" Siphon.psd_factor([1.0 0.0; 0.0 -0.5])

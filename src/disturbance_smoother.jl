@@ -211,7 +211,8 @@ end
 
 Fill `out` with the smoothed disturbances from the filter output in `ws`. This needs
 `kalman_filter!(ws, y)` first, but not `kalman_smoother!`. It changes no output of
-`ws`. `out` must have been built as `DisturbanceSmootherResult{T}(p, r, n)` with the
+`ws`. With period scales `sₜ` (see `set_period_scales!`), `Var(ηₜ) = sₜ² Q` replaces
+`Q` throughout, so `Var[ηₙ | y₁:ₙ] = sₙ² Q`. `out` must have been built as `DisturbanceSmootherResult{T}(p, r, n)` with the
 dimensions of `ws`. Each call allocates three small buffers (r × m and p × p) and
 nothing per period.
 
@@ -239,16 +240,18 @@ function disturbance_smoother!(out::DisturbanceSmootherResult, ws::KalmanWorkspa
     fill!(N_mat, zero(T))
 
     for t in n:-1:1
-        # State disturbances: η̂ = Q R' r, Var = Q − Q R' N R Q.
+        # State disturbances with Var(ηₜ) = s² Q: η̂ = s² Q R' r and
+        # Var = s² Q − s⁴ Q R' N R Q.
+        s2 = ws.period_scales[t]^2
         η_t = view(out.ηs, :, t)
         Vη_t = view(out.Vη, :, :, t)
-        mul!(η_t, QRt, r_vec)
+        mul!(η_t, QRt, r_vec, s2, zero(T))
         mul!(QRt_N, QRt, N_mat)
-        mul!(Vη_t, QRt_N, transpose(QRt))
+        mul!(Vη_t, QRt_N, transpose(QRt), s2^2, zero(T))
         for i in 1:r
             out.ηs_std[i, t] = _standardize(η_t[i], Vη_t[i, i])
         end
-        Vη_t .= Q .- Vη_t
+        Vη_t .= s2 .* Q .- Vη_t
 
         if ws.missing_mask[t]
             out.εs[:, t] .= zero(T)

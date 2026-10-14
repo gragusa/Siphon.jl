@@ -116,6 +116,18 @@ end
 # The storage of `x`, after checking that it holds the output of a successful run.
 _output(x::_FilterOutput, f::Symbol) = _filter_store(_require_output(x, f))
 
+# Whether `store` keeps the per-period state covariances. Only a `KalmanWorkspace`
+# can be built without them, and it overrides this.
+_stores_cov(store) = true
+
+# Throw unless `store` keeps the per-period state covariances that `f` returns.
+function _require_cov_store(store, f::Symbol)
+    _stores_cov(store) || throw(ArgumentError(
+        "$f: this workspace does not store per-period state covariances. " *
+        "Build it with KalmanWorkspace(...; covariances = true)."))
+    return store
+end
+
 # Throw unless the smoother has run on the current filter output of `ws`.
 function _require_smoothed(ws::AbstractFilterWorkspace, f::Symbol)
     _require_output(ws, f)
@@ -132,6 +144,7 @@ _has_smoothed_cov(store::AbstractFilterWorkspace) = true
 # Throw unless the last smoother run on `ws` also computed the smoothed covariances.
 function _require_smoothed_cov(ws::AbstractFilterWorkspace, f::Symbol)
     _require_smoothed(ws, f)
+    _require_cov_store(_filter_store(ws), f)
     _has_smoothed_cov(_filter_store(ws)) || throw(ArgumentError(
         "$f: the last smoother run computed the smoothed means only. " *
         "Call kalman_smoother!(ws) with covariances = true."))
@@ -154,7 +167,9 @@ Return the predicted state covariances Var[αₜ | y₁:ₜ₋₁] for t = 1:n (
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-predicted_states_cov(x::_FilterOutput) = _output(x, :predicted_states_cov).Pt
+function predicted_states_cov(x::_FilterOutput)
+    _require_cov_store(_output(x, :predicted_states_cov), :predicted_states_cov).Pt
+end
 
 """
     filtered_states(x) -> Matrix
@@ -172,7 +187,9 @@ Return the filtered state covariances Var[αₜ | y₁:ₜ] for t = 1:n (m × m 
 
 `x` is a filter result, a filter workspace or a fitted model.
 """
-filtered_states_cov(x::_FilterOutput) = _output(x, :filtered_states_cov).Ptt
+function filtered_states_cov(x::_FilterOutput)
+    _require_cov_store(_output(x, :filtered_states_cov), :filtered_states_cov).Ptt
+end
 
 """
     prediction_errors(x) -> Matrix
@@ -272,6 +289,7 @@ Return the smoothed cross-lag covariances Cov[αₜ₊₁, αₜ | y₁:ₙ] for
 """
 function crosslag_covs(ws::AbstractFilterWorkspace)
     store = _filter_store(_require_smoothed(ws, :crosslag_covs))
+    _require_cov_store(store, :crosslag_covs)
     store.crosscov || throw(ArgumentError(
         "crosslag_covs: the last smoother run skipped the cross-lag covariances. " *
         "Call kalman_smoother!(ws; crosscov = true)."))

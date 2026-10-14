@@ -53,7 +53,7 @@ function psd_factor(S::AbstractMatrix{<:Real}; tol::Union{Nothing, Real} = nothi
             "is below the tolerance -$τ"))
     end
 
-    L = E.vectors * Diagonal(sqrt.(max.(λ, zero(T))))
+    L = E.vectors * Diagonal(sqrt.(ifelse.(λ .> τ, λ, zero(T))))
     return PSDFactor(L)
 end
 
@@ -189,12 +189,13 @@ function _simulate_path!(
             y_t[i] = observed_mask[i, t] ? y_t[i] + sws.scratch_p[i] : T(NaN)
         end
 
-        # α⁺ₜ₊₁ = T α⁺ₜ + R η⁺ₜ, η⁺ₜ ~ N(0, Q)
+        # α⁺ₜ₊₁ = c + T α⁺ₜ + R η⁺ₜ, η⁺ₜ ~ N(0, sₜ² Q)
         if t < n
             α_next = view(sws.α_plus, :, t + 1)
-            mul!(α_next, ws.Tmat, α_t)
+            copyto!(α_next, ws.c)
+            mul!(α_next, ws.Tmat, α_t, one(T), one(T))
             psd_rand!(sws.scratch_r, sws.Q_factor, rng, sws.noise_r)
-            mul!(sws.scratch_m, ws.R, sws.scratch_r)
+            mul!(sws.scratch_m, ws.R, sws.scratch_r, ws.period_scales[t], zero(T))
             for i in 1:m
                 α_next[i] += sws.scratch_m[i]
             end
@@ -239,7 +240,10 @@ function makes rather than reading `ws` afterwards. Only the means are computed,
 
 # Notes
 Requires the in-place filter, which is the only path that handles periods where
-some rows are observed and others are not. `Q` and `H` may be singular.
+some rows are observed and others are not. `Q` and `H` may be singular. The
+simulated path uses the transition intercept and period scales of `ws` (see
+`set_transition_intercept!` and `set_period_scales!`); the factors cached in `sws`
+are those of the unscaled `Q`, so changing the scales needs no `refresh_factors!`.
 """
 function simulation_smoother!(
         out::AbstractMatrix, sws::SimulationSmootherWorkspace{T},
