@@ -500,7 +500,7 @@ end
     y = Matrix(Matrix(df)')
     maturities = [3, 12, 24, 60, 120]
     spec = custom_ssm(
-        Z = build_svensson_loadings(maturities),
+        Z = Siphon.build_svensson_loadings(maturities),
         H = diag_free(5, :var_obs, init = 0.01),
         T = diag_free(4, :φ, init = 0.9, lower = -1.0, upper = 1.0),
         R = Matrix(1.0I, 4, 4),

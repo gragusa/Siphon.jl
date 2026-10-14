@@ -295,8 +295,8 @@ function dns_builder(θ::Dict, data)
     Z = zeros(T, n, 3)
     for i in 1:n
         Z[i, 1] = one(T)
-        Z[i, 2] = dns_loading1(λ, τ[i])
-        Z[i, 3] = dns_loading2(λ, τ[i])
+        Z[i, 2] = Siphon.dns_loading1(λ, τ[i])
+        Z[i, 3] = Siphon.dns_loading2(λ, τ[i])
     end
     return Z
 end
@@ -329,10 +329,10 @@ Siphon.jl provides convenience functions for DNS models:
 
 ```julia
 # Build DNS Z matrix directly
-Z = build_dns_loadings(maturities, :λ; λ_init=0.0609)
+Z = Siphon.build_dns_loadings(maturities, :λ; λ_init=0.0609)
 
 # Or Svensson (4-factor) loadings
-Z = build_svensson_loadings(maturities, :λ1, :λ2; λ1_init=0.05, λ2_init=0.10)
+Z = Siphon.build_svensson_loadings(maturities, :λ1, :λ2; λ1_init=0.05, λ2_init=0.10)
 ```
 
 ## Putting It All Together: A Complete Example

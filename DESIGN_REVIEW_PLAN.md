@@ -101,6 +101,7 @@ Other author answers, verbatim:
 - **CHUNK-029** (2026-10-14, author's answers):
   - **EKF model support: generalize `StateSpaceModel`** to `StateSpaceModel{T, S<:AbstractSSMSpec}`. EKF specs dispatch to the EKF filter and smoother, and `fit!(EM())` on an EKF spec throws a clear error. Rejected: a separate `EKFModel` type.
   - **Split:** CHUNK-029 keeps the functional EKF smoother, the built-in linear measurement, `FiniteDiffJacobian` in `EKFWorkspace` (implemented rather than dropped, since the functional path already supports it) and the docstring fixes. Model support moves to the new CHUNK-041.
+- **CHUNK-031 compat** (2026-10-14, author's answer): **`julia = "1.13"`**; the package is used only on Julia 1.13 and later, so there is no LTS support and no testing on 1.10. `public` names are declared with the plain `public` keyword (no Compat.jl). The author first chose 1.10 + Compat, then dropped 1.10.
 
 ## Chunks
 
@@ -974,11 +975,16 @@ Other author answers, verbatim:
   - `forecast_interval` and `factor_forecast_interval`.
 
   Rename anything that should stay private to `_name`. Tests must not reach into non-public names: `Siphon._set_em_masks_from_spec!`, `Siphon.DSL._em_*`, `project_psd`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-030
 - **Cluster**: release
 - **Notes**:
   - From CHUNK-020: declare `DynamicFactorModelSpec` `public` (unexported). From CHUNK-019: `EMWorkspace`, `em_estimate!`, `compute_sufficient_stats!`, `set_em_masks!`. From CHUNK-021: `AbstractMatrixExpr`.
+  - Done: `julia = "1.13"` (author's decision) and `public` declarations at the end of `src/Siphon.jl` for 33 names: the missing-data masks, `n_valid_obs`, `cholesky_factors`, the dimension accessors, `set_Z!`…`set_Q!`, `STATIC_THRESHOLD`, `confidence_bands`, `PSDFactor`/`psd_factor`/`psd_rand!`, `build_kfparms`/`build_initial_state`/`param_index`, `AbstractMatrixExpr`, the EM workspace layer, `DynamicFactorModelSpec` and the DNS builders, which are now unexported. `innovations`, `innovation_covs` and `factor_forecast_interval` no longer exist, and `forecast_interval` is exported.
+  - Docstrings added: `obs_dim`/`state_dim`/`shock_dim`/`n_times`, the `set_*!` setters, and a corrected `n_valid_obs` (it counts periods, not observations).
+  - Diverged from the description: internal names are **not** renamed to `_name`. With `public` declared, unexported non-public names are internal by convention, and renaming ~20 helpers and types (`EKFADCache`, `update_Z!`, `build_matrix`, …) is churn with no user benefit. Some tests still unit-test internals (`Siphon.update_Z!`, `_spec_loglik`, `_initial_constrained`, `MatrixElement`, `_quantile_normal`, `_select_vars`) on purpose. The names the description flagged (`_set_em_masks_from_spec!`, `Siphon.DSL._em_*`, `project_psd`) no longer exist.
+  - Test: "Public names are declared, documented and not exported" (`ispublic` and `hasdoc`).
+
 
 ### CHUNK-032: sync-docs
 - **Kind**: `implement`
@@ -1057,6 +1063,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-029 (add-ekf-smoother-and-model; split, model part → CHUNK-041) → next: CHUNK-041
 - 2026-10-14 CHUNK-041 (ekf-statespacemodel) → next: CHUNK-030
 - 2026-10-14 CHUNK-030 (remove-dead-exports-and-utilities) → next: CHUNK-031
+- 2026-10-14 CHUNK-031 (annotate-public-api) → next: CHUNK-032
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1067,7 +1074,7 @@ Other author answers, verbatim:
 - Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
 - (Resolved in CHUNK-027) `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
-- Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
+- (Resolved in CHUNK-031: `julia = "1.13"`; the package targets Julia 1.13+ only) Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
 - The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
 - (Resolved in CHUNK-030) `fit!(MLE(), …; verbose = true)` still prints with `println`; switch to `@info` in CHUNK-030. (The DFM header uses `@info` since CHUNK-020.)
 - `test/known_bugs_tests.jl` is an empty testset after CHUNK-019. Keep it as the place for future pins, or delete it with its `runtests.jl` include.

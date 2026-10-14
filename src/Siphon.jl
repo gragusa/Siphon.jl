@@ -121,8 +121,6 @@ export block_diag
 
 # Functional expressions (for DNS, Svensson, etc.)
 export MatrixExpr
-export build_dns_loadings, build_svensson_loadings
-export dns_loading1, dns_loading2
 
 # Transformation (TransformVariables.jl integration)
 export build_transformation
@@ -178,5 +176,24 @@ export isconverged, niterations, factor_innovation_cov, ar_coefficients,
 
 # Plotting recipes (RecipesBase)
 export ObservablePlot
+
+# Public but not exported: reached as `Siphon.name`
+# Missing-data masks and the dimensions of in-place workspaces
+public missing_mask, observed_mask, observed_rows, n_observed, n_valid_obs
+public cholesky_factors
+public obs_dim, state_dim, shock_dim, n_times
+public set_Z!, set_H!, set_T!, set_R!, set_Q!
+# StaticArrays threshold and confidence bands
+public STATIC_THRESHOLD, confidence_bands
+# Factorization and draws from a positive semi-definite covariance
+public PSDFactor, psd_factor, psd_rand!
+# Specification internals: system matrices and parameter positions
+public build_kfparms, build_initial_state, param_index, AbstractMatrixExpr
+# EM workspace layer behind fit!(EM(), …)
+public EMWorkspace, em_estimate!, compute_sufficient_stats!, set_em_masks!
+# Dynamic factor model specification (`model.spec`)
+public DynamicFactorModelSpec
+# Dynamic Nelson-Siegel and Svensson loadings
+public build_dns_loadings, build_svensson_loadings, dns_loading1, dns_loading2
 
 end # module

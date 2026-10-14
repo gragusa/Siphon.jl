@@ -431,6 +431,12 @@ Changed behavior:
 
 ## Module layout
 
+Siphon requires Julia 1.13 or later.
+
+Names that are part of the API but not exported are declared `public`
+(`Base.ispublic(Siphon, name)` is true for them). Reach them as
+`Siphon.name`. The other unexported names are internal and may change without notice.
+
 The `Siphon.DSL` submodule is gone. Model specification (templates, `custom_ssm`,
 matrix helpers, transformations, `optimize_ssm`, the EKF specification types) now lives
 in `Siphon` itself, with the same exported names.
@@ -440,6 +446,7 @@ in `Siphon` itself, with the same exported names.
 | `using Siphon.DSL` | `using Siphon` |
 | `Siphon.DSL.name` | `Siphon.name` |
 | `Siphon.DSL.build_kfparms`, `Siphon.DSL.build_initial_state`, `Siphon.DSL.param_index` | `Siphon.build_kfparms`, `Siphon.build_initial_state`, `Siphon.param_index` (not exported) |
+| `build_dns_loadings`, `build_svensson_loadings`, `dns_loading1`, `dns_loading2` (exported) | `Siphon.build_dns_loadings`, … (public, not exported); `dns_model` is still exported |
 | A matrix element given as an `Expr` in an `SSMMatrixSpec` | a `MatrixExpr` for the whole matrix |
 | Any object with `params`, `builder` and `dims` fields passed as a matrix to `custom_ssm` | a `MatrixExpr` |
 

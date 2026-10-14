@@ -418,7 +418,7 @@ end
 
 @testset "MatrixExpr basic" begin
     maturities = [3, 6, 12, 24, 60, 120]
-    Z = build_dns_loadings(maturities)
+    Z = Siphon.build_dns_loadings(maturities)
 
     @test Z.dims == (6, 3)
     @test length(Z.params) == 1
@@ -427,7 +427,7 @@ end
 
 @testset "MatrixExpr in custom_ssm" begin
     maturities = [3, 6, 12]
-    Z = build_dns_loadings(maturities)
+    Z = Siphon.build_dns_loadings(maturities)
 
     spec = custom_ssm(
         Z = Z,
@@ -458,8 +458,8 @@ end
     λ = 0.0609
     τ = 12.0
 
-    l1 = dns_loading1(λ, τ)
-    l2 = dns_loading2(λ, τ)
+    l1 = Siphon.dns_loading1(λ, τ)
+    l2 = Siphon.dns_loading2(λ, τ)
 
     @test l1 > 0
     @test l1 < 1
@@ -467,12 +467,12 @@ end
     @test l2 < l1
 
     # Edge case: very small λτ
-    @test dns_loading1(1e-12, 1.0) ≈ 1.0 atol=1e-6
+    @test Siphon.dns_loading1(1e-12, 1.0) ≈ 1.0 atol=1e-6
 end
 
 @testset "build_svensson_loadings" begin
     maturities = [3, 6, 12, 24]
-    Z = build_svensson_loadings(maturities)
+    Z = Siphon.build_svensson_loadings(maturities)
 
     @test Z.dims == (4, 4)
     @test length(Z.params) == 2

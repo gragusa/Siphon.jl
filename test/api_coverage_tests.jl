@@ -269,3 +269,20 @@ end # API coverage
     model = StateSpaceModel(local_level(), 10)
     @test model.workspaces isa Siphon.StateSpaceModelWorkspaces{Float64}
 end
+
+@testset "Public names are declared, documented and not exported" begin
+    public_names = (:missing_mask, :observed_mask, :observed_rows, :n_observed,
+        :n_valid_obs, :cholesky_factors, :obs_dim, :state_dim, :shock_dim, :n_times,
+        :set_Z!, :set_H!, :set_T!, :set_R!, :set_Q!, :STATIC_THRESHOLD,
+        :confidence_bands, :PSDFactor, :psd_factor, :psd_rand!, :build_kfparms,
+        :build_initial_state, :param_index, :AbstractMatrixExpr, :EMWorkspace,
+        :em_estimate!, :compute_sufficient_stats!, :set_em_masks!,
+        :DynamicFactorModelSpec, :build_dns_loadings, :build_svensson_loadings,
+        :dns_loading1, :dns_loading2)
+    for name in public_names
+        @test isdefined(Siphon, name)
+        @test !Base.isexported(Siphon, name)
+        @test Base.ispublic(Siphon, name)
+        @test Base.Docs.hasdoc(Siphon, name)
+    end
+end

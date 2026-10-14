@@ -700,25 +700,47 @@ function update_params!(
     return ws
 end
 
-# Single-matrix setters. The EM M-step functions are `update_Z!(kf_ws, em_ws, n)` etc.
+"""
+    set_Z!(ws::KalmanWorkspace, Z) -> ws
+
+Copy `Z` into the workspace, leaving the other system matrices unchanged. The
+setters `set_H!`, `set_T!`, `set_R!` and `set_Q!` work the same way; `set_R!` and
+`set_Q!` also update the stored `R Q R'`. A matrix of the wrong size throws a
+`DimensionMismatch`. To replace several matrices at once, use `set_params!`.
+"""
 function set_Z!(ws::KalmanWorkspace, Z::AbstractMatrix)
     _check_params(ws, "set_Z!"; Z)
     copyto!(ws.Z, Z)
     return ws
 end
 
+"""
+    set_H!(ws::KalmanWorkspace, H) -> ws
+
+Copy `H` into the workspace. See [`set_Z!`](@ref Siphon.set_Z!).
+"""
 function set_H!(ws::KalmanWorkspace, H::AbstractMatrix)
     _check_params(ws, "set_H!"; H)
     copyto!(ws.H, H)
     return ws
 end
 
+"""
+    set_T!(ws::KalmanWorkspace, T) -> ws
+
+Copy `T` into the workspace. See [`set_Z!`](@ref Siphon.set_Z!).
+"""
 function set_T!(ws::KalmanWorkspace, Tmat::AbstractMatrix)
     _check_params(ws, "set_T!"; Tmat)
     copyto!(ws.Tmat, Tmat)
     return ws
 end
 
+"""
+    set_R!(ws::KalmanWorkspace, R) -> ws
+
+Copy `R` into the workspace. See [`set_Z!`](@ref Siphon.set_Z!).
+"""
 function set_R!(ws::KalmanWorkspace, R::AbstractMatrix)
     _check_params(ws, "set_R!"; R)
     copyto!(ws.R, R)
@@ -726,6 +748,11 @@ function set_R!(ws::KalmanWorkspace, R::AbstractMatrix)
     return ws
 end
 
+"""
+    set_Q!(ws::KalmanWorkspace, Q) -> ws
+
+Copy `Q` into the workspace. See [`set_Z!`](@ref Siphon.set_Z!).
+"""
 function set_Q!(ws::KalmanWorkspace, Q::AbstractMatrix)
     _check_params(ws, "set_Q!"; Q)
     copyto!(ws.Q, Q)
@@ -1464,16 +1491,47 @@ cholesky_factors(ws::KalmanWorkspace) = _require_output(ws, :cholesky_factors).F
 
 _has_smoothed_cov(ws::KalmanWorkspace) = ws.smoothed_cov
 
-"""Return count of non-missing observations."""
+"""
+    n_valid_obs(ws::KalmanWorkspace) -> Int
+
+Return the number of periods with at least one observed row in the last filter run.
+Throws before a run.
+"""
 n_valid_obs(ws::KalmanWorkspace) = _require_output(ws, :n_valid_obs).n_obs_valid
 
 # ============================================
 # Dimension accessors
 # ============================================
 
+"""
+    obs_dim(ws) -> Int
+
+Return the number of observed series p of a `KalmanWorkspace` or
+`DiffuseKalmanWorkspace`.
+"""
 obs_dim(ws::KalmanWorkspace) = ws.obs_dim
+
+"""
+    state_dim(ws) -> Int
+
+Return the number of states m of a `KalmanWorkspace` or `DiffuseKalmanWorkspace`.
+"""
 state_dim(ws::KalmanWorkspace) = ws.state_dim
+
+"""
+    shock_dim(ws) -> Int
+
+Return the number of state shocks r of a `KalmanWorkspace` or
+`DiffuseKalmanWorkspace`.
+"""
 shock_dim(ws::KalmanWorkspace) = ws.shock_dim
+
+"""
+    n_times(ws) -> Int
+
+Return the number of time periods n a `KalmanWorkspace` or `DiffuseKalmanWorkspace`
+was allocated for.
+"""
 n_times(ws::KalmanWorkspace) = ws.n_times
 
 # ============================================

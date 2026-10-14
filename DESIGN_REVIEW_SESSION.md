@@ -4,27 +4,26 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-030: remove-dead-exports-and-utilities
-Removed `SmootherWorkspace`, `ParamExpr`, `numstates`/`nummeasur` and the stray `src/api/*.md`. Unexported `STATIC_THRESHOLD` and `confidence_bands`, and made `quantile_normal`/`select_vars` private (`_`-prefixed). `StateSpaceModel` lost `kf_workspace_allocated` and now holds a typed `const workspaces` field. Stale comments and docstrings were fixed, and the open-question items assigned to this chunk were picked up (`@info` for MLE verbose output, an EKF-aware fit hint, the ported EM benchmark).
+CHUNK-031: annotate-public-api
+Set the compat bound to `julia = "1.13"`, since the package targets 1.13+ only. Declared 33 unexported user-facing names `public` with the `public` keyword (block at the end of `src/Siphon.jl`). The DNS loading builders are no longer exported and became public. Added docstrings for the newly public names that lacked them.
 
 ## Key decisions / shim choices
-- `block_diag` and `uses_exact_diffuse` stay exported (both are used; `block_diag` is a FreeParam-aware DSL helper).
-- No shims. The conversion guide has a new "Removed names and utilities" section.
-- DNS loading builders are still exported; CHUNK-031 should unexport them and declare them `public`.
+- Author's decision: Julia 1.13+ only; do not test on 1.10 (recorded in Decisions).
+- Internal names are not renamed to `_name` (divergence recorded in the chunk notes).
+- No shims; the conversion guide notes the Julia 1.13 requirement, what `public` means, and the DNS builder move.
 
 ## State of the codebase
-- Files modified: src/Siphon.jl, src/types.jl, src/show.jl, src/recipes.jl, src/inplace.jl, src/em_spec.jl, src/dsl/expressions.jl, src/dsl/codegen.jl, ext/SiphonStatsBaseExt.jl, benchmark/em_benchmark.jl, test/{api_coverage,construction,recipe,em,ekf}_tests.jl, docs/src/{conversion_guide.md, api/core.md, api/dsl.md, tutorials/visualization.md, tutorials/estimation_methods.md}; deleted src/api/*.md
-- Test suite: full `Pkg.test()` passes (4.3 min, Aqua included); new testset "Removed and unexported names" (11 tests)
+- Files modified: Project.toml, src/Siphon.jl, src/inplace.jl, test/api_coverage_tests.jl, test/dsl_tests.jl, test/dns_marss_validation_tests.jl, docs/src/conversion_guide.md, docs/src/tutorials/custom_models.md
+- Test suite: full `Pkg.test()` passes on Julia 1.13.0 (4.3 min, Aqua included); the new public-names testset has 132 checks
 - Ambiguity count: 0 (no change)
-- Staged but uncommitted: no (the `src/api` deletions are staged through `git rm`; everything else is unstaged)
+- Staged but uncommitted: no (all unstaged)
 
 ## Cluster status
-- release: 1 of 5 complete
+- release: 2 of 5 complete
 
 ## Next chunk
-CHUNK-031: annotate-public-api. Declare `public` for every user-facing unexported name. New from CHUNK-030: `STATIC_THRESHOLD`, `confidence_bands`, `StateSpaceModelWorkspaces`(?), and the DNS builders, which also need unexporting.
+CHUNK-032: sync-docs. Every export and `public` name in an `@docs` block, remove `warnonly = [:missing_docs]`, fix the broken docstring examples and tutorials, update index.md and the README.
 
 ## Watch out for
-- `public` needs Julia ≥ 1.11 or `Compat.@compat public`; the compat bound question (1.10 vs 1.12) is still open.
-- Docstrings link `[`Siphon.STATIC_THRESHOLD`](@ref)`; the docs build hasn't been run (CHUNK-032).
-- The R/MARSS half of `benchmark/em_benchmark.jl` was not run.
+- The newly public `set_H!`…`set_Q!` docstrings link `[`set_Z!`](@ref Siphon.set_Z!)`; check that it resolves in the docs build.
+- `docs/src/tutorials/custom_models.md:332` still calls `Siphon.build_dns_loadings(maturities, :λ; λ_init = …)`. Check that the signature matches in CHUNK-032.
