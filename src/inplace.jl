@@ -1167,8 +1167,6 @@ function kalman_smoother!(
             "crosscov=true requires covariances=true: the cross-lag covariance " *
             "is built from the smoothed covariance"))
     _require_output(ws, :kalman_smoother!)
-    m, n = ws.state_dim, ws.n_times
-    p = ws.obs_dim
 
     if !covariances
         _kalman_smoother_mean!(ws)
@@ -1178,6 +1176,24 @@ function kalman_smoother!(
         return nothing
     end
 
+    _kalman_smoother_cov!(ws, crosscov)
+    ws.smoothed = true
+    ws.smoothed_cov = true
+    ws.crosscov = crosscov
+    return nothing
+end
+
+"""
+    _kalman_smoother_cov!(ws::KalmanWorkspace, crosscov, tstop = 0) -> nothing
+
+Backward recursion for the smoothed means and covariances over periods
+`n, …, tstop + 1`, writing `ws.αs`, `ws.Vs` and, with `crosscov`, `ws.Pcross`. On
+exit `ws.r_smooth` and `ws.N_smooth` hold `r_tstop` and `N_tstop`.
+"""
+function _kalman_smoother_cov!(ws::KalmanWorkspace{T}, crosscov::Bool,
+        tstop::Int = 0) where {T}
+    m, n = ws.state_dim, ws.n_times
+
     # Initialize smoother recursion: r = 0, N = 0
     fill!(ws.r_smooth, zero(T))
     fill!(ws.N_smooth, zero(T))
@@ -1185,7 +1201,7 @@ function kalman_smoother!(
     # Get Cholesky lower triangular for solves
     # We'll reconstruct from stored Ft_L
 
-    @inbounds for t in n:-1:1
+    @inbounds for t in n:-1:(tstop + 1)
         # Views to stored filter results
         a_t = view(ws.at, :, t)
         P_t = view(ws.Pt, :, :, t)
@@ -1359,27 +1375,25 @@ function kalman_smoother!(
         end
     end
 
-    ws.smoothed = true
-    ws.smoothed_cov = true
-    ws.crosscov = crosscov
     return nothing
 end
 
 """
-    _kalman_smoother_mean!(ws::KalmanWorkspace) -> nothing
+    _kalman_smoother_mean!(ws::KalmanWorkspace, tstop = 0) -> nothing
 
-Backward recursion for the smoothed means alone, writing `ws.αs`.
+Backward recursion for the smoothed means alone over periods `n, …, tstop + 1`,
+writing `ws.αs`. On exit `ws.r_smooth` holds `r_tstop`.
 
 Runs `r_{t-1} = Zₜ' Fₜ⁻¹ vₜ + Lₜ' rₜ` and `αₜ = aₜ + Pₜ rₜ`. The identity
 `Lₜ' rₜ = T' rₜ - Zₜ'(Kₜ' rₜ)` keeps every operation at matrix-vector cost, so a
 period costs `O(m²)` against the `O(m³)` of the covariance recursion.
 """
-function _kalman_smoother_mean!(ws::KalmanWorkspace{T}) where {T}
+function _kalman_smoother_mean!(ws::KalmanWorkspace{T}, tstop::Int = 0) where {T}
     m, n = ws.state_dim, ws.n_times
 
     fill!(ws.r_smooth, zero(T))
 
-    @inbounds for t in n:-1:1
+    @inbounds for t in n:-1:(tstop + 1)
         a_t = view(ws.at, :, t)
         P_t = view(ws.Pt, :, :, t)
 
@@ -1494,7 +1508,9 @@ Extends `KalmanWorkspace` with additional storage for the diffuse period:
 - `Pinf`: Current diffuse covariance (working storage)
 - `Pstar`: Current finite covariance (working storage)
 - `Finf`: Diffuse innovation covariance Z*Pinf*Z'
-- `diffuse_flags`: Track which step type was used (1=Finf invertible, 2=Finf singular but nonzero, 0=Finf zero, -1=missing)
+- `Pinf_store`: Predicted diffuse covariance of each diffuse-period step (m × m × n;
+  the first `d` slices are written)
+- `diffuse_flags`: Track which step type was used (1=Finf invertible, 2=Finf singular but nonzero, 0=Finf zero, -1=no row observed)
 - `d`: Length of diffuse period (updated during filtering)
 - `diffuse_ended`: Flag indicating if diffuse period has ended
 
@@ -1523,6 +1539,7 @@ mutable struct DiffuseKalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     Pstar::Matrix{T}       # m × m: current finite covariance
     Finf::Matrix{T}        # p × p: diffuse innovation covariance
     Finf_inv::Matrix{T}    # p × p: inverse of Finf (when invertible)
+    Pinf_store::Array{T, 3}  # m × m × n: predicted Pinf of the diffuse-period steps
 
     # Diffuse period tracking
     diffuse_flags::Vector{Int}  # max length n: step type flags
@@ -1535,6 +1552,7 @@ mutable struct DiffuseKalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     tmp_mm_diff2::Matrix{T}  # m × m
     tmp_mp_diff::Matrix{T}   # m × p: for Kinf, Kstar
     tmp_pp_diff::Matrix{T}   # p × p: for Fstar
+    smoother_scratch::_DiffuseSmootherScratch{T}
 end
 
 """
@@ -1561,6 +1579,7 @@ function DiffuseKalmanWorkspace{T}(
         zeros(T, m, m),  # Pstar
         zeros(T, p, p),  # Finf
         zeros(T, p, p),  # Finf_inv
+        zeros(T, m, m, n),  # Pinf_store
         # Diffuse tracking
         zeros(Int, n),   # diffuse_flags (preallocate max)
         0,                       # d
@@ -1570,7 +1589,8 @@ function DiffuseKalmanWorkspace{T}(
         zeros(T, m, m),  # tmp_mm_diff1
         zeros(T, m, m),  # tmp_mm_diff2
         zeros(T, m, p),  # tmp_mp_diff
-        zeros(T, p, p)   # tmp_pp_diff
+        zeros(T, p, p),  # tmp_pp_diff
+        _DiffuseSmootherScratch{T}(p, m)
     )
 end
 
@@ -1680,6 +1700,10 @@ diffuse_period(ws::DiffuseKalmanWorkspace) = (_require_output(ws, :diffuse_perio
     diffuse_flags(ws::DiffuseKalmanWorkspace) -> Vector{Int}
 
 Return flags for diffuse period steps (view of first d elements).
+- 1: Finf was invertible (exact diffuse update)
+- 2: Finf was singular but nonzero (rows processed one at a time)
+- 0: Finf was zero (Fstar-based update)
+- -1: no row was observed
 """
 function diffuse_flags(ws::DiffuseKalmanWorkspace)
     _require_output(ws, :diffuse_flags)
@@ -1689,39 +1713,6 @@ end
 # ============================================
 # In-place diffuse Kalman filter
 # ============================================
-
-"""
-    _safe_inverse_inplace!(Finv, F, tmp, tol) -> flag
-
-Attempt to invert F in-place into Finv. Returns 1 if successful, 0 if singular.
-Uses tmp as scratch space.
-"""
-@inline function _safe_inverse_inplace!(
-        Finv::AbstractMatrix{T},
-        F::AbstractMatrix{T},
-        tmp::AbstractMatrix{T},
-        tol::Real
-) where {T}
-    d = det(F)
-    if abs(d) > tol
-        copyto!(tmp, F)
-        # Symmetrize
-        p = size(F, 1)
-        for j in 1:p, i in 1:(j - 1)
-
-            avg = (tmp[i, j] + tmp[j, i]) / 2
-            tmp[i, j] = avg
-            tmp[j, i] = avg
-        end
-        # Compute inverse via Cholesky
-        chol = cholesky!(Symmetric(tmp, :L))
-        copyto!(Finv, I)
-        ldiv!(chol, Finv)
-        return 1
-    else
-        return 0
-    end
-end
 
 """
     kalman_filter!(ws::DiffuseKalmanWorkspace, y::AbstractMatrix) -> loglik
@@ -1832,7 +1823,8 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
 
             if !ws.diffuse_ended
                 ws.d += 1
-                ws.diffuse_flags[ws.d] = -1  # missing
+                ws.diffuse_flags[ws.d] = -1  # no row observed
+                copyto!(view(ws.Pinf_store, :, :, ws.d), ws.Pinf)
 
                 # Pinf = T * Pinf * T'
                 mul!(base.tmp_mm2, base.Tmat, ws.Pinf)
@@ -1890,13 +1882,20 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
         flag = 0
         if !ws.diffuse_ended
             ws.d += 1
+            copyto!(view(ws.Pinf_store, :, :, ws.d), ws.Pinf)
             Finf = view(ws.Finf, 1:pt, 1:pt)
             Finf_inv = view(ws.Finf_inv, 1:pt, 1:pt)
             mul!(ZrP, Zr, ws.Pinf)
             mul!(Finf, ZrP, transpose(Zr))
-            flag = _diffuse_step_flag(Finf, tol)
-            flag == 1 &&
-                _safe_inverse_inplace!(Finf_inv, Finf, view(ws.tmp_pp_diff, 1:pt, 1:pt), tol)
+            S = view(ws.tmp_pp_diff, 1:pt, 1:pt)
+            flag = _diffuse_step_flag!(S, Finf, tol)
+            if flag == 1
+                # S holds the Cholesky factor of Finf.
+                L_inf = LowerTriangular(S)
+                copyto!(Finf_inv, I)
+                ldiv!(L_inf, Finf_inv)
+                ldiv!(transpose(L_inf), Finf_inv)
+            end
             ws.diffuse_flags[ws.d] = flag
         end
 
@@ -2090,6 +2089,69 @@ function kalman_filter!(ws::DiffuseKalmanWorkspace{T}, y::AbstractMatrix) where 
     return base.loglik
 end
 
+"""
+    kalman_smoother!(ws::DiffuseKalmanWorkspace; covariances=true, crosscov=false)
+
+Run the exact diffuse smoother (Durbin & Koopman 2012, Section 5.3) in place on
+the output of `kalman_filter!(ws, y)`, storing the results read by
+`smoothed_states(ws)` and `smoothed_states_cov(ws)`. Periods after the diffuse
+period use the ordinary recursion of `kalman_smoother!(ws::KalmanWorkspace)`;
+the diffuse-period observations are processed one row at a time (Koopman & Durbin
+2000), so every step type of the filter is handled. The result is the limit, as
+κ → ∞, of the ordinary smoother with initial covariance `P1_star + κ P1_inf`.
+
+With `covariances = false` only the smoothed means are computed.
+
+Throws an `ArgumentError` if the filter has not run or failed, if the diffuse period
+does not end within the sample (some smoothed variances are then infinite), or if
+`crosscov = true`: cross-lag covariances are not available under exact diffuse
+initialization.
+"""
+function kalman_smoother!(ws::DiffuseKalmanWorkspace{T}; crosscov::Bool = false,
+        covariances::Bool = true) where {T}
+    _require_output(ws, :kalman_smoother!)
+    crosscov && _no_diffuse_crosscov(:kalman_smoother!)
+    _require_diffuse_ended(ws.diffuse_ended, :kalman_smoother!)
+    base = ws.base
+
+    if covariances
+        _kalman_smoother_cov!(base, false, ws.d)
+    else
+        _kalman_smoother_mean!(base, ws.d)
+    end
+    _diffuse_smoother_backward!(base.αs, base.Vs, ws.smoother_scratch, base.Z, base.H,
+        base.Tmat, base.at, base.Pt, ws.Pinf_store, base.vt, base.observed_mask, ws.d,
+        base.r_smooth, base.N_smooth, ws.tol, covariances)
+
+    base.smoothed = true
+    base.smoothed_cov = covariances
+    base.crosscov = false
+    return nothing
+end
+
+"""
+    DiffuseFilterResult(ws::DiffuseKalmanWorkspace) -> DiffuseFilterResult
+
+Copy the filter output of `ws`, with its system matrices, into a
+`DiffuseFilterResult`. Later runs on `ws` don't change the result, which supports
+everything a result of `kalman_filter(p, y, a1, P1_star, P1_inf)` does, such as
+`kalman_smoother(result)` and `forecast(result, h)`.
+
+Throws an `ArgumentError` if no filter has run on `ws`. After a failed run the result
+is a failed result: its log-likelihood is `-Inf` and its state accessors throw.
+"""
+function DiffuseFilterResult(ws::DiffuseKalmanWorkspace)
+    base = ws.base
+    base.status == _NOT_RUN && _require_output(ws, :DiffuseFilterResult)
+    p = KFParms(copy(base.Z), copy(base.H), copy(base.Tmat), copy(base.R), copy(base.Q))
+    d = ws.d
+    return DiffuseFilterResult(p, base.loglik, d, copy(base.at), copy(base.Pt),
+        copy(base.att), copy(base.Ptt), ws.Pinf_store[:, :, 1:d], base.Pt[:, :, 1:d],
+        copy(base.vt), copy(base.Ft), copy(base.Kt), ws.diffuse_flags[1:d],
+        ws.diffuse_ended, ws.tol, copy(base.missing_mask), copy(base.observed_mask),
+        base.status)
+end
+
 # ============================================
 # EM Algorithm Workspace
 # ============================================
@@ -2236,8 +2298,9 @@ EMWorkspace(p::Int, m::Int, r::Int, n::Int) = EMWorkspace{Float64}(p, m, r, n)
 
 Create an EM workspace with the dimensions and element type of `kf_ws`.
 
-There is no method for a `DiffuseKalmanWorkspace`: the E-step needs the smoothed
-states, and the exact diffuse filter has no smoother.
+There is no method for a `DiffuseKalmanWorkspace`: the E-step needs the cross-lag
+covariances of the smoothed states, which the exact diffuse smoother does not
+compute.
 """
 function EMWorkspace(kf_ws::KalmanWorkspace{T}) where {T}
     EMWorkspace{T}(kf_ws.obs_dim, kf_ws.state_dim, kf_ws.shock_dim, kf_ws.n_times)
@@ -2245,8 +2308,9 @@ end
 
 function EMWorkspace(::DiffuseKalmanWorkspace)
     throw(ArgumentError("EMWorkspace needs a KalmanWorkspace: the E-step uses the " *
-                        "smoothed states, and DiffuseKalmanWorkspace has no smoother. " *
-                        "Use a KalmanWorkspace with a large P1 instead."))
+                        "cross-lag covariances of the smoothed states, which the exact " *
+                        "diffuse smoother does not compute. Use a KalmanWorkspace with " *
+                        "a large P1 instead."))
 end
 
 # ============================================
@@ -3688,18 +3752,22 @@ observed_mask(model::StateSpaceModel) = (_require_filter(model); model.observed_
 """Compute smoother and cache results."""
 function _ssm_compute_smoother!(model::StateSpaceModel)
     _require_filter(model)
-    Siphon.uses_exact_diffuse(model.spec) && throw(ArgumentError(
-        "Smoothing is not available for exact diffuse initialisation (diffuse = :exact). " *
-        "Use approximate diffuse initialisation (diffuse = true) to smooth."))
-
-    # Get system matrices at fitted parameters
     theta_nt = _ssm_get_theta_namedtuple(model)
-    kfparms = Siphon.build_kfparms(model.spec, theta_nt)
 
-    # Run smoother using stored filter results
-    sm = _kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
-        missing_mask = model.missing_mask, observed_mask = model.observed_mask,
-        Ptt = model.Ptt)
+    sm = if Siphon.uses_exact_diffuse(model.spec)
+        # The exact diffuse smoother needs the diffuse-period covariances, which
+        # the model does not keep; the filter is rerun on the stored data.
+        model.has_data || throw(ArgumentError(
+            "smoothing: the model holds no data. Call kalman_filter!(model, y) first."))
+        ss = Siphon.build_linear_state_space(model.spec, theta_nt, model.data)
+        kalman_smoother(_ss_filter(ss, model.data))
+    else
+        kfparms = Siphon.build_kfparms(model.spec, theta_nt)
+        # Run smoother using stored filter results
+        _kalman_smoother(kfparms.Z, kfparms.T, model.at, model.Pt, model.vt, model.Ft;
+            missing_mask = model.missing_mask, observed_mask = model.observed_mask,
+            Ptt = model.Ptt)
+    end
 
     # Cache results
     copyto!(model.smoothed_alpha, sm.αs)

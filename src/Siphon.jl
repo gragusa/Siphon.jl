@@ -20,6 +20,7 @@ include("types.jl")
 include("missing.jl")
 include("filter_ad.jl")
 include("smoother_ad.jl")
+include("diffuse_smoother.jl")
 
 # EKF extension — types + functional (AD-compatible) likelihood/filter
 include("ekf_types.jl")

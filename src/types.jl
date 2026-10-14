@@ -311,6 +311,9 @@ The diffuse period ends when `norm(Pinf) < tol`.
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n)
 - `diffuse_flag`: Vector of length d indicating step type (see Notes)
+- `diffuse_ended`: true when the diffuse part of the covariance vanished within the
+  sample; `d` alone cannot tell this apart when `d == n`
+- `tol`: the tolerance the filter ran with
 - `missing_mask`: BitVector, true where no row of the period was observed
 - `observed_mask`: BitMatrix (p × n), true where an individual value is present
 
@@ -368,6 +371,8 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     Kt::Array{T, 3}          # m × p × n
     # Diffuse step flags: 1=Finf invertible, 2=singular nonzero, 0=zero, -1=missing
     diffuse_flag::Vector{Int}  # length d
+    diffuse_ended::Bool
+    tol::Float64
     # Missing data
     missing_mask::BitVector    # n: true where no row of the period was observed
     observed_mask::BitMatrix   # p × n: true where an individual value is present
@@ -377,9 +382,9 @@ end
 
 function DiffuseFilterResult(p::KFParms, loglik::Real, d::Int, at, Pt, att, Ptt,
         Pinf_store, Pstar_store, vt, Ft, Kt, diffuse_flag::Vector{Int},
-        missing_mask::BitVector, observed_mask::BitMatrix)
+        diffuse_ended::Bool, tol::Real, missing_mask::BitVector, observed_mask::BitMatrix)
     return DiffuseFilterResult(p, loglik, d, at, Pt, att, Ptt, Pinf_store, Pstar_store,
-        vt, Ft, Kt, diffuse_flag, missing_mask, observed_mask, 0)
+        vt, Ft, Kt, diffuse_flag, diffuse_ended, tol, missing_mask, observed_mask, 0)
 end
 
 # Accessor methods for DiffuseFilterResult (the shared ones are in accessors.jl)

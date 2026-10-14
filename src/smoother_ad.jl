@@ -84,70 +84,11 @@ function _kalman_smoother(
     N_mat = zeros(ET, state_dim, state_dim)
 
     # Backward recursion: t = n, n-1, ..., 1
-    @inbounds for t in n_obs:-1:1
-        # Get predicted state and covariance at time t
-        a_t = view(at, :, t)
-        P_t = view(Pt, :, :, t)
-
-        # Check for missing observation
-        is_missing = if missing_mask !== nothing
-            missing_mask[t]
-        else
-            any(isnan, view(vt, :, t))
-        end
-
-        if is_missing
-            # Missing observation: use simplified recursion
-            # r_{t-1} = T' * r_t
-            r_new = T' * r_vec
-
-            # N_{t-1} = T' * N_t * T
-            N_new = T' * N_mat * T
-
-            # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
-            alpha_smooth[:, t] = a_t + P_t * r_new
-
-            # Smoothed covariance: V_t = P_t - P_t * N_{t-1} * P_t
-            V_smooth[:, :, t] = P_t - P_t * N_new * P_t
-
-            # Update for next iteration
-            r_vec = r_new
-            N_mat = N_new
-        else
-            # Valid observation. Where the period was only partly observed, the
-            # filter stored the reduced-system v_t and F_t in the leading
-            # positions, so the recursion uses the matching rows of Z.
-            pt = _period_obs_dim(observed_mask, vt, t)
-            rows = _period_obs_rows(observed_mask, vt, t)
-            Zr = _select_rows(Z, rows)
-            v_t = view(vt, 1:pt, t)
-            F_t = view(Ft, 1:pt, 1:pt, t)
-
-            # F_t^{-1}
-            F_inv = inv(F_t)
-
-            # Kalman gain: K_t = T * P_t * Zr' * F_t^{-1}
-            K_t = T * P_t * Zr' * F_inv
-
-            # L_t = T - K_t * Zr
-            L_t = T - K_t * Zr
-
-            # Compute r_{t-1} = Zr' * F_t^{-1} * v_t + L_t' * r_t
-            r_new = Zr' * F_inv * v_t + L_t' * r_vec
-
-            # Compute N_{t-1} = Zr' * F_t^{-1} * Zr + L_t' * N_t * L_t
-            N_new = Zr' * F_inv * Zr + L_t' * N_mat * L_t
-
-            # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
-            alpha_smooth[:, t] = a_t + P_t * r_new
-
-            # Smoothed covariance: V_t = P_t - P_t * N_{t-1} * P_t
-            V_smooth[:, :, t] = P_t - P_t * N_new * P_t
-
-            # Update for next iteration
-            r_vec = r_new
-            N_mat = N_new
-        end
+    for t in n_obs:-1:1
+        (α_t, V_t, r_vec, N_mat) = _rts_step(Z, T, at, Pt, vt, Ft, t, r_vec, N_mat;
+            missing_mask, observed_mask)
+        alpha_smooth[:, t] = α_t
+        V_smooth[:, :, t] = V_t
     end
 
     # Compute cross-lag covariances if requested
@@ -206,6 +147,47 @@ function _kalman_smoother(
     end
 end
 
+# One period of the backward recursion of `_kalman_smoother`: from `r = r_t` and
+# `N = N_t` it returns the smoothed mean and covariance of period `t` with
+# `r_{t-1}` and `N_{t-1}`.
+function _rts_step(Z, T, at, Pt, vt, Ft, t, r_vec, N_mat; missing_mask, observed_mask)
+    a_t = view(at, :, t)
+    P_t = view(Pt, :, :, t)
+
+    is_missing = if missing_mask !== nothing
+        missing_mask[t]
+    else
+        any(isnan, view(vt, :, t))
+    end
+
+    if is_missing
+        # r_{t-1} = T' r_t, N_{t-1} = T' N_t T
+        r_new = T' * r_vec
+        N_new = T' * N_mat * T
+    else
+        # Where the period was only partly observed, the filter stored the
+        # reduced-system v_t and F_t in the leading positions, so the recursion
+        # uses the matching rows of Z.
+        pt = _period_obs_dim(observed_mask, vt, t)
+        rows = _period_obs_rows(observed_mask, vt, t)
+        Zr = _select_rows(Z, rows)
+        v_t = view(vt, 1:pt, t)
+        F_t = view(Ft, 1:pt, 1:pt, t)
+
+        F_inv = inv(F_t)
+        # K_t = T P_t Z_t' F_t⁻¹, L_t = T - K_t Z_t
+        K_t = T * P_t * Zr' * F_inv
+        L_t = T - K_t * Zr
+
+        # r_{t-1} = Z_t' F_t⁻¹ v_t + L_t' r_t, N_{t-1} = Z_t' F_t⁻¹ Z_t + L_t' N_t L_t
+        r_new = Zr' * F_inv * v_t + L_t' * r_vec
+        N_new = Zr' * F_inv * Zr + L_t' * N_mat * L_t
+    end
+
+    # α̂_t = a_t + P_t r_{t-1}, V_t = P_t - P_t N_{t-1} P_t
+    return (a_t + P_t * r_new, P_t - P_t * N_new * P_t, r_new, N_new)
+end
+
 """
     kalman_smoother(result::KalmanFilterResult; crosscov=false) -> SmootherResult
 
@@ -239,12 +221,6 @@ function kalman_smoother(result::KalmanFilterResult; crosscov::Bool = false)
         observed_mask = result.observed_mask,
         Ptt = result.Ptt
     )
-end
-
-function kalman_smoother(::DiffuseFilterResult; crosscov::Bool = false)
-    throw(ArgumentError(
-        "kalman_smoother: smoothing is not available for exact diffuse initialisation. " *
-        "Use approximate diffuse initialisation (a large P1) to smooth."))
 end
 
 """

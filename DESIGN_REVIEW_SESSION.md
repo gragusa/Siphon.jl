@@ -4,28 +4,30 @@
 DESIGN_REVIEW_PLAN.md — Siphon 0.1.0
 
 ## What was just completed
-CHUNK-026: unify-construction-conventions
-The element type of every workspace and model is now a type parameter (`StateSpaceModel{Float32}(spec, n)`, `EMWorkspace{T}(p, m, r, n)`, …). Constructors that take system arrays infer a floating-point type from all of them. `simulation_smoother` returns a matrix without a draw count and a 3-D array with one. The EM and simulation-smoother constructors give a clear error for a `DiffuseKalmanWorkspace`.
+CHUNK-027: add-diffuse-smoother
+Exact diffuse smoothing now works in the functional API (`kalman_smoother(::DiffuseFilterResult)`), the in-place API (`kalman_smoother!` / `kalman_filter_and_smooth!` on `DiffuseKalmanWorkspace`), and the model API (`smoothed_states(model)` with `diffuse = :exact`). One backward routine in `src/diffuse_smoother.jl` handles every diffuse step type by processing rows one at a time. It matches a BigFloat large-κ oracle to ~1e-15. `DiffuseFilterResult(ws)` was added, and the in-place diffuse filter and smoother are allocation-free.
 
 ## Key decisions / shim choices
-- Type parameter over keyword or positional `Type` argument (implementer's call, per the style guide's constructor cascade). No shims; the conversion guide has a new "Element types and constructors" section.
-- `simulation_smoother(ws, y, n_draws)` is positional, following `rand(d)` / `rand(d, n)`.
-- The `rng` item needed no change: every random function already took `rng`.
-- `StateSpaceModel` with a non-Float64 element type was broken before (its `KalmanWorkspace` was always Float64) and now works through MLE and EM.
+- Univariate (row-by-row) backward pass for all diffuse periods, rebuilt from the stored predicted Pstar/Pinf. It uses the exact κ-expansion coefficients, including the L⁽²⁾ terms in N⁽²⁾.
+- `DiffuseFilterResult` gains `diffuse_ended` and `tol` fields. `DiffuseKalmanWorkspace` gains `Pinf_store` (m × m × n) and `smoother_scratch`.
+- `crosscov = true` throws under exact diffuse. EM and the simulation smoother still reject `DiffuseKalmanWorkspace`, with corrected reasons.
+- The model API smooths by rerunning the functional diffuse filter on `model.data`.
+- No shims, per the stated values. The conversion guide has a paragraph on the new capability and the new fields.
 
 ## State of the codebase
-- Files modified: src/inplace.jl, src/ekf_inplace.jl, src/simsmooth.jl, src/types.jl, test/runtests.jl, test/simsmooth_tests.jl, test/companion_smoother_tests.jl, test/singular_innovation_tests.jl, docs/src/conversion_guide.md, DESIGN_REVIEW_PLAN.md
-- New files: test/construction_tests.jl
-- Test suite: full `Pkg.test()` passes (includes the new `construction_tests.jl`)
+- Files modified: src/Siphon.jl, src/filter_ad.jl, src/smoother_ad.jl, src/inplace.jl, src/types.jl, src/predict.jl, src/simsmooth.jl, test/runtests.jl, test/smoother_interface_tests.jl, test/dsl_tests.jl, docs/src/conversion_guide.md, docs/src/tutorials/initial_state.md, docs/src/tutorials/getting_started.md, DESIGN_REVIEW_PLAN.md
+- New files: src/diffuse_smoother.jl, test/diffuse_smoother_tests.jl
+- Test suite: full `Pkg.test()` passes (includes the new `diffuse_smoother_tests.jl`)
 - Ambiguity count: 0 (no change)
 - Staged but uncommitted: no (all changes unstaged)
 
 ## Cluster status
-- composability-with-base: 3 of 3 complete
+- missing-operations: 1 of 3 complete (CHUNK-028 and CHUNK-029 remain)
 
 ## Next chunk
-CHUNK-027: add-diffuse-smoother. Exact diffuse smoothing (Durbin & Koopman §5.3) for `DiffuseFilterResult` and `DiffuseKalmanWorkspace`; remove the `det` allocation in `_safe_inverse_inplace!`; document `diffuse_flags == -1`. The smoother must read the packed `vt`/`Ft`/`Kt` blocks.
+CHUNK-028: add-disturbance-smoother. Smoothed ε̂, η̂ and their variances (D&K §4.5) in the functional and in-place APIs. The r/N recursions in `_rts_step` and `_kalman_smoother_cov!` are the natural places to hook in (ε̂ₜ = H Fₜ⁻¹vₜ − H Kₜ' rₜ, η̂ₜ = Q R' rₜ).
 
 ## Watch out for
-- Open Questions lists diffuse items that belong in CHUNK-027: `DiffuseFilterResult(ws)` conversion, `SmootherResult(ws)` on a diffuse workspace, and a `diffuse_ended` flag for `forecast`.
-- After CHUNK-027, consider letting `SimulationSmootherWorkspace`/`simulation_smoother` accept a `DiffuseKalmanWorkspace`; their `ArgumentError` messages and `test/construction_tests.jl` would change.
+- A disturbance smoother under exact diffuse would need the r⁽⁰⁾/r⁽¹⁾ quantities from `_diffuse_smoother_backward!`. Either restrict it to non-diffuse results first, or extend that routine.
+- `_diffuse_step_flag!` keeps the scale-dependent `|det Finf| > tol` criterion (see Open Questions).
+- Revise cannot redefine structs. After this chunk, restart the MCP session before testing.

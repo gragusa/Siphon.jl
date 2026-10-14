@@ -253,6 +253,14 @@ initialisation, as before: the 5-argument `kalman_loglik(p, y, a1, P1_star, P1_i
 `kalman_filter!(ws::DiffuseKalmanWorkspace, y)`; the unexported
 `Siphon.kalman_filter_diffuse!` is gone.
 
+Exact diffuse smoothing is new: `kalman_smoother(result::DiffuseFilterResult)`,
+`kalman_smoother!(ws::DiffuseKalmanWorkspace)` (and so `kalman_filter_and_smooth!`)
+and `smoothed_states(model)` for a model with `diffuse = :exact` used to throw.
+`DiffuseFilterResult(ws)` copies the output of a `DiffuseKalmanWorkspace`. A
+`DiffuseFilterResult` has two new fields, `diffuse_ended` and `tol`, after
+`diffuse_flag`; `forecast` on a result whose diffuse period ends in the last period
+now works instead of throwing.
+
 ## Prediction and forecasting
 
 Every `forecast` method returns a `ForecastResult`. It holds the observation forecasts
@@ -538,5 +546,7 @@ return type no longer depends on a keyword value:
 | `simulation_smoother(ws, y; n_draws = k)`: `m × n` when `k == 1`, else `m × n × k` | `simulation_smoother(ws, y, k)`: always `m × n × k` |
 
 `Siphon.EMWorkspace`, `SimulationSmootherWorkspace` and `simulation_smoother` throw
-an `ArgumentError` for a `DiffuseKalmanWorkspace`: they run the smoother, which the
-exact diffuse filter does not have. Use a `KalmanWorkspace` with a large `P1`.
+an `ArgumentError` for a `DiffuseKalmanWorkspace`: EM needs the cross-lag covariances
+and the simulation smoother draws the initial state from `N(a1, P1)`, neither of which
+is available under exact diffuse initialization. Use a `KalmanWorkspace` with a large
+`P1`.

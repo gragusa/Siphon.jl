@@ -909,16 +909,75 @@ end
 # ============================================
 
 """
-    _diffuse_step_flag(Finf, tol) -> flag
+    _diffuse_step_flag!(S, Finf, tol) -> flag
 
 Classify a diffuse-period step from `Finf = Z_t Pinf Z_t'`: `1` when Finf is
-invertible, `0` when it is zero (no observed row loads on a diffuse direction) and
-`2` when it is singular but nonzero, which needs the univariate treatment of
-[`_univariate_diffuse_update!`](@ref).
+invertible (`|det Finf| > tol`), `0` when it is zero (no observed row loads on a
+diffuse direction) and `2` when it is singular but nonzero, which needs the
+univariate treatment of [`_univariate_diffuse_update!`](@ref).
+
+The determinant comes from a Cholesky factorization of the lower triangle of
+`Finf`, computed in the scratch matrix `S`. When the flag is `1`, the lower
+triangle of `S` holds the Cholesky factor of `Finf`.
 """
-function _diffuse_step_flag(Finf::AbstractMatrix, tol::Real)
-    abs(det(Finf)) > tol && return 1
+function _diffuse_step_flag!(S::AbstractMatrix, Finf::AbstractMatrix, tol::Real)
+    copyto!(S, Finf)
+    chol = cholesky!(Symmetric(S, :L); check = false)
+    if issuccess(chol)
+        detF = one(eltype(S))
+        for i in axes(S, 1)
+            detF *= S[i, i]
+        end
+        detF^2 > tol && return 1
+    end
     return maximum(abs, Finf) > tol ? 2 : 0
+end
+
+function _diffuse_step_flag(Finf::AbstractMatrix, tol::Real)
+    _diffuse_step_flag!(Matrix{eltype(Finf)}(undef, size(Finf)), Finf, tol)
+end
+
+"""
+    _decorrelate_rows!(Zs, w, h, Hr, C) -> Bool
+
+Transform the observed rows so their errors are independent. On entry `Zs` holds
+the rows `Z_t`, `w` the innovation and `Hr` the observation covariance `H_t`. With
+the unit lower-triangular factorization `H_t = C D C'`, `Zs` and `w` are replaced by
+`C⁻¹ Z_t` and `C⁻¹ w`, and `h` receives `diag(D)`. The transform has unit
+determinant, so it leaves the likelihood and the state posterior unchanged.
+
+Returns `false`, with `Zs` and `w` untouched, when `H_t` is diagonal.
+"""
+function _decorrelate_rows!(Zs, w, h, Hr, C)
+    pt = size(Zs, 1)
+    ET = eltype(Zs)
+    if isdiag(Hr)
+        for i in 1:pt
+            h[i] = Hr[i, i]
+        end
+        return false
+    end
+    fill!(C, zero(ET))
+    for j in 1:pt
+        s = Hr[j, j]
+        for k in 1:(j - 1)
+            s -= C[j, k]^2 * h[k]
+        end
+        h[j] = s
+        C[j, j] = one(ET)
+        for i in (j + 1):pt
+            s = Hr[i, j]
+            for k in 1:(j - 1)
+                s -= C[i, k] * C[j, k] * h[k]
+            end
+            # A zero pivot of a positive semidefinite H_t has a zero column.
+            C[i, j] = h[j] > 0 ? s / h[j] : zero(ET)
+        end
+    end
+    Cl = UnitLowerTriangular(C)
+    ldiv!(Cl, Zs)
+    ldiv!(Cl, w)
+    return true
 end
 
 """
@@ -952,32 +1011,7 @@ function _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, 
     ET = eltype(Pstar)
 
     # Decorrelate the rows: H_t = C D C' with C unit lower triangular.
-    if isdiag(Hr)
-        for i in 1:pt
-            h[i] = Hr[i, i]
-        end
-    else
-        fill!(C, zero(ET))
-        for j in 1:pt
-            s = Hr[j, j]
-            for k in 1:(j - 1)
-                s -= C[j, k]^2 * h[k]
-            end
-            h[j] = s
-            C[j, j] = one(ET)
-            for i in (j + 1):pt
-                s = Hr[i, j]
-                for k in 1:(j - 1)
-                    s -= C[i, k] * C[j, k] * h[k]
-                end
-                # A zero pivot of a positive semidefinite H_t has a zero column.
-                C[i, j] = h[j] > 0 ? s / h[j] : zero(ET)
-            end
-        end
-        Cl = UnitLowerTriangular(C)
-        ldiv!(Cl, Zs)
-        ldiv!(Cl, w)
-    end
+    decorrelated = _decorrelate_rows!(Zs, w, h, Hr, C)
 
     # G maps the transformed innovation w to δ until the end, where it is
     # converted to a gain on v.
@@ -1034,7 +1068,7 @@ function _univariate_diffuse_update!(δ, G, Pstar, Pinf, Zs, w, h, Hr, C, Minf, 
         end
     end
 
-    isdiag(Hr) || rdiv!(G, UnitLowerTriangular(C))
+    decorrelated && rdiv!(G, UnitLowerTriangular(C))
     return (loglik, nrows, true)
 end
 
@@ -1623,6 +1657,8 @@ function kalman_filter(
         Ft_store,
         Kt_store,
         flag_list,
+        diffuse_ended,
+        tol,
         missing_mask,
         observed_mask,
         failed_at

@@ -173,7 +173,7 @@ uses the measurement Jacobian at that state.
 function forecast(r::AbstractFilterResult, h::Integer)
     _require_output(r, :forecast)
     n = size(r.att, 2)
-    _check_diffuse_ended(r, n)
+    _check_diffuse_ended(r)
     return _forecast_from_filtered(r.p, r.att[:, n], r.Ptt[:, :, n], n, h)
 end
 
@@ -214,11 +214,11 @@ function forecast(p::KFParms, y::AbstractVecOrMat, a1, P1, h::Integer)
     return forecast(kalman_filter(p, _nan_obs(y), a1, P1), h)
 end
 
-_check_diffuse_ended(::AbstractFilterResult, n) = nothing
-function _check_diffuse_ended(r::DiffuseFilterResult, n)
-    r.d < n && return nothing
+_check_diffuse_ended(::AbstractFilterResult) = nothing
+function _check_diffuse_ended(r::DiffuseFilterResult)
+    r.diffuse_ended && return nothing
     throw(ArgumentError(
-        "forecast: the diffuse period lasts the whole sample, so the forecast " *
+        "forecast: the diffuse period does not end within the sample, so the forecast " *
         "variances are infinite"))
 end
 
@@ -290,7 +290,7 @@ function forecast_paths(r::AbstractFilterResult, h::Integer, n_paths::Integer;
         rng::AbstractRNG = Random.default_rng())
     _require_output(r, :forecast_paths)
     n = size(r.att, 2)
-    _check_diffuse_ended(r, n)
+    _check_diffuse_ended(r)
     return _forecast_paths(r.p, r.att[:, n], r.Ptt[:, :, n], n, h, n_paths, rng)
 end
 

@@ -1187,11 +1187,11 @@ end
           exact +
           transform_to_constrained(spec, transform_to_unconstrained(spec, collect(θ)))[2]
 
-    # StateSpaceModel: filtering and MLE run; EM and smoothing reject it
+    # StateSpaceModel: filtering, smoothing and MLE run; EM rejects it
     model = StateSpaceModel(spec, θ, size(y, 2))
     @test kalman_loglik(model, y) ≈ exact
     @test kalman_filter!(model, y) ≈ exact
-    @test_throws ArgumentError smoothed_states(model)
+    @test smoothed_states(model) ≈ smoothed_states(kalman_smoother(filt))
     @test fit!(MLE(), StateSpaceModel(spec, size(y, 2)), y).loglik ≈ -632.5456 atol = 1e-3
     @test_throws ArgumentError fit!(EM(), StateSpaceModel(spec, size(y, 2)), y)
 

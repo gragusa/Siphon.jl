@@ -390,6 +390,9 @@ include("show_tests.jl")
 # Element types and constructor conventions
 include("construction_tests.jl")
 
+# Exact diffuse smoother
+include("diffuse_smoother_tests.jl")
+
 # Known bugs, pinned with @test_broken
 include("known_bugs_tests.jl")
 

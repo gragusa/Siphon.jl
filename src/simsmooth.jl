@@ -115,8 +115,8 @@ end
 
 Build simulation-smoother storage sized to `ws` and factor its `(P1, Q, H)`.
 
-There is no method for a `DiffuseKalmanWorkspace`: each draw runs the smoother,
-and the exact diffuse filter has no smoother.
+There is no method for a `DiffuseKalmanWorkspace`: each draw simulates the initial
+state from `N(a1, P1)`, which has no exact diffuse counterpart here.
 """
 function SimulationSmootherWorkspace(ws::KalmanWorkspace{T}) where {T}
     m, p, r, n = ws.state_dim, ws.obs_dim, ws.shock_dim, ws.n_times
@@ -132,8 +132,9 @@ end
 
 function SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)
     throw(ArgumentError("the simulation smoother needs a KalmanWorkspace: each draw " *
-                        "runs the smoother, and DiffuseKalmanWorkspace has no smoother. " *
-                        "Use a KalmanWorkspace with a large P1 instead."))
+                        "simulates the initial state from N(a1, P1), which is not " *
+                        "implemented for exact diffuse initialization. Use a " *
+                        "KalmanWorkspace with a large P1 instead."))
 end
 
 """

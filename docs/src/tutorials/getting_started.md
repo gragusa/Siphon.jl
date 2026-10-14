@@ -407,7 +407,16 @@ ll = kalman_filter!(ws, y)
 # Access results
 d = diffuse_period(ws)
 att = filtered_states(ws)
+
+# Exact diffuse smoother
+kalman_smoother!(ws)
+alpha = smoothed_states(ws)
 ```
+
+`kalman_smoother(result)` smooths the output of the functional
+`kalman_filter(p, y, a1, P1_star, P1_inf)` in the same way. Both need the diffuse
+period to end within the sample; otherwise some smoothed variances are infinite and
+they throw an `ArgumentError`.
 
 ### When to Use Exact Diffuse
 

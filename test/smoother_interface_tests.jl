@@ -117,14 +117,6 @@ end
     @test smoothed_states(srm) !== smoothed_states(model)
 end
 
-@testset "kalman_smoother on an exact diffuse result" begin
-    y = randn(MersenneTwister(8), 1, 15)
-    p = KFParms([1.0;;], [1.0;;], [1.0;;], [1.0;;], [0.5;;])
-    r = kalman_filter(p, y, [0.0], [0.0;;], [1.0;;])
-    @test r isa DiffuseFilterResult
-    @test_throws "exact diffuse" kalman_smoother(r)
-end
-
 @testset "kalman_filter_and_smooth is AD-compatible" begin
     y = randn(MersenneTwister(9), 1, 20)
     function f(θ)

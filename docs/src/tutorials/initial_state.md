@@ -151,9 +151,9 @@ spec = local_level(diffuse=:exact)
 fit!(MLE(), StateSpaceModel(spec, n), y)
 ```
 
-Likelihood, filtering, prediction, forecasting and `fit!(MLE())` support
-exact diffuse initialization. `fit!(EM())` and smoothing do not yet, and
-throw an `ArgumentError`; use `diffuse=true` for those.
+Likelihood, filtering, smoothing, prediction, forecasting and `fit!(MLE())`
+support exact diffuse initialization. `fit!(EM())` and the simulation smoother
+do not, and throw an `ArgumentError`; use `diffuse=true` for those.
 
 **Tight informative prior** (e.g. you know `α₁ ≈ 100 ± 5`):
 

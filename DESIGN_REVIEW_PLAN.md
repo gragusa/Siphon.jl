@@ -879,11 +879,18 @@ Other author answers, verbatim:
   - add per-element missing support to the diffuse path;
   - remove the allocations in the diffuse filter (`det` at `inplace.jl:1203`; `ws.Finf_inv * v_t` at `:1510`);
   - document the `-1` value of `diffuse_flags`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-015, CHUNK-039
 - **Cluster**: missing-operations
 - **Notes**:
   - CHUNK-036 already did the first two "while there" items: `kalman_filter_diffuse!` fills `n_observed`/`obs_rows`/`observed_mask`, and the diffuse paths support per-element missing data. It also removed the `Finf_inv * v_t` allocation; `det` in `_safe_inverse_inplace!` remains. The smoother must read the packed `vt`/`Ft`/`Kt` blocks.
+  - **Design (implementer's call):** one backward routine, `_diffuse_smoother_backward!` in `src/diffuse_smoother.jl`, serves both APIs. Periods after `d` use the ordinary RTS step (`_rts_step`, factored out of `_kalman_smoother`; in place, `_kalman_smoother_cov!`/`_kalman_smoother_mean!` with a `tstop` argument). Each diffuse period is processed row by row after the filter's LDL decorrelation (factored out as `_decorrelate_rows!`), repeating the filter's row update from the stored predicted Pstar/Pinf. The κ-expansion recursions for r⁽⁰⁾, r⁽¹⁾, N⁽⁰⁾, N⁽¹⁾, N⁽²⁾ are the exact coefficients, including the L⁽²⁾ terms. This handles flags 1, 2, 0 and −1 uniformly.
+  - **Verification:** the oracle is the ordinary smoother in BigFloat (512 bits) with P1 = P1_star + 1e40·P1_inf. Agreement is ~1e-15 for local linear trend, 3-obs/3-state with flag 2, diagonal and full H, partial and full missing periods, and flag 0. ForwardDiff works through it.
+  - **New API:** `kalman_smoother(::DiffuseFilterResult)`, `kalman_smoother!(::DiffuseKalmanWorkspace; covariances)`, `DiffuseFilterResult(ws)`. `StateSpaceModel` with `diffuse = :exact` smooths by rerunning the functional filter on the stored data. `crosscov = true` throws (EM rejects exact diffuse anyway). A diffuse period that never ends throws in the smoother and in `forecast`.
+  - **`DiffuseFilterResult`** gains `diffuse_ended::Bool` and `tol::Float64` after `diffuse_flag`. This resolves the `forecast` d == n ambiguity, and the smoother classifies rows with the filter's tol. `DiffuseKalmanWorkspace` gains `Pinf_store` (m × m × n) and `smoother_scratch`.
+  - **Allocations:** `_safe_inverse_inplace!` is deleted. `_diffuse_step_flag!` takes the determinant from a Cholesky factor in scratch and leaves the factor for Finf⁻¹. The in-place diffuse filter and smoother are allocation-free (tested).
+  - **Messages:** the EM/simulation-smoother `ArgumentError`s for a `DiffuseKalmanWorkspace` now give the real reasons (no cross-lag covariances; the initial draw from N(a1, P1)). Docs: `initial_state.md`, `getting_started.md`, conversion guide.
+  - Tests: `test/diffuse_smoother_tests.jl`; the old "smoother throws" testset in `smoother_interface_tests.jl` was removed.
 
 ### CHUNK-028: add-disturbance-smoother
 - **Kind**: `implement`
@@ -1008,15 +1015,16 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-024 (extend-statsapi-and-logdensityproblems) → next: CHUNK-025
 - 2026-10-14 CHUNK-025 (add-show-equality-hash) → next: CHUNK-026
 - 2026-10-14 CHUNK-026 (unify-construction-conventions) → next: CHUNK-027
+- 2026-10-14 CHUNK-027 (add-diffuse-smoother) → next: CHUNK-028
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
 - CHUNK-011, CHUNK-020 and CHUNK-029 depend on the scope answer in CHUNK-002. If the DFM or EKF leaves the package, convert them to removal or extraction chunks instead.
 - The test suite now prints 8 "EM did not converge" warnings from tests that cap `maxiter` on purpose, (the DSL EMs and their "Log-likelihood decreased" warnings are gone). Pass `warn = false` in the capped tests if a quiet suite is wanted.
 - `docs/src/tutorials/dynamic_factor.md` starts its DFM example with `include("src/inplace.jl")`, which is wrong for users. Fix in CHUNK-032.
-- `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
+- (Resolved in CHUNK-027) `DiffuseKalmanWorkspace` has no `DiffuseFilterResult(ws)` conversion, because it keeps only the current `Pinf`/`Pstar`, not the per-period stores. `SmootherResult(ws)` on it throws "call kalman_smoother!(ws)", which itself is a `MethodError`. Both belong in CHUNK-027 (diffuse smoother).
 - Docs API pages: `kalman_loglik`, `kalman_filter`, `ssm_loglik` and `optimize_ssm` now carry linear, scalar, diffuse and EKF methods under one binding. `core.md`/`dsl.md`/`optimization.md` list the whole bindings, and `optimization.md` also lists `StateSpaceModel` method signatures of `kalman_loglik`/`kalman_filter!`/`kalman_smoother!`, which will clash with a whole-binding entry if one is added. CHUNK-032 should decide per-method vs whole-binding `@docs` entries and run the docs build.
-- `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
+- (Resolved in CHUNK-027) `forecast` on a `DiffuseFilterResult` cannot tell "the diffuse period ended exactly in period n" from "it never ended", because both give `d == n`; it throws in both cases. Storing a `diffuse_ended` flag on the result (CHUNK-027, diffuse smoother) would fix this.
 - No `forecast_paths(::StateSpaceModel, h, n_paths)`; `forecast(model, h)` exists. Add it in CHUNK-024 or CHUNK-026 if wanted.
 - Julia compat: a background check on 2026-10-12 found that the package resolves, loads and passes `Pkg.test()` on Julia 1.10.12 with `julia = "1.10"`, with no source changes. The `"1.12"` bound from `main` looks unnecessary. The author should decide before the version bump (CHUNK-034). Note that `public` declarations (CHUNK-031) need Julia ≥ 1.11, or `Compat.@compat public`, if 1.10 is supported.
 - The multivariate static filter kernel (`filter_ad.jl`, `kalman_loglik` static method around line 405, and the matching `kalman_filter` method) forms `Finv = inv(cholesky(F))` explicitly. With 14 observables and `P1 = 1e7`, F has a condition number near 1e8, and `static = :on` differs from `:off` by a relative 7e-6 in the log-likelihood and 2e-3 in the filtered states. With `P1 = 1e3` the two agree to 1e-13. Using `chol \ v` for the quadratic form and `(chol \ (Z P Tᵀ)ᵀ)ᵀ` for the gain would remove most of this. It affects `:auto` for small multivariate models under approximate diffuse initialization. Candidate for CHUNK-030 or a separate numerical chunk.
@@ -1033,4 +1041,5 @@ Other author answers, verbatim:
 - The `@docs` entries `Siphon.fit!` and `Siphon.loglikelihood` now resolve to the StatsAPI bindings and pull in StatsAPI's docstrings too. CHUNK-032 should check the docs build.
 - `src/api/{core,dsl,matrix_helpers,optimization}.md` are tracked stray copies of old docs pages (they still say `Siphon.DSL.*`). Delete in CHUNK-030.
 - `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
-- After CHUNK-027 adds a diffuse smoother, `SimulationSmootherWorkspace`/`simulation_smoother` (and possibly `EMWorkspace`) could accept a `DiffuseKalmanWorkspace`; they now throw an `ArgumentError` naming the missing smoother.
+- `SimulationSmootherWorkspace`/`simulation_smoother` and `EMWorkspace` still reject a `DiffuseKalmanWorkspace`. The simulation smoother would need an exact diffuse initial draw (Durbin & Koopman 2002, Section 5 of that paper), and EM would need diffuse cross-lag covariances. These are possible feature chunks.
+- `_diffuse_step_flag!` keeps the existing criterion `|det Finf| > tol`, which is not scale-invariant (Finf in large units always counts as invertible). A relative criterion, such as the smallest Cholesky pivot relative to the largest, would be more robust.
