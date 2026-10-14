@@ -8,7 +8,6 @@ Run with: julia --project benchmark/em_benchmark.jl
 """
 
 using Siphon
-using Siphon.DSL: em_ssm_diagonal
 using LinearAlgebra
 using Statistics
 using Printf
@@ -119,49 +118,32 @@ end
 # Julia EM
 # ============================================
 
-function run_julia_em(y::Matrix{Float64}; maxiter = 100, tol_ll = 1e-8, tol_param = 1e-6)
+function run_julia_em(y::Matrix{Float64}; maxiter = 100, tol = 1e-8)
     p, n = size(y)
-    m, r = 2, 2
+    m = 2
 
-    # Initial values
-    Z_init = [1.0 0.0; 0.0 1.0; 0.5 0.5]
+    # Initial state at t = 1 from the MARSS tinitx = 0 convention, at the starting
+    # values T = 0.5 I, Q = I, x0 = 0, V0 = 10 I.
     T_init = [0.5 0.0; 0.0 0.5]
-    R_mat = Matrix(1.0I, m, r)
-    H_init = [1.0, 1.0, 1.0]
-    Q_init = [1.0, 1.0]
+    a1 = T_init * zeros(m)
+    P1 = T_init * (10.0 * Matrix(1.0I, m, m)) * T_init' + Matrix(1.0I, m, m)
 
-    # Propagate initial state (MARSS tinitx=0 convention)
-    x0 = [0.0, 0.0]
-    V0 = 10.0 * Matrix(1.0I, m, m)
-    a1 = T_init * x0
-    P1 = T_init * V0 * T_init' + R_mat * Diagonal(Q_init) * R_mat'
-
-    # Free parameter masks
-    Z_free = [false false; false false; true true]
-    T_free = trues(m, m)
-    H_free = trues(p)
-    Q_free = trues(r)
-
-    result = em_ssm_diagonal(
-        Z_init,
-        T_init,
-        R_mat,
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free,
-        Q_free = Q_free,
-        maxiter = maxiter,
-        tol_ll = tol_ll,
-        tol_param = tol_param,
-        verbose = false
+    spec = custom_ssm(
+        Z = [1.0 0.0; 0.0 1.0; FreeParam(:z_31; init = 0.5) FreeParam(:z_32; init = 0.5)],
+        H = diag_free(p, :var_obs),
+        T = [FreeParam(:t_11; init = 0.5) FreeParam(:t_12; init = 0.0)
+             FreeParam(:t_21; init = 0.0) FreeParam(:t_22; init = 0.5)],
+        R = Matrix(1.0I, m, m),
+        Q = diag_free(m, :var_state),
+        a1 = a1,
+        P1 = P1
     )
 
-    return result
+    model = StateSpaceModel(spec, n)
+    fit!(EM(), model, y; maxiter, tol, warn = false)
+    mats = system_matrices(model)
+    return (loglik = loglikelihood(model), iterations = niterations(model),
+        T = mats.T, Z = mats.Z, Q_diag = diag(mats.Q), H_diag = diag(mats.H))
 end
 
 # ============================================
@@ -178,7 +160,7 @@ function benchmark_single(y_jl, y_r; maxiter = 100, n_runs = 5)
     julia_result = nothing
     for _ in 1:n_runs
         t = @elapsed begin
-            julia_result = run_julia_em(y_jl; maxiter = maxiter, tol_ll = 1e-15, tol_param = 1e-15)
+            julia_result = run_julia_em(y_jl; maxiter, tol = 1e-15)
         end
         push!(julia_times, t * 1000)  # Convert to ms
     end
@@ -211,7 +193,7 @@ function benchmark_convergence(y_jl, y_r; n_runs = 3)
     julia_result = nothing
     for _ in 1:n_runs
         t = @elapsed begin
-            julia_result = run_julia_em(y_jl; maxiter = 5000, tol_ll = 1e-8, tol_param = 1e-6)
+            julia_result = run_julia_em(y_jl; maxiter = 5000, tol = 1e-8)
         end
         push!(julia_times, t * 1000)
     end

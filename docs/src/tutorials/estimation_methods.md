@@ -93,14 +93,14 @@ spec = dns_model(maturities;
     T_structure = :diagonal,  # Diagonal AR(1) for each factor
     H_structure = :diagonal,  # Diagonal observation variances
     Q_structure = :diagonal,  # Diagonal state variances
-    λ_init = 0.06,
-    T_init = 0.9,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.9),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("Parameters: ", param_names(spec))
-# [:λ, :T_L, :T_S, :T_C, :Q_L, :Q_S, :Q_C, :H_1, ..., :H_8]
+# [:λ, :T_L, :T_S, :T_C, :var_obs_1, ..., :var_obs_8, :var_L, :var_S, :var_C]
 
 # Estimate via MLE (gradient-based optimization)
 result_mle = optimize_ssm(spec, yields; maxiters=500)
@@ -118,11 +118,11 @@ ss = build_linear_state_space(spec, result_mle.θ, yields)
 
 # Run filter and smoother
 filt = kalman_filter(ss.p, yields, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 # Compare with true factors
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    corr = cor(factors[i, :], smooth.alpha[i, :])
+    corr = cor(factors[i, :], smoothed_states(smooth)[i, :])
     println("$name correlation: ", round(corr, digits=4))
 end
 ```
@@ -140,7 +140,7 @@ spec_full = dns_model(maturities;
     T_structure = :full,      # Full 3×3 VAR matrix
     H_structure = :diagonal,
     Q_structure = :full,      # Full 3×3 covariance
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 # Profile EM estimation
@@ -176,7 +176,7 @@ spec = dns_model(maturities;
     T_structure = :diagonal,
     H_structure = :diagonal,
     Q_structure = :diagonal,
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 model = StateSpaceModel(spec, n_obs)
@@ -185,12 +185,12 @@ model = StateSpaceModel(spec, n_obs)
 fit!(MLE(), model, yields)
 
 println("MLE Results:")
-println("Converged: ", model.converged)
+println("Converged: ", isconverged(model))
 println("Log-likelihood: ", round(loglikelihood(model), digits=2))
-println("Parameters: ", model.theta_values)
+println("Parameters: ", parameters(model))
 
-# Access filtered states directly
-println("Filtered state at t=100: ", model.att[:, 100])
+# Filtered states E[αₜ | y₁:ₜ], 3 × n_obs
+println("Filtered state at t=100: ", filtered_states(model)[:, 100])
 ```
 
 ### StateSpaceModel with EM
@@ -210,9 +210,9 @@ y_ll = reshape(y_ll, 1, n_obs)
 fit!(EM(), model_ll, y_ll; maxiter=200, tol=1e-6, verbose=true)
 
 println("\nLocal Level EM Results:")
-println("Converged: ", model_ll.converged)
-println("Iterations: ", model_ll.iterations)
-println("Parameters: ", model_ll.theta_values)
+println("Converged: ", isconverged(model_ll))
+println("Iterations: ", niterations(model_ll))
+println("Parameters: ", parameters(model_ll))
 ```
 
 ## Comparison: When to Use Each Approach
@@ -233,13 +233,12 @@ using Siphon
 using LinearAlgebra
 using Statistics
 
-# 1. SPECIFY MODEL
-maturities = [3, 6, 12, 24, 60, 120]
+# 1. SPECIFY MODEL (maturities and yields from the simulation above)
 spec = dns_model(maturities;
     T_structure = :full,
     Q_structure = :full,
     H_structure = :diagonal,
-    λ_init = 0.06
+    λ = FreeParam(init = 0.06)
 )
 
 println("Model: ", spec.name)
@@ -268,31 +267,20 @@ println("T eigenvalues: ", round.(eigvals(T_opt), digits=3))
 println("Q diagonal: ", round.(diag(Q_opt), digits=5))
 
 # 5. SMOOTH FACTORS
-Z_opt = dns_loadings(λ_opt, maturities)
-p_final = KFParms(Z_opt, H_opt, T_opt, Matrix{Float64}(I, 3, 3), Q_opt)
-a1 = zeros(3)
-P1 = 1e4 * Matrix{Float64}(I, 3, 3)
-
-filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(Z_opt, T_opt, filt.at, filt.Pt, filt.vt, filt.Ft)
+model = StateSpaceModel(spec, result.θ, size(yields, 2))
+kalman_filter!(model, yields)
+smooth = smoothed_states(model)          # 3 × n_obs
 
 # 6. ANALYZE FACTORS
 println("\n=== Factor Analysis ===")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    f = smooth.alpha[i, :]
+    f = smooth[i, :]
     println("$name: mean=$(round(mean(f), digits=2)), std=$(round(std(f), digits=2))")
 end
 
-# 7. FORECAST (optional)
-# Build forecast from final state
-h = 12  # 12-period ahead
-f_last = smooth.alpha[:, end]
-f_forecast = zeros(3, h)
-for t in 1:h
-    f_forecast[:, t] = T_opt^t * f_last
-end
-
-y_forecast = Z_opt * f_forecast
+# 7. FORECAST
+fc = forecast(model, 12)                 # periods n_obs+1 … n_obs+12
+y_forecast = forecast_observations(fc)   # n_maturities × 12
 println("\n=== 12-Period Yield Forecast ===")
 println("Short rate (3m): ", round.(y_forecast[1, :], digits=2))
 ```
@@ -305,23 +293,28 @@ so the inner Kalman filter loop runs without heap allocations. This delivers
 ~6-10× speedups for one-shot MLE on models like `local_level`, `ar1`, and
 small ARMAs.
 
-The promotion is gated by a per-dimension threshold (`STATIC_THRESHOLD`,
-currently 13). The behaviour is controlled with two kwargs:
+The promotion is controlled by the `static` keyword, which every
+spec-level function accepts (`optimize_ssm`, `ssm_loglik`, `SSMLogDensity`,
+`predict`, `forecast`, …):
 
 ```julia
-fit!(MLE(), model, y; static = :auto, static_threshold = 13)
-# :auto — promote when max(n_states, n_obs, n_shocks) ≤ static_threshold (default).
-# :on   — force the static path (warns if dims exceed the threshold).
+fit!(MLE(), model, y; static = :auto)
+# :auto — promote when n_states, n_obs and n_shocks are all ≤ Siphon.STATIC_THRESHOLD
+#         (currently 13). This is the default.
+# :on   — force the static path (warns if a dimension exceeds the threshold).
 # :off  — force the regular `Matrix`/`Vector` path.
-backend(model)  # → :mle_static or :mle_dynamic, for diagnostics.
 ```
 
-**EM is *not* affected by this knob.** Benchmarks across `local_level`,
+Either path gives the same estimates up to rounding error. An ill-conditioned
+innovation covariance, as under a large approximate diffuse `P1`, amplifies
+that error, so pass `static = :off` when comparing results at full precision. All system matrices and
+the initial state are promoted together, or none are.
+
+**EM does not take this keyword.** Benchmarks across `local_level`,
 `local_linear_trend`, and small custom models show that the in-place EM
 workspace beats the static path by 1.6-2.6× on every model size, because
 each EM iteration's Kalman filter call would otherwise re-allocate result
-arrays. EM therefore always uses the in-place workspace; `backend(model)`
-returns `:em_inplace` after `fit!(EM(), ...)`.
+arrays. EM therefore always uses the in-place workspace.
 
 ### The AD recompile pitfall
 

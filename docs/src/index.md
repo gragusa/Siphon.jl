@@ -4,27 +4,52 @@
 
 ## Installation
 
+Siphon.jl is not yet registered in the General registry. Install it from GitHub:
+
 ```julia
 using Pkg
-Pkg.add("Siphon")
+Pkg.add(url = "https://github.com/gragusa/Siphon.jl")
 ```
 
-
+Siphon.jl requires Julia 1.13 or later.
 
 ## Overview
 
-Siphon.jl provides a comprehensive toolkit for working with linear Gaussian state space models. It combines high-performance Kalman filtering algorithms with an ergonomic domain-specific language (DSL) for model specification.
+Siphon.jl filters, smooths, forecasts and estimates linear Gaussian state space
+models, and nonlinear-measurement models through the extended Kalman filter.
+Models are written as matrices with free parameters marked, or taken from
+templates, and are fitted by maximum likelihood or EM.
 
-### Key Features
+### Features
 
-- **High-Performance Kalman Filter**: AD-compatible implementations supporting both scalar and matrix observations
-- **Kalman Smoother**: Full backward smoothing with disturbance smoothing
-- **Ergonomic DSL**: Specify models using intuitive matrix notation with automatic parameter handling
-- **Pre-built Templates**: Common models like local level, local linear trend, AR(1), ARMA, and dynamic factor models
-- **Optimization Integration**: Seamless integration with Optimization.jl for maximum likelihood estimation
-- **Bayesian Support**: Prior specification and LogDensityProblems.jl interface for MCMC sampling
-- **StaticArrays Support**: Automatic conversion to StaticArrays for small models
-- **Missing Data Handling**: Native support for missing observations
+- **Kalman filter and smoother**: scalar and matrix observations, compatible
+  with automatic differentiation; in-place workspaces that do not allocate
+  across repeated runs.
+- **Initialization**: approximate diffuse (large `P1`) or exact diffuse
+  (Durbin and Koopman) initialization.
+- **Smoothers**: state smoother, disturbance smoother with auxiliary residuals,
+  and simulation smoother for drawing state paths.
+- **Missing data**: `missing` or `NaN` entries, including periods in which only
+  some series are observed.
+- **Model specification**: `custom_ssm` with `FreeParam` entries, matrix
+  helpers, and templates for the local level, local linear trend, AR(1),
+  ARMA(p, q), dynamic factor and dynamic Nelson-Siegel models.
+- **Estimation**: maximum likelihood through Optimization.jl
+  (`fit!(MLE(), …)`) and the EM algorithm (`fit!(EM(), …)`), with standard
+  errors from the observed information; profile EM for the Nelson-Siegel decay
+  parameter.
+- **Extended Kalman filter**: nonlinear measurement equations with analytic,
+  automatic-differentiation or finite-difference Jacobians, with filter,
+  smoother and estimation.
+- **Dynamic factor models**: `DynamicFactorModel` for many series, with VAR
+  factors and AR idiosyncratic errors, estimated by EM.
+- **Forecasting**: point forecasts with covariances, intervals and simulated
+  paths.
+- **Bayesian inference**: priors and a LogDensityProblems.jl log-density for
+  MCMC samplers.
+- **StatsAPI**: `coef`, `vcov`, `stderror`, `loglikelihood`, `aic`, `bic` and
+  related functions.
+- **Plotting**: Plots.jl recipes for filter, smoother and forecast results.
 
 ## State Space Model Formulation
 
@@ -52,7 +77,7 @@ where:
 using Siphon
 
 # Create a local level model specification
-spec = local_level(var_obs_init=225.0, var_level_init=100.0)
+spec = local_level(var_obs = FreeParam(init = 225.0), var_level = FreeParam(init = 100.0))
 
 # Your data (p × T matrix, where p = number of series, T = time periods)
 y = randn(1, 100)
@@ -64,7 +89,7 @@ fit!(MLE(), model, y)           # Maximum likelihood
 
 # Access results
 println("Log-likelihood: ", loglikelihood(model))
-println("Parameters: ", model.theta_values)
+println("Parameters: ", parameters(model))
 
 # Alternative: use optimize_ssm directly
 result = optimize_ssm(spec, y)
@@ -73,11 +98,29 @@ println("Estimated parameters: ", result.θ)
 
 ## Documentation Structure
 
-- **[Getting Started](tutorials/getting_started.md)**: Basic tutorial covering Kalman filtering, smoothing, and parameter estimation
-- **[Custom Models](tutorials/custom_models.md)**: Advanced tutorial on specifying custom state space models
-- **[Dynamic Factor Models](tutorials/dynamic_factor.md)**: Tutorial on dynamic factor model specification
-- **[Core Functions](api/core.md)**: Kalman filter and smoother API
-- **[DSL & Templates](api/dsl.md)**: Model specification API
+**Tutorials**
+
+- [Getting Started](tutorials/getting_started.md): filtering, smoothing and estimation of a local level model
+- [Custom Models](tutorials/custom_models.md): specifying models with `custom_ssm` and the matrix helpers
+- [Dynamic Factor Models](tutorials/dynamic_factor.md): the `dynamic_factor` template and `DynamicFactorModel`
+- [ARMA Models](tutorials/arma_models.md): ARMA(p, q) models in state space form
+- [Estimation Methods](tutorials/estimation_methods.md): maximum likelihood, EM and profile EM
+- [Parameter Transformations](tutorials/transformations.md): bounds and unconstrained parameterization
+- [Initial State Conventions](tutorials/initial_state.md): `a1`, `P1`, exact diffuse initialization and MARSS conventions
+- [Extended Kalman Filter](tutorials/ekf.md): nonlinear measurement equations
+- [Visualization](tutorials/visualization.md): plotting filter, smoother and forecast results
+
+**API Reference**
+
+- [Core Functions](api/core.md): functional filter, smoothers, forecasting and missing-data utilities
+- [DSL & Templates](api/dsl.md): model specification types and templates
+- [Matrix Helpers](api/matrix_helpers.md): building parameterized matrices
+- [Estimation & Bayesian](api/optimization.md): `StateSpaceModel`, `fit!`, accessors, priors and log-densities
+- [In-Place Workspaces](api/inplace.md): preallocated filter, smoother and simulation smoother
+- [Dynamic Factor Models](api/dfm.md): `DynamicFactorModel` and its accessors
+- [Extended Kalman Filter](api/ekf.md): EKF types and specification
+
+[Conversion Guide](conversion_guide.md): changes from Siphon 0.1 and how to update code.
 
 ## Related Packages
 

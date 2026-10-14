@@ -77,7 +77,8 @@ end
 
 @testset "ARMA Matrix Structure" begin
     @testset "ARMA(2,2) matrices" begin
-        spec = arma(2, 2; ar_init = [0.7, -0.2], ma_init = [0.4, 0.1], var_init = 1.5)
+        spec = arma(2, 2; ar = [FreeParam(init = 0.7), FreeParam(init = -0.2)],
+            ma = [FreeParam(init = 0.4), FreeParam(init = 0.1)], var = FreeParam(init = 1.5))
 
         # Build matrices at initial values
         theta = (φ1 = 0.7, φ2 = -0.2, θ1 = 0.4, θ2 = 0.1, var = 1.5)
@@ -128,7 +129,7 @@ end
     y_mat = reshape(y, 1, n)
 
     # Fit AR(1) = ARMA(1,0)
-    spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
+    spec = arma(1, 0; ar = FreeParam(init = 0.5), var = FreeParam(init = 1.0))
 
     # Log-likelihood should be computable
     theta = (φ1 = 0.8, var = 1.0)
@@ -155,7 +156,7 @@ end
         y_mat = reshape(y, 1, n)
 
         # Estimate
-        spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
+        spec = arma(1, 0; ar = FreeParam(init = 0.5), var = FreeParam(init = 1.0))
         model = StateSpaceModel(spec, n)
         fit!(MLE(), model, y_mat)
 
@@ -186,7 +187,7 @@ end
         y_mat = reshape(y, 1, n)
 
         # Estimate
-        spec = arma(0, 1; ma_init = [0.3], var_init = 1.0)
+        spec = arma(0, 1; ma = FreeParam(init = 0.3), var = FreeParam(init = 1.0))
         model = StateSpaceModel(spec, n)
         fit!(MLE(), model, y_mat)
 
@@ -248,11 +249,7 @@ end
     @testset "system_matrices accessor" begin
         mats = system_matrices(model)
 
-        @test haskey(pairs(mats), :Z)
-        @test haskey(pairs(mats), :H)
-        @test haskey(pairs(mats), :T)
-        @test haskey(pairs(mats), :R)
-        @test haskey(pairs(mats), :Q)
+        @test mats isa KFParms
 
         # Should match individual accessors
         @test mats.Z == obs_matrix(model)
@@ -337,7 +334,7 @@ end
     y_mat = reshape(y, 1, n)
 
     # Fit with Siphon
-    spec = arma(1, 0; ar_init = [0.5], var_init = 1.0)
+    spec = arma(1, 0; ar = FreeParam(init = 0.5), var = FreeParam(init = 1.0))
     theta_true = (φ1 = φ, var = σ²)
 
     # Compute log-likelihood at true parameters
@@ -417,7 +414,8 @@ end
     y = randn(1, n)
 
     # ARMA(1,1) via template
-    spec_template = arma(1, 1; ar_init = [0.6], ma_init = [0.3], var_init = 1.0)
+    spec_template = arma(1, 1; ar = FreeParam(init = 0.6), ma = FreeParam(init = 0.3),
+        var = FreeParam(init = 1.0))
 
     # ARMA(1,1) via custom_ssm using proper matrix type annotations
     r = 2  # max(1, 1+1) = 2
@@ -433,7 +431,7 @@ end
 
     spec_custom = custom_ssm(
         Z = [1.0 0.0],
-        H = zeros_mat(1, 1),
+        H = [0.0;;],
         T = T_mat,
         R = R_mat,
         Q = reshape([FreeParam(:var, init = 1.0, lower = 0.0)], 1, 1),

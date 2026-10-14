@@ -1,28 +1,23 @@
 """
-Tests for the `T_diagonal` option in `_em_general_ssm_full_cov` and
-`_mstep_full_cov`. Three scenarios:
+Restricted transition matrices in `em_estimate!`, set through `T_free`:
 
-  (1) Pure diagonal T with no extended regressors. The restricted EM should
-      recover scalar AR(1) coefficients matching the univariate MLE for each
-      factor when the true DGP has independent factor innovations.
+  (1) Diagonal T. EM recovers the AR(1) coefficient of each factor and keeps
+      the off-diagonal cells at zero.
 
-  (2) Augmented-state intercept: T is square (m+1) × (m+1), the last column
-      holds a state intercept and the last row is [0 … 0 1]. With
-      `T_diagonal = true` and `T_free_for_diag` flagging the extended
-      intercept column as free for the factor rows, each factor row is
-      estimated by row-wise OLS on its own lag + a constant.
+  (2) Augmented-state intercept: T is (m+1) × (m+1), the last column holds a
+      state intercept and the last row is [0 … 0 1]. The free cells are the
+      factor diagonal and the intercept column of the factor rows.
 
-  (3) Default behaviour is unchanged when `T_diagonal = false` — the EM
-      returns the full unrestricted OLS M-step.
+  (3) A fully free T gives the unrestricted M-step.
 """
 
 using Test
 using LinearAlgebra
 using Random
 using Siphon
-using Siphon.DSL: _em_general_ssm_full_cov
+include("em_helpers.jl")
 
-@testset "T_diagonal EM — pure diagonal, no intercept" begin
+@testset "EM with a diagonal T" begin
     Random.seed!(20260424)
 
     # 3-factor DNS-like DGP with a DIAGONAL B. No observation loadings —
@@ -50,15 +45,14 @@ using Siphon.DSL: _em_general_ssm_full_cov
     # T_free marks only the diagonal as free.
     T_free = Matrix(I(m)) .== 1
 
-    em = _em_general_ssm_full_cov(
+    em = em_matrices(
         Z, T_init, R, H_init, Q_init, y, a1, P1;
         Z_free = falses(m, m),
         T_free = T_free,
         H_free = Matrix(I(m)) .== 1,
         Q_free = Matrix(I(m)) .== 1,   # diagonal Q
-        T_diagonal = true,
         maxiter = 1000,
-        tol_ll = 1e-9
+        tol = 1e-9
     )
 
     # Off-diagonals of T must stay exactly at 0.
@@ -74,7 +68,7 @@ using Siphon.DSL: _em_general_ssm_full_cov
     @test isapprox(em.T[3, 3], 0.70; atol = 0.05)
 end
 
-@testset "T_diagonal EM — augmented-state intercept" begin
+@testset "EM with a diagonal T and a state intercept" begin
     Random.seed!(20260425)
 
     # 2-factor DGP with diagonal B AND a state intercept u.
@@ -115,15 +109,14 @@ end
         T_free[i, m] = true
     end
 
-    em = _em_general_ssm_full_cov(
+    em = em_matrices(
         Z, T_init, R, H_init, Q_init, y, ã1, P̃1;
         Z_free = falses(m₀, m),
         T_free = T_free,
         H_free = Matrix(I(m₀)) .== 1,
         Q_free = Matrix(I(m₀)) .== 1,
-        T_diagonal = true,
         maxiter = 2000,
-        tol_ll = 1e-9
+        tol = 1e-9
     )
 
     # Off-diagonal factor entries of the augmented T are zero.
@@ -146,7 +139,7 @@ end
     @test isapprox(û[2], -0.25; atol = 0.10)
 end
 
-@testset "T_diagonal = false preserves previous EM behaviour" begin
+@testset "EM with a fully free T" begin
     Random.seed!(20260426)
 
     # Same DGP as test 1 but now we allow a FULL T update (default path).
@@ -169,15 +162,14 @@ end
     a1 = zeros(m)
     P1 = 10.0 .* Matrix{Float64}(I, m, m)
 
-    em = _em_general_ssm_full_cov(
+    em = em_matrices(
         Z, T_init, R, H_init, Q_init, y, a1, P1;
         Z_free = falses(m, m),
         T_free = trues(m, m),
         H_free = Matrix(I(m)) .== 1,
         Q_free = Matrix(I(m)) .== 1,
-        # T_diagonal omitted → defaults to false → unrestricted M-step.
         maxiter = 1500,
-        tol_ll = 1e-9
+        tol = 1e-9
     )
 
     # Full 2×2 B recovered within Monte Carlo tolerance. Off-diagonals are

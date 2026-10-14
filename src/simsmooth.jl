@@ -114,6 +114,9 @@ end
     SimulationSmootherWorkspace(ws::KalmanWorkspace)
 
 Build simulation-smoother storage sized to `ws` and factor its `(P1, Q, H)`.
+
+There is no method for a `DiffuseKalmanWorkspace`: each draw simulates the initial
+state from `N(a1, P1)`, which has no exact diffuse counterpart here.
 """
 function SimulationSmootherWorkspace(ws::KalmanWorkspace{T}) where {T}
     m, p, r, n = ws.state_dim, ws.obs_dim, ws.shock_dim, ws.n_times
@@ -125,6 +128,13 @@ function SimulationSmootherWorkspace(ws::KalmanWorkspace{T}) where {T}
         Vector{T}(undef, m), Vector{T}(undef, r), Vector{T}(undef, p),
         Vector{T}(undef, m), Vector{T}(undef, r), Vector{T}(undef, p)
     )
+end
+
+function SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)
+    throw(ArgumentError("the simulation smoother needs a KalmanWorkspace: each draw " *
+                        "simulates the initial state from N(a1, P1), which is not " *
+                        "implemented for exact diffuse initialization. Use a " *
+                        "KalmanWorkspace with a large P1 instead."))
 end
 
 """
@@ -214,8 +224,8 @@ which has the mean of `α̂` and the covariance of the conditional distribution.
 `ws` must already carry the model parameters and initial conditions. It is left
 holding the filter and smoother results for `y⁺`, not for `y`, so a caller that
 needs the smoothed mean of the real data should keep the `smoothed` copy this
-function makes rather than reading `ws` afterwards. Only the means are computed:
-`ws.Vs` is left holding whatever an earlier pass wrote and must not be read.
+function makes rather than reading `ws` afterwards. Only the means are computed, so
+`smoothed_states_cov(ws)` throws afterwards.
 
 # Arguments
 - `out`: destination, `m × n`
@@ -236,6 +246,7 @@ function simulation_smoother!(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
         rng::Random.AbstractRNG = Random.default_rng(),
         smoothed::Union{Nothing, AbstractMatrix} = nothing) where {T}
+    y = _nan_obs(y)
     m, p, n = sws.state_dim, sws.obs_dim, sws.n_times
     size(y) == (p, n) || throw(DimensionMismatch(
         "observations are $(size(y)) but the workspace expects ($p, $n)"))
@@ -244,8 +255,8 @@ function simulation_smoother!(
 
     # α̂: smoothed states of the real data.
     if smoothed === nothing
-        filter_and_smooth!(ws, y; crosscov = false, covariances = false)
-        copyto!(sws.α_hat, ws.αs)
+        kalman_filter_and_smooth!(ws, y; covariances = false)
+        copyto!(sws.α_hat, smoothed_states(ws))
     else
         size(smoothed) == (m, n) || throw(DimensionMismatch(
             "smoothed states are $(size(smoothed)) but the state path is ($m, $n)"))
@@ -262,23 +273,24 @@ function simulation_smoother!(
     _simulate_path!(sws, ws, rng, sws.obs_pattern)
 
     # α̂⁺: smoothed states of the synthetic data.
-    filter_and_smooth!(ws, sws.y_plus; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(ws, sws.y_plus; covariances = false)
+    α_hat_plus = smoothed_states(ws)
 
     for t in 1:n, i in 1:m
 
-        out[i, t] = sws.α_hat[i, t] - ws.αs[i, t] + sws.α_plus[i, t]
+        out[i, t] = sws.α_hat[i, t] - α_hat_plus[i, t] + sws.α_plus[i, t]
     end
 
     return out
 end
 
 """
-    simulation_smoother(ws::KalmanWorkspace, y; rng=Random.default_rng(), n_draws=1)
+    simulation_smoother(ws::KalmanWorkspace, y; rng=Random.default_rng()) -> Matrix
+    simulation_smoother(ws::KalmanWorkspace, y, n_draws::Integer; rng=Random.default_rng()) -> Array{T,3}
 
-Draw from `p(α₁:ₙ | y₁:ₙ)` and return the draws.
-
-With `n_draws == 1` returns an `m × n` matrix; otherwise an `m × n × n_draws`
-array. The smoothing pass over `y` is shared across draws.
+Draw from `p(α₁:ₙ | y₁:ₙ)`. Without `n_draws`, return one draw as an `m × n`
+matrix; with it, return `n_draws` draws as an `m × n × n_draws` array, sharing
+the smoothing pass over `y` across draws.
 
 `ws` must already carry the model parameters and initial conditions, and is left
 holding filter and smoother results for the last synthetic dataset.
@@ -286,30 +298,41 @@ holding filter and smoother results for the last synthetic dataset.
 # Example
 ```julia
 ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
-draws = simulation_smoother(ws, y; rng = MersenneTwister(1), n_draws = 100)
+draw = simulation_smoother(ws, y; rng = MersenneTwister(1))
+draws = simulation_smoother(ws, y, 100; rng = MersenneTwister(1))
 ```
 """
 function simulation_smoother(
         ws::KalmanWorkspace{T}, y::AbstractMatrix;
-        rng::Random.AbstractRNG = Random.default_rng(),
-        n_draws::Integer = 1) where {T}
+        rng::Random.AbstractRNG = Random.default_rng()) where {T}
+    y = _nan_obs(y)
+    sws = SimulationSmootherWorkspace(ws)
+    out = Matrix{T}(undef, ws.state_dim, ws.n_times)
+    return simulation_smoother!(out, sws, ws, y; rng)
+end
+
+function simulation_smoother(
+        ws::KalmanWorkspace{T}, y::AbstractMatrix, n_draws::Integer;
+        rng::Random.AbstractRNG = Random.default_rng()) where {T}
+    y = _nan_obs(y)
     n_draws >= 1 || throw(ArgumentError("n_draws must be at least 1, got $n_draws"))
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)
 
-    filter_and_smooth!(ws, y; crosscov = false, covariances = false)
-    α_hat = copy(ws.αs)
-
-    if n_draws == 1
-        out = Matrix{T}(undef, m, n)
-        return simulation_smoother!(out, sws, ws, y; rng = rng, smoothed = α_hat)
-    end
+    kalman_filter_and_smooth!(ws, y; covariances = false)
+    α_hat = copy(smoothed_states(ws))
 
     draws = Array{T, 3}(undef, m, n, n_draws)
     out = Matrix{T}(undef, m, n)
     for d in 1:n_draws
-        simulation_smoother!(out, sws, ws, y; rng = rng, smoothed = α_hat)
+        simulation_smoother!(out, sws, ws, y; rng, smoothed = α_hat)
         copyto!(view(draws, :, :, d), out)
     end
     return draws
+end
+
+# Throws the explanation in `SimulationSmootherWorkspace(::DiffuseKalmanWorkspace)`.
+function simulation_smoother(ws::DiffuseKalmanWorkspace, y::AbstractMatrix, n_draws...;
+        rng::Random.AbstractRNG = Random.default_rng())
+    SimulationSmootherWorkspace(ws)
 end

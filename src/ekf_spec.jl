@@ -14,14 +14,12 @@ description that is one of:
     object is reconstructed each evaluation from the constrained `θ`.
 
 Reuses `SSMParameter`, `SSMMatrixSpec`, and the matrix-input processing helpers
-from `builder.jl`. The transformation, codegen, and optimisation layers in
-later files dispatch on `EKFSpec` so the DSL surface (`build_transformation`,
-`transform_to_constrained`, `transform_to_unconstrained`,
-`build_initial_state`, `optimize_*`) is symmetric with the linear case.
+from `builder.jl`. `EKFSpec` and `SSMSpec` share the supertype
+`AbstractSSMSpec`, which carries parameter introspection and the
+transformations (`build_transformation`, `transform_to_constrained`,
+`transform_to_unconstrained`). The codegen and optimisation files add `EKFSpec`
+methods of `build_initial_state`, `ssm_loglik` and `optimize_ssm`.
 """
-
-using ..Siphon: AbstractEKFMeasurement, AbstractEKFJacobianMode, ADJacobian,
-                AnalyticJacobian, EKFParms
 
 # ============================================================================
 # MeasurementExpr
@@ -85,9 +83,9 @@ Specification of an Extended-Kalman-Filter state-space model. Mirrors
 - `jacobian_mode::AbstractEKFJacobianMode`.
 - `H, T, R, Q, P1` — `SSMMatrixSpec`s (placeholder dims for `MatrixExpr`s).
 - `a1::Vector{MatrixElement}` — initial-state mean.
-- `matrix_exprs::Dict{Symbol,Any}` — expression-based system matrices.
+- `matrix_exprs::Dict{Symbol,AbstractMatrixExpr}` — expression-based system matrices.
 """
-struct EKFSpec{ME, JM <: AbstractEKFJacobianMode}
+struct EKFSpec{ME, JM <: AbstractEKFJacobianMode} <: AbstractSSMSpec
     name::Symbol
     n_states::Int
     n_obs::Int
@@ -101,55 +99,8 @@ struct EKFSpec{ME, JM <: AbstractEKFJacobianMode}
     Q::SSMMatrixSpec
     a1::Vector{MatrixElement}
     P1::SSMMatrixSpec
-    matrix_exprs::Dict{Symbol, Any}
+    matrix_exprs::Dict{Symbol, AbstractMatrixExpr}
 end
 
-# ============================================================================
-# Introspection methods (mirror SSMSpec)
-# ============================================================================
-
-param_names(spec::EKFSpec) = [p.name for p in spec.params]
-n_params(spec::EKFSpec) = length(spec.params)
-initial_values(spec::EKFSpec) = [p.init for p in spec.params]
-function param_bounds(spec::EKFSpec)
-    lower = [p.lower for p in spec.params]
-    upper = [p.upper for p in spec.params]
-    (lower, upper)
-end
-function param_index(spec::EKFSpec, name::Symbol)
-    idx = findfirst(p -> p.name == name, spec.params)
-    idx === nothing && throw(ArgumentError("Unknown parameter: $name"))
-    idx
-end
-
-# Approximate diffuse only for now. Plan §5 question 4: exact diffuse for EKF
-# can be added later when the linear DiffuseKalmanWorkspace ideas are ported.
+# EKF models use approximate diffuse initialization only.
 uses_exact_diffuse(::EKFSpec) = false
-
-# ============================================================================
-# build_transformation / transform_* for EKFSpec
-# ============================================================================
-
-# Reuse `_param_to_transform` from codegen.jl. Its argument is a single
-# SSMParameter, so the same implementation works.
-function build_transformation(spec::EKFSpec)
-    transforms = [_param_to_transform(p) for p in spec.params]
-    names = Tuple(p.name for p in spec.params)
-    as(NamedTuple{names}(Tuple(transforms)))
-end
-
-function transform_to_constrained(spec::EKFSpec, θ_u::AbstractVector)
-    t = build_transformation(spec)
-    TransformVariables.transform_and_logjac(t, θ_u)
-end
-
-function transform_to_unconstrained(spec::EKFSpec, θ_nt::NamedTuple)
-    t = build_transformation(spec)
-    TransformVariables.inverse(t, θ_nt)
-end
-
-function transform_to_unconstrained(spec::EKFSpec, θ_c::AbstractVector)
-    names = Tuple(p.name for p in spec.params)
-    θ_nt = NamedTuple{names}(Tuple(θ_c))
-    transform_to_unconstrained(spec, θ_nt)
-end

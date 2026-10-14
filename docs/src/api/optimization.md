@@ -53,7 +53,7 @@ isconverged(model)          # Whether estimation converged
 niterations(model)          # Number of iterations (EM only)
 
 # Access system matrices at fitted parameters
-mats = system_matrices(model)  # All matrices as NamedTuple
+mats = system_matrices(model)  # All matrices as a KFParms
 mats.Z  # Observation matrix
 mats.H  # Observation covariance
 mats.T  # Transition matrix
@@ -102,21 +102,57 @@ ll = kalman_filter!(model, y)
 kalman_smoother!(model)
 ```
 
-```@docs
-Siphon.kalman_loglik(::Siphon.StateSpaceModel, ::AbstractMatrix)
-Siphon.kalman_filter!(::Siphon.StateSpaceModel, ::AbstractMatrix)
-Siphon.kalman_smoother!(::Siphon.StateSpaceModel)
-```
+The docstrings for all methods are under [`kalman_loglik`](@ref) and
+[`kalman_filter!`](@ref) / [`kalman_smoother!`](@ref).
 
 ## Model Accessors
 
-After fitting a `StateSpaceModel`, use these functions to access results:
+After fitting a `StateSpaceModel`, use these functions to access results. The same
+accessors work on filter results (`AbstractFilterResult`) and on in-place filter
+workspaces (`AbstractFilterWorkspace`).
+
+```@docs
+Siphon.AbstractStateSpaceModel
+Siphon.AbstractFilterResult
+Siphon.AbstractFilterWorkspace
+```
 
 ### Parameters
 
 ```@docs
 Siphon.parameters
 Siphon.loglikelihood
+Siphon.isconverged
+Siphon.niterations
+```
+
+### Statistical Model Interface
+
+Models are `StatsAPI.StatisticalModel`s. `fit!`, `loglikelihood`, `nobs`, `coef`,
+`vcov` and the other names below are the StatsAPI functions, the same ones
+StatsBase, GLM and Distributions export, so loading those packages next to Siphon
+causes no name clashes. `aic`, `aicc`, `bic` and `stderror` use the StatsAPI
+definitions built on `loglikelihood`, `dof`, `nobs` and `vcov`.
+
+```julia
+fit!(MLE(), model, y)
+coef(model)        # parameter vector, in the order of coefnames(model)
+stderror(model)    # standard errors from the observed information
+aic(model), bic(model)
+```
+
+`vcov` and `stderror` work after either `fit!(MLE(), …)` or `fit!(EM(), …)`; the
+model keeps a copy of the data it was fitted on. With StatsBase loaded,
+`coeftable(model)` prints estimates, standard errors, z statistics, p-values and
+confidence intervals.
+
+```@docs
+Siphon.coef(::Siphon.StateSpaceModel)
+Siphon.coefnames(::Siphon.StateSpaceModel)
+Siphon.vcov(::Siphon.StateSpaceModel)
+Siphon.dof(::Siphon.StateSpaceModel)
+Siphon.nobs(::Siphon.StateSpaceModel)
+Siphon.isfitted(::Siphon.AbstractStateSpaceModel)
 ```
 
 ### System Matrices
@@ -128,15 +164,23 @@ Siphon.obs_cov
 Siphon.transition_matrix
 Siphon.selection_matrix
 Siphon.state_cov
+Siphon.initial_state
+Siphon.initial_state_cov
 ```
 
 ### Filter and Smoother Results
 
 ```@docs
 Siphon.filtered_states
+Siphon.filtered_states_cov
 Siphon.predicted_states
+Siphon.predicted_states_cov
 Siphon.smoothed_states
+Siphon.smoothed_states_cov
 Siphon.prediction_errors
+Siphon.prediction_errors_cov
+Siphon.kalman_gains
+Siphon.crosslag_covs
 ```
 
 ## Direct Optimization
@@ -144,8 +188,8 @@ Siphon.prediction_errors
 For more control, use `optimize_ssm` directly:
 
 ```@docs
-Siphon.DSL.optimize_ssm
-Siphon.DSL.optimize_ssm_with_stderr
+Siphon.optimize_ssm
+Siphon.optimize_ssm_with_stderr
 ```
 
 ## Profile EM for DNS Models
@@ -153,8 +197,21 @@ Siphon.DSL.optimize_ssm_with_stderr
 For Dynamic Nelson-Siegel models with nonlinear λ parameter:
 
 ```@docs
-Siphon.DSL.profile_em_ssm
-Siphon.DSL.ProfileEMResult
+Siphon.profile_em_ssm
+Siphon.ProfileEMResult
+Siphon.EMResult
+```
+
+## Low-Level EM
+
+`fit!(EM(), model, y)` runs the EM algorithm on a `StateSpaceModel`. The
+functions below run it directly on a [`KalmanWorkspace`](@ref).
+
+```@docs
+Siphon.EMWorkspace
+Siphon.em_estimate!
+Siphon.compute_sufficient_stats!
+Siphon.set_em_masks!
 ```
 
 ## Initial State Conventions and MARSS Compatibility
@@ -212,23 +269,28 @@ For `tinitx = 1` (MARSS's other mode), `a1 = x0` and `P1 = V0` directly.
 ## Parameter Transformations
 
 ```@docs
-Siphon.DSL.build_transformation
-Siphon.DSL.transform_to_constrained
-Siphon.DSL.transform_to_unconstrained
+Siphon.build_transformation
+Siphon.transform_to_constrained
+Siphon.transform_to_unconstrained
 ```
 
 ## Log-Density Interface
 
 ```@docs
-Siphon.DSL.SSMLogDensity
-Siphon.DSL.logdensity
+Siphon.SSMLogDensity
+Siphon.logdensity(::Siphon.SSMLogDensity, ::AbstractVector)
 ```
 
 ## Prior Distributions
 
+With Distributions.jl loaded, any `Distributions.UnivariateDistribution` can
+be used in `ParameterPriors` alongside the built-in univariate priors.
+
 ```@docs
-Siphon.DSL.FlatPrior
-Siphon.DSL.NormalPrior
-Siphon.DSL.InverseGammaPrior
-Siphon.DSL.CompositePrior
+Siphon.AbstractPrior
+Siphon.FlatPrior
+Siphon.ParameterPriors
+Siphon.NormalPrior
+Siphon.InverseGammaPrior
+Siphon.CompositePrior
 ```

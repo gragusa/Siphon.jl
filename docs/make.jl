@@ -23,10 +23,13 @@ makedocs(
             "DSL & Templates" => "api/dsl.md",
             "Matrix Helpers" => "api/matrix_helpers.md",
             "Estimation & Bayesian" => "api/optimization.md",
+            "In-Place Workspaces" => "api/inplace.md",
+            "Dynamic Factor Models" => "api/dfm.md",
             "Extended Kalman Filter" => "api/ekf.md"
-        ]
+        ],
+        "Conversion Guide" => "conversion_guide.md"
     ],
-    warnonly = [:missing_docs, :cross_references]
+    checkdocs = :public
 )
 
 # Documenter can also automatically deploy documentation to gh-pages.

@@ -5,7 +5,7 @@ Validates against MARSS R package results.
 
 using Test
 using Siphon
-using Siphon.DSL: em_ssm_diagonal
+include("em_helpers.jl")
 using LinearAlgebra
 using CSV
 using DataFrames
@@ -40,7 +40,7 @@ using DataFrames
     Q_free = trues(2)
 
     # Run EM with parameter-based convergence (ll oscillations are expected at optimum)
-    result = em_ssm_diagonal(
+    result = em_matrices(
         Z,
         T,
         R,
@@ -54,8 +54,7 @@ using DataFrames
         H_free = H_free,
         Q_free = Q_free,
         maxiter = 500,
-        tol_ll = 1e-9,
-        tol_param = 1e-4,
+        tol = 1e-9,
         verbose = false
     )
 
@@ -66,22 +65,22 @@ using DataFrames
 
     println("\nJulia EM Results:")
     println("================")
-    println("R11 = $(result.H_diag[1]) (MARSS: 0.547054)")
-    println("R22 = $(result.H_diag[2]) (MARSS: 0.539332)")
-    println("R33 = $(result.H_diag[3]) (MARSS: 1.037559)")
-    println("Q11 = $(result.Q_diag[1]) (MARSS: 1.133779)")
-    println("Q22 = $(result.Q_diag[2]) (MARSS: 2.303474)")
+    println("R11 = $(diag(result.H)[1]) (MARSS: 0.547054)")
+    println("R22 = $(diag(result.H)[2]) (MARSS: 0.539332)")
+    println("R33 = $(diag(result.H)[3]) (MARSS: 1.037559)")
+    println("Q11 = $(diag(result.Q)[1]) (MARSS: 1.133779)")
+    println("Q22 = $(diag(result.Q)[2]) (MARSS: 2.303474)")
     println("loglik = $(result.loglik) (MARSS: -546.485583)")
     println("iterations = $(result.iterations)")
     println("converged = $(result.converged)")
 
     # Test against MARSS values (allow some tolerance)
     # Parameters should be very close (within 1%)
-    @test isapprox(result.H_diag[1], 0.547054, rtol = 0.01)
-    @test isapprox(result.H_diag[2], 0.539332, rtol = 0.01)
-    @test isapprox(result.H_diag[3], 1.037559, rtol = 0.01)
-    @test isapprox(result.Q_diag[1], 1.133779, rtol = 0.01)
-    @test isapprox(result.Q_diag[2], 2.303474, rtol = 0.01)
+    @test isapprox(diag(result.H)[1], 0.547054, rtol = 0.01)
+    @test isapprox(diag(result.H)[2], 0.539332, rtol = 0.01)
+    @test isapprox(diag(result.H)[3], 1.037559, rtol = 0.01)
+    @test isapprox(diag(result.Q)[1], 1.133779, rtol = 0.01)
+    @test isapprox(diag(result.Q)[2], 2.303474, rtol = 0.01)
     @test isapprox(result.loglik, -546.485583, rtol = 0.001)
 
     # Siphon.jl should achieve at least as good a log-likelihood as MARSS
@@ -107,7 +106,7 @@ end
     H_free = trues(3)
     Q_free = trues(2)
 
-    result = em_ssm_diagonal(
+    result = em_matrices(
         Z,
         T,
         R,
@@ -121,8 +120,7 @@ end
         H_free = H_free,
         Q_free = Q_free,
         maxiter = 100,
-        tol_ll = 1e-9,
-        tol_param = 1e-4,
+        tol = 1e-9,
         verbose = false
     )
 

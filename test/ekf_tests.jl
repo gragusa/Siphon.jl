@@ -1,12 +1,12 @@
 # EKF extension tests.
 #
 # Coverage (matches Plan §15):
-#   - Linear-equivalence: under a LinearMeasurement, ekf_loglik / ekf_filter /
-#     EKFWorkspace + ekf_filter! must match kalman_loglik / kalman_filter exactly.
+#   - Linear-equivalence: under a LinearMeasurement, kalman_loglik / kalman_filter /
+#     EKFWorkspace + kalman_filter! must match kalman_loglik / kalman_filter exactly.
 #   - Missing-data handling.
 #   - AD vs analytic Jacobian agreement on a smooth nonlinear measurement.
 #   - Workspace allocation smoke-test (zero in-loop allocations after warm-up).
-#   - Parameter-AD: ForwardDiff through ekf_loglik wrt system parameters.
+#   - Parameter-AD: ForwardDiff through kalman_loglik wrt system parameters.
 
 using Siphon
 using Test
@@ -18,14 +18,9 @@ using ForwardDiff
 # Helpers — measurement structs used across testsets
 # ---------------------------------------------------------------------------
 
-struct EKFTestLinearMeasurement{ZT <: AbstractMatrix} <: Siphon.AbstractEKFMeasurement
-    Z::ZT
-end
-
-Siphon.measurement(m::EKFTestLinearMeasurement, a, t) = m.Z * a
-Siphon.measurement!(out, m::EKFTestLinearMeasurement, a, t) = (mul!(out, m.Z, a); out)
-Siphon.measurement_jacobian(m::EKFTestLinearMeasurement, a, t) = m.Z
-Siphon.measurement_jacobian!(Z, m::EKFTestLinearMeasurement, a, t) = (copyto!(Z, m.Z); Z)
+# Defines only the functional measurement, not the in-place one EKFWorkspace needs
+struct EKFTestIncompleteMeasurement <: Siphon.AbstractEKFMeasurement end
+Siphon.measurement(::EKFTestIncompleteMeasurement, a, t) = a[1:1]
 
 # Stable softplus / logistic without LogExpFunctions (test-local)
 @inline _ekf_softplus(x::Real) = x >= 0 ? x + log1p(exp(-x)) : log1p(exp(x))
@@ -97,17 +92,28 @@ end
 # Tests
 # ---------------------------------------------------------------------------
 
+@testset "EKF — EKFWorkspace checks the measurement protocol" begin
+    M = [1.0;;]
+    @test_throws "requires `measurement!(out, model, a, t)`" EKFWorkspace(
+        EKFTestIncompleteMeasurement(), ADJacobian(), M, M, M, M, [0.0], [1.0;;], 10)
+    @test_throws "requires `measurement!(out, model, a, t)`" EKFWorkspace(
+        EKFTestIncompleteMeasurement(), AnalyticJacobian(), M, M, M, M, [0.0], [1.0;;], 10)
+    @test_throws "requires `measurement!(out, model, a, t)`" EKFWorkspace(
+        EKFTestIncompleteMeasurement(), FiniteDiffJacobian(), M, M, M, M, [0.0], [1.0;;], 10)
+    @test_throws MethodError Siphon.measurement!(zeros(1), EKFTestIncompleteMeasurement(), [0.0], 1)
+end
+
 @testset "EKF — linear-measurement equivalence (functional)" begin
     s = _ekf_test_linear_setup()
     kfp = KFParms(s.Z, s.H, s.Tmat, s.R, s.Q)
     ll_kf = kalman_loglik(kfp, s.y, s.a1, s.P1)
 
     for mode in (AnalyticJacobian(), ADJacobian())
-        ekf_p = EKFParms(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
-        @test ekf_loglik(ekf_p, s.y, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+        ekf_p = EKFParms(LinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
+        @test kalman_loglik(ekf_p, s.y, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
 
         res_kf = kalman_filter(kfp, s.y, s.a1, s.P1)
-        res_ekf = ekf_filter(ekf_p, s.y, s.a1, s.P1)
+        res_ekf = kalman_filter(ekf_p, s.y, s.a1, s.P1)
         @test res_ekf.loglik ≈ res_kf.loglik rtol = 1e-12
         @test maximum(abs, res_ekf.at .- res_kf.at) < 1e-12
         @test maximum(abs, res_ekf.att .- res_kf.att) < 1e-12
@@ -122,6 +128,18 @@ end
     end
 end
 
+@testset "EKF — forecast" begin
+    s = _ekf_test_linear_setup()
+    kfp = KFParms(s.Z, s.H, s.Tmat, s.R, s.Q)
+    fc_kf = forecast(kalman_filter(kfp, s.y, s.a1, s.P1), 3)
+    for mode in (AnalyticJacobian(), ADJacobian())
+        ekf_p = EKFParms(LinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
+        fc = forecast(kalman_filter(ekf_p, s.y, s.a1, s.P1), 3)
+        @test fc.yhat ≈ fc_kf.yhat && fc.F ≈ fc_kf.F && fc.a ≈ fc_kf.a && fc.P ≈ fc_kf.P
+        @test forecast_periods(fc) == forecast_periods(fc_kf)
+    end
+end
+
 @testset "EKF — linear-measurement equivalence (in-place)" begin
     s = _ekf_test_linear_setup()
     kfp = KFParms(s.Z, s.H, s.Tmat, s.R, s.Q)
@@ -129,9 +147,9 @@ end
     res_kf = kalman_filter(kfp, s.y, s.a1, s.P1)
 
     for mode in (AnalyticJacobian(), ADJacobian())
-        ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat,
+        ws = EKFWorkspace(LinearMeasurement(s.Z), mode, s.H, s.Tmat,
             s.R, s.Q, s.a1, s.P1, s.n)
-        ll_ws = ekf_filter!(ws, s.y)
+        ll_ws = kalman_filter!(ws, s.y)
         @test ll_ws ≈ ll_kf rtol = 1e-10
         @test maximum(abs, ws.at .- res_kf.at) < 1e-10
         @test maximum(abs, ws.att .- res_kf.att) < 1e-10
@@ -151,14 +169,14 @@ end
     ll_kf = kalman_loglik(kfp, y_miss, s.a1, s.P1)
 
     ekf_p_an = EKFParms(
-        EKFTestLinearMeasurement(s.Z), AnalyticJacobian(), s.H, s.Tmat, s.R, s.Q)
-    ekf_p_ad = EKFParms(EKFTestLinearMeasurement(s.Z), ADJacobian(), s.H, s.Tmat, s.R, s.Q)
-    @test ekf_loglik(ekf_p_an, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
-    @test ekf_loglik(ekf_p_ad, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+        LinearMeasurement(s.Z), AnalyticJacobian(), s.H, s.Tmat, s.R, s.Q)
+    ekf_p_ad = EKFParms(LinearMeasurement(s.Z), ADJacobian(), s.H, s.Tmat, s.R, s.Q)
+    @test kalman_loglik(ekf_p_an, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
+    @test kalman_loglik(ekf_p_ad, y_miss, s.a1, s.P1) ≈ ll_kf rtol = 1e-12
 
-    ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), AnalyticJacobian(),
+    ws = EKFWorkspace(LinearMeasurement(s.Z), AnalyticJacobian(),
         s.H, s.Tmat, s.R, s.Q, s.a1, s.P1, s.n)
-    ll_ws = ekf_filter!(ws, y_miss)
+    ll_ws = kalman_filter!(ws, y_miss)
     @test ll_ws ≈ ll_kf rtol = 1e-10
     @test ws.missing_mask[5]
     @test ws.missing_mask[17]
@@ -200,26 +218,26 @@ end
     ekf_an = EKFParms(soft, AnalyticJacobian(), H, Tmat, R, Q)
     ekf_ad = EKFParms(soft, ADJacobian(), H, Tmat, R, Q)
 
-    ll_an = ekf_loglik(ekf_an, y, β0, P0)
-    ll_ad = ekf_loglik(ekf_ad, y, β0, P0)
+    ll_an = kalman_loglik(ekf_an, y, β0, P0)
+    ll_ad = kalman_loglik(ekf_ad, y, β0, P0)
     @test ll_an ≈ ll_ad rtol = 1e-12
 
-    res_an = ekf_filter(ekf_an, y, β0, P0)
-    res_ad = ekf_filter(ekf_ad, y, β0, P0)
+    res_an = kalman_filter(ekf_an, y, β0, P0)
+    res_ad = kalman_filter(ekf_ad, y, β0, P0)
     @test maximum(abs, res_an.Zt .- res_ad.Zt) < 1e-12
     @test maximum(abs, res_an.att .- res_ad.att) < 1e-10
 
     # In-place agrees with functional, both modes
     ws_an = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
     ws_ad = EKFWorkspace(soft, ADJacobian(), H, Tmat, R, Q, β0, P0, n)
-    @test ekf_filter!(ws_an, y) ≈ ll_an rtol = 1e-10
-    @test ekf_filter!(ws_ad, y) ≈ ll_ad rtol = 1e-10
+    @test kalman_filter!(ws_an, y) ≈ ll_an rtol = 1e-10
+    @test kalman_filter!(ws_ad, y) ≈ ll_ad rtol = 1e-10
     @test maximum(abs, ws_an.att .- res_an.att) < 1e-10
     @test maximum(abs, ws_ad.att .- res_ad.att) < 1e-10
 end
 
 @testset "EKF — workspace allocation budget" begin
-    # In-place ekf_filter! should allocate effectively zero memory inside the
+    # In-place kalman_filter! should allocate effectively zero memory inside the
     # time loop after a warm-up call, in both AnalyticJacobian and ADJacobian
     # modes. We use a generously chunky panel and require a small fixed budget.
     Random.seed!(7)
@@ -249,13 +267,13 @@ end
     # below the n × p × m × sizeof(Float64) "fully allocating" baseline so any
     # genuine in-loop allocation regression is still caught.
     ws_an = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter!(ws_an, y)  # warm-up
-    allocs_an = @allocated ekf_filter!(ws_an, y)
+    kalman_filter!(ws_an, y)  # warm-up
+    allocs_an = @allocated kalman_filter!(ws_an, y)
     @test allocs_an < 256
 
     ws_ad = EKFWorkspace(soft, ADJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter!(ws_ad, y)  # warm-up
-    allocs_ad = @allocated ekf_filter!(ws_ad, y)
+    kalman_filter!(ws_ad, y)  # warm-up
+    allocs_ad = @allocated kalman_filter!(ws_ad, y)
     # 48 bytes/step would be ~9.6 KB at n=200. A "naive" all-allocating impl
     # would allocate at least p*sizeof(Vector{Dual{Tag,Float64,3}}) per step
     # ≈ 200 × (16 + 8 × (1 + 3) × 8) = ~57 KB or more. Bound at 16 KB.
@@ -270,9 +288,9 @@ end
     Siphon.kalman_smoother!(ws_kf; crosscov = true)
 
     for mode in (AnalyticJacobian(), ADJacobian())
-        ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), mode, s.H, s.Tmat,
+        ws = EKFWorkspace(LinearMeasurement(s.Z), mode, s.H, s.Tmat,
             s.R, s.Q, s.a1, s.P1, s.n)
-        ekf_filter_and_smooth!(ws, s.y; crosscov = true)
+        kalman_filter_and_smooth!(ws, s.y; crosscov = true)
         @test maximum(abs, ws.αs .- ws_kf.αs) < 1e-10
         @test maximum(abs, ws.Vs .- ws_kf.Vs) < 1e-10
         @test maximum(abs, ws.Pcross .- ws_kf.Pcross) < 1e-10
@@ -289,9 +307,9 @@ end
     Siphon.kalman_filter!(ws_kf, y_miss)
     Siphon.kalman_smoother!(ws_kf; crosscov = true)
 
-    ws = EKFWorkspace(EKFTestLinearMeasurement(s.Z), AnalyticJacobian(),
+    ws = EKFWorkspace(LinearMeasurement(s.Z), AnalyticJacobian(),
         s.H, s.Tmat, s.R, s.Q, s.a1, s.P1, s.n)
-    ekf_filter_and_smooth!(ws, y_miss; crosscov = true)
+    kalman_filter_and_smooth!(ws, y_miss; crosscov = true)
     @test maximum(abs, ws.αs .- ws_kf.αs) < 1e-10
     @test maximum(abs, ws.Vs .- ws_kf.Vs) < 1e-10
     @test maximum(abs, ws.Pcross .- ws_kf.Pcross) < 1e-10
@@ -325,7 +343,7 @@ end
     end
 
     ws = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter_and_smooth!(ws, y; crosscov = true)
+    kalman_filter_and_smooth!(ws, y; crosscov = true)
 
     # PSD smoothed covariances
     @test all(eigmin(Symmetric(ws.Vs[:, :, t])) > -1e-10 for t in 1:n)
@@ -343,6 +361,94 @@ end
     for i in 1:m
         @test ws.Vs[i, i, 50] <= ws.Ptt[i, i, 50] + 1e-10
     end
+end
+
+# A three-factor yield curve observed through a softplus floor, simulated.
+function _ekf_test_softplus_setup(; n = 80, seed = 11)
+    rng = Random.Xoshiro(seed)
+    λ = 0.069
+    mats = [3.0, 12.0, 36.0, 60.0, 120.0]
+    Λ = hcat(ones(length(mats)), (1 .- exp.(-λ .* mats)) ./ (λ .* mats),
+        (1 .- exp.(-λ .* mats)) ./ (λ .* mats) .- exp.(-λ .* mats))
+    soft = EKFTestSoftplusMeasurement(Λ, 0.0)
+    m, p = 3, length(mats)
+    Tmat = Matrix(Diagonal([0.97, 0.95, 0.90]))
+    H = (0.05^2) .* Matrix(I, p, p)
+    R = Matrix(1.0I, m, m)
+    Q = (0.10^2) .* Matrix(I, m, m)
+    a1 = [1.0, -1.0, 0.5]
+    P1 = 0.5 .* Matrix(I, m, m)
+    β = a1 .+ randn(rng, m)
+    y = zeros(p, n)
+    for t in 1:n
+        t > 1 && (β = Tmat * β + 0.1 .* randn(rng, m))
+        y[:, t] = Siphon.measurement(soft, β, t) + 0.05 .* randn(rng, p)
+    end
+    y[:, 9] .= NaN
+    return (; soft, H, Tmat, R, Q, a1, P1, y, n)
+end
+
+@testset "EKF — functional smoother" begin
+    s = _ekf_test_linear_setup()
+    y = copy(s.y)
+    y[:, 12] .= NaN
+    lin = kalman_smoother(KFParms(s.Z, s.H, s.Tmat, s.R, s.Q), y, s.a1, s.P1;
+        crosscov = true)
+    for mode in (ADJacobian(), AnalyticJacobian(), FiniteDiffJacobian())
+        p = EKFParms(LinearMeasurement(s.Z), mode, s.H, s.Tmat, s.R, s.Q)
+        sm = kalman_smoother(p, y, s.a1, s.P1; crosscov = true)
+        @test sm isa SmootherResult
+        tol = mode isa FiniteDiffJacobian ? 1e-7 : 1e-12
+        @test smoothed_states(sm) ≈ smoothed_states(lin) atol = tol
+        @test smoothed_states_cov(sm) ≈ smoothed_states_cov(lin) atol = tol
+        @test crosslag_covs(sm) ≈ crosslag_covs(lin) atol = tol
+    end
+
+    # On a nonlinear measurement, the functional and in-place smoothers agree.
+    q = _ekf_test_softplus_setup()
+    p = EKFParms(q.soft, AnalyticJacobian(), q.H, q.Tmat, q.R, q.Q)
+    filt, sm = kalman_filter_and_smooth(p, q.y, q.a1, q.P1; crosscov = true)
+    @test filt isa EKFFilterResult
+    @test kalman_smoother(filt; crosscov = true).αs == sm.αs
+    ws = EKFWorkspace(p, q.a1, q.P1, q.n)
+    kalman_filter_and_smooth!(ws, q.y; crosscov = true)
+    @test smoothed_states(sm) ≈ smoothed_states(ws) atol = 1e-10
+    @test smoothed_states_cov(sm) ≈ smoothed_states_cov(ws) atol = 1e-10
+    @test crosslag_covs(sm) ≈ crosslag_covs(ws) atol = 1e-10
+
+    # AD through the smoother matches the linear smoother.
+    f_ekf(θ) = sum(smoothed_states(kalman_smoother(
+        EKFParms(LinearMeasurement(s.Z), s.H, θ[1] .* s.Tmat, s.R, s.Q), y, s.a1, s.P1)))
+    f_lin(θ) = sum(smoothed_states(kalman_smoother(
+        KFParms(s.Z, s.H, θ[1] .* s.Tmat, s.R, s.Q), y, s.a1, s.P1)))
+    @test ForwardDiff.gradient(f_ekf, [1.0]) ≈ ForwardDiff.gradient(f_lin, [1.0])
+
+    # A filter that stopped on a non-positive-definite F cannot be smoothed.
+    bad = EKFParms(LinearMeasurement(s.Z), -s.H, s.Tmat, s.R, s.Q)
+    @test_throws "not positive definite" kalman_smoother(bad, y, s.a1, zeros(3, 3))
+end
+
+@testset "EKF — FiniteDiffJacobian in EKFWorkspace" begin
+    q = _ekf_test_softplus_setup()
+    ws_ad = EKFWorkspace(q.soft, ADJacobian(), q.H, q.Tmat, q.R, q.Q, q.a1, q.P1, q.n)
+    ws_fd = EKFWorkspace(q.soft, FiniteDiffJacobian(), q.H, q.Tmat, q.R, q.Q,
+        q.a1, q.P1, q.n)
+    ll_ad = kalman_filter_and_smooth!(ws_ad, q.y)
+    ll_fd = kalman_filter_and_smooth!(ws_fd, q.y)
+    @test ll_fd ≈ ll_ad rtol = 1e-8
+    # Central differences with a √eps step carry rounding error near 1e-8.
+    @test measurement_jacobians(ws_fd) ≈ measurement_jacobians(ws_ad) atol = 1e-6
+    @test smoothed_states(ws_fd) ≈ smoothed_states(ws_ad) atol = 1e-6
+
+    # The functional finite-difference path uses the same step: identical in the first
+    # period, where both evaluate at a1.
+    p_fd = EKFParms(q.soft, FiniteDiffJacobian(), q.H, q.Tmat, q.R, q.Q)
+    Zt_func = measurement_jacobians(kalman_filter(p_fd, q.y, q.a1, q.P1))
+    @test Zt_func[:, :, 1] == measurement_jacobians(ws_fd)[:, :, 1]
+    @test Zt_func ≈ measurement_jacobians(ws_fd) atol = 1e-6
+
+    kalman_filter!(ws_fd, q.y)
+    @test (@allocated kalman_filter!(ws_fd, q.y)) == 0
 end
 
 @testset "EKF — filter+smoother allocation budget" begin
@@ -365,12 +471,24 @@ end
     y = randn(p, n)
 
     ws = EKFWorkspace(soft, AnalyticJacobian(), H, Tmat, R, Q, β0, P0, n)
-    ekf_filter_and_smooth!(ws, y)
-    allocs = @allocated ekf_filter_and_smooth!(ws, y)
+    kalman_filter_and_smooth!(ws, y)
+    allocs = @allocated kalman_filter_and_smooth!(ws, y)
     # filter+smoother adds the smoother's lag-1 cross-cov path which uses
     # Cholesky on Pt_t — at the moment we accept a small fixed budget; the
-    # bulk of the allocation budget is the same as `ekf_filter!`.
+    # bulk of the allocation budget is the same as `kalman_filter!`.
     @test allocs < 256
+end
+
+@testset "custom_ekf checks the measurement length against H" begin
+    s = _ekf_test_linear_setup()
+    kw = (measurement = LinearMeasurement(s.Z), T = I, R = I,
+        Q = diag_free(s.m, :var_q), a1 = zeros(s.m), P1 = 10.0I)
+    spec = custom_ekf(; kw..., H = diag_free(s.p, :var_h))
+    @test spec isa AbstractSSMSpec
+    @test spec.n_obs == s.p
+    @test_throws "the measurement returns $(s.p) values but H is" custom_ekf(; kw...,
+        H = diag_free(s.p + 1, :var_h))
+    @test_throws "cannot size `I`" custom_ekf(; kw..., H = I)
 end
 
 @testset "EKF DSL — EKFSpec introspection and codegen" begin
@@ -378,11 +496,11 @@ end
 
     # Build an EKFSpec using diag_free (variance parameterisation).
     spec = custom_ekf(
-        measurement = EKFTestLinearMeasurement(s.Z),
+        measurement = LinearMeasurement(s.Z),
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
@@ -402,21 +520,21 @@ end
     @test diag(p_built.T) ≈ fill(0.5, s.m)
     @test diag(p_built.Q) ≈ fill(0.01, s.m)
 
-    # ekf_loglik(spec, θ, y) matches manual EKFParms construction
+    # ssm_loglik(spec, θ, y) matches manual EKFParms construction
     a1, P1 = Siphon.build_initial_state(spec, θ_nt)
-    ll_spec = Siphon.ekf_loglik(spec, θ_nt, s.y)
-    ll_manual = Siphon.ekf_loglik(p_built, s.y, a1, P1)
+    ll_spec = ssm_loglik(spec, θ_nt, s.y)
+    ll_manual = Siphon.kalman_loglik(p_built, s.y, a1, P1)
     @test ll_spec ≈ ll_manual rtol = 1e-12
 end
 
-@testset "EKF DSL — optimize_ekf vs optimize_ssm on a linear model" begin
+@testset "EKF DSL — optimize_ssm on EKFSpec vs SSMSpec for a linear model" begin
     s = _ekf_test_linear_setup()
 
     spec_ssm = custom_ssm(
         Z = s.Z,
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
@@ -424,16 +542,16 @@ end
     res_ssm = optimize_ssm(spec_ssm, s.y; show_trace = false)
 
     spec_ekf = custom_ekf(
-        measurement = EKFTestLinearMeasurement(s.Z),
+        measurement = LinearMeasurement(s.Z),
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
         T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
-        R = identity_mat(s.m),
+        R = Matrix(1.0I, s.m, s.m),
         Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
         a1 = zeros(s.m),
         P1 = 10.0 .* Matrix(I, s.m, s.m)
     )
-    res_ekf = optimize_ekf(spec_ekf, s.y; show_trace = false)
+    res_ekf = optimize_ssm(spec_ekf, s.y; show_trace = false)
 
     @test res_ssm.converged
     @test res_ekf.converged
@@ -441,6 +559,137 @@ end
     for k in keys(res_ssm.θ)
         @test getproperty(res_ssm.θ, k) ≈ getproperty(res_ekf.θ, k) rtol = 1e-4
     end
+end
+
+@testset "EKF DSL — SSMLogDensity with a prior matches the linear spec" begin
+    s = _ekf_test_linear_setup()
+    kw = (H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, s.m, s.m),
+        Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
+        a1 = zeros(s.m),
+        P1 = 10.0 .* Matrix(I, s.m, s.m))
+    spec_ssm = custom_ssm(; Z = s.Z, kw...)
+    spec_ekf = custom_ekf(; measurement = LinearMeasurement(s.Z),
+        jacobian_mode = AnalyticJacobian(), kw...)
+    prior = ParameterPriors(σh_1 = InverseGammaPrior(2.0, 0.1), ψ_1 = NormalPrior(0.5, 0.2))
+
+    ld_ssm = SSMLogDensity(spec_ssm, s.y; prior)
+    ld_ekf = SSMLogDensity(spec_ekf, s.y; prior)
+    @test ld_ekf isa SSMLogDensity
+    θ_u = transform_to_unconstrained(spec_ekf, initial_values(spec_ekf)) .+ 0.1
+    @test logdensity(ld_ekf, θ_u) ≈ logdensity(ld_ssm, θ_u) rtol = 1e-10
+    @test logdensity(ld_ekf, θ_u) - logdensity(SSMLogDensity(spec_ekf, s.y), θ_u) ≈
+          prior(transform_to_constrained(spec_ekf, θ_u)[1])
+    @test_throws "does not estimate" SSMLogDensity(spec_ekf, s.y;
+        prior = ParameterPriors(var_obs = NormalPrior(0.0, 1.0)))
+end
+
+@testset "EKF DSL — StateSpaceModel matches the linear spec" begin
+    s = _ekf_test_linear_setup()
+    kw = (H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = diag_free(s.m, :ψ; init = 0.5, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, s.m, s.m),
+        Q = diag_free(s.m, :σq; init = 0.01, lower = 1e-8),
+        a1 = zeros(s.m),
+        P1 = 10.0 .* Matrix(I, s.m, s.m))
+    spec_ssm = custom_ssm(; Z = s.Z, kw...)
+    spec_ekf = custom_ekf(; measurement = LinearMeasurement(s.Z), kw...)
+    n = size(s.y, 2)
+    y = copy(s.y)
+    y[:, 10:12] .= NaN
+
+    θ = (σh_1 = 0.1, σh_2 = 0.12, ψ_1 = 0.7, ψ_2 = 0.65, ψ_3 = 0.72,
+        σq_1 = 0.05, σq_2 = 0.04, σq_3 = 0.06)
+    ml = StateSpaceModel(spec_ssm, θ, n)
+    me = StateSpaceModel(spec_ekf, θ, n)
+    @test me isa StateSpaceModel{Float64, typeof(spec_ekf)}
+    @test kalman_filter!(me, y) ≈ kalman_filter!(ml, y) rtol = 1e-12
+    @test kalman_loglik(me, y) ≈ kalman_loglik(ml, y) rtol = 1e-12
+    @test filtered_states(me) ≈ filtered_states(ml) rtol = 1e-10
+    pe, pl = prediction_errors(me), prediction_errors(ml)
+    @test isnan.(pe) == isnan.(pl)
+    @test filter(!isnan, pe) ≈ filter(!isnan, pl) rtol = 1e-10
+    @test Siphon.observed_mask(me) == Siphon.observed_mask(ml)
+    kalman_smoother!(me)
+    @test smoothed_states(me) ≈ smoothed_states(ml) rtol = 1e-10
+    @test smoothed_states_cov(me) ≈ smoothed_states_cov(ml) rtol = 1e-10
+    fe, fl = forecast(me, 4), forecast(ml, 4)
+    @test forecast_observations(fe) ≈ forecast_observations(fl) rtol = 1e-10
+    @test forecast_observations_cov(fe) ≈ forecast_observations_cov(fl) rtol = 1e-10
+    @test system_matrices(me) isa EKFParms
+    @test obs_cov(me) ≈ obs_cov(ml)
+    @test transition_matrix(me) ≈ transition_matrix(ml)
+
+    fit_l = fit!(MLE(), StateSpaceModel(spec_ssm, n), s.y; static = :off)
+    fit_e = fit!(MLE(), StateSpaceModel(spec_ekf, n), s.y)
+    @test isconverged(fit_e)
+    @test loglikelihood(fit_e) ≈ loglikelihood(fit_l) rtol = 1e-6
+    @test coef(fit_e) ≈ coef(fit_l) rtol = 1e-3
+    @test coefnames(fit_e) == coefnames(fit_l)
+    @test dof(fit_e) == dof(fit_l)
+    @test vcov(fit_e) ≈ vcov(fit_l; static = :off) rtol = 1e-2
+    @test aic(fit_e) ≈ aic(fit_l) rtol = 1e-6
+end
+
+@testset "EKF DSL — StateSpaceModel on a nonlinear measurement" begin
+    Random.seed!(7)
+    m, p, n = 2, 3, 60
+    Λ = [1.0 0.0; 1.0 0.5; 1.0 1.0]
+    meas = EKFTestSoftplusMeasurement(Λ, 0.0)
+    spec = custom_ekf(; measurement = meas,
+        H = diag_free(p, :var_obs; init = 0.01, lower = 0.0),
+        T = diag_free(m, :ψ; init = 0.8, lower = -0.99, upper = 0.99),
+        R = Matrix(1.0I, m, m),
+        Q = diag_free(m, :var_q; init = 0.05, lower = 0.0),
+        a1 = zeros(m),
+        P1 = Matrix(1.0I, m, m))
+    α = zeros(m, n)
+    y = zeros(p, n)
+    for t in 1:n
+        α[:, t] = t == 1 ? 0.3 .* randn(m) : 0.9 .* α[:, t - 1] .+ 0.2 .* randn(m)
+        y[:, t] = Siphon.measurement(meas, α[:, t], t) .+ 0.1 .* randn(p)
+    end
+    θ = (var_obs_1 = 0.01, var_obs_2 = 0.01, var_obs_3 = 0.01,
+        ψ_1 = 0.9, ψ_2 = 0.9, var_q_1 = 0.04, var_q_2 = 0.04)
+    model = StateSpaceModel(spec, θ, n)
+    ll = kalman_filter!(model, y)
+
+    ss = Siphon.build_nonlinear_state_space(spec, θ, y)
+    filt, sm = kalman_filter_and_smooth(ss.p, y, ss.a1, ss.P1)
+    @test ll ≈ loglikelihood(filt)
+    @test filtered_states(model) ≈ filtered_states(filt)
+    @test smoothed_states(model) ≈ smoothed_states(sm)
+    @test smoothed_states_cov(model) ≈ smoothed_states_cov(sm)
+    fc = forecast(model, 3)
+    @test forecast_observations(fc) ≈ forecast_observations(forecast(filt, 3))
+    @test SmootherResult(model) isa SmootherResult
+
+    fitted = fit!(MLE(), StateSpaceModel(spec, n), y)
+    @test isfinite(loglikelihood(fitted))
+    @test loglikelihood(fitted) >= ll - 1e-8
+    @test all(isfinite, stderror(fitted))
+end
+
+@testset "EKF DSL — StateSpaceModel rejects linear-only operations" begin
+    s = _ekf_test_linear_setup()
+    spec = custom_ekf(; measurement = LinearMeasurement(s.Z),
+        H = diag_free(s.p, :σh; init = 0.04, lower = 1e-8),
+        T = 0.7 .* Matrix(1.0I, s.m, s.m), R = Matrix(1.0I, s.m, s.m),
+        Q = 0.05 .* Matrix(1.0I, s.m, s.m), a1 = zeros(s.m),
+        P1 = Matrix(1.0I, s.m, s.m))
+    n = size(s.y, 2)
+    @test_throws "does not support EKF models" fit!(EM(), StateSpaceModel(spec, n), s.y)
+    @test_throws "static = :on is not available for an EKF model" fit!(
+        MLE(), StateSpaceModel(spec, n), s.y; static = :on)
+    model = StateSpaceModel(spec, (σh_1 = 0.1, σh_2 = 0.1), n)
+    @test_throws "Filter not run. Call fit!(MLE(), model, y), or kalman_filter!" smoothed_states(model)
+    @test_throws "Model not fitted. Call fit!(MLE(), model, y) first." coef(
+        StateSpaceModel(spec, n))
+    kalman_filter!(model, s.y)
+    @test_throws "an EKF model has no observation matrix" obs_matrix(model)
+    @test_throws "EKF models are not supported" disturbance_smoother(model)
+    @test_throws "static must be :auto, :on or :off" kalman_loglik(model, s.y; static = :x)
 end
 
 @testset "EKF DSL — MeasurementExpr nonlinear MLE recovers parameters" begin
@@ -527,13 +776,13 @@ end
         jacobian_mode = AnalyticJacobian(),
         H = diag_free(p_obs, :σh2; init = σh_true^2, lower = 1e-10),
         T = diag_free(m_state, :ψ; init = 0.9, lower = -0.999, upper = 0.999),
-        R = identity_mat(m_state),
+        R = Matrix(1.0I, m_state, m_state),
         Q = diag_free(m_state, :σq2; init = 0.04, lower = 1e-10),
         a1 = zeros(m_state),
         P1 = 1.0 .* Matrix(I, m_state, m_state)
     )
 
-    res = optimize_ekf(spec, y; maxiters = 400)
+    res = optimize_ssm(spec, y; maxiters = 400)
     @test res.converged
 
     # Loose finite-sample tolerances — this is a smoke test that the optimizer
@@ -546,14 +795,14 @@ end
     @test res.θ.ψ_3 ≈ Ψ_true[3, 3] atol = 0.15
 end
 
-@testset "EKF — parameter AD through ekf_loglik" begin
+@testset "EKF — parameter AD through kalman_loglik" begin
     s = _ekf_test_linear_setup()
 
     function neg_ll(σ)
         H_local = σ^2 .* Matrix(I, s.p, s.p)
-        ekf_p = EKFParms(EKFTestLinearMeasurement(s.Z), ADJacobian(),
+        ekf_p = EKFParms(LinearMeasurement(s.Z), ADJacobian(),
             H_local, s.Tmat, s.R, s.Q)
-        return -ekf_loglik(ekf_p, s.y, s.a1, s.P1)
+        return -kalman_loglik(ekf_p, s.y, s.a1, s.P1)
     end
 
     σ0 = 0.5

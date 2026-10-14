@@ -7,58 +7,66 @@ Pure functional implementation that works with automatic differentiation.
 """
 
 """
-    kalman_smoother(Z, T, at, Pt, vt, Ft; compute_crosscov=false, missing_mask=nothing,
-                    observed_mask=nothing, Ptt=nothing)
+    SmootherResult{T<:Real}
 
-AD-compatible RTS smoother. Takes filter outputs and returns smoothed states.
+Output of the Kalman smoother: the smoothed state means and covariances, and the
+cross-lag covariances when they were requested.
 
-# Arguments
-- `Z`: Observation matrix (p × m)
-- `T`: Transition matrix (m × m)
-- `at`: Predicted states (m × n), where at[:, t] = E[αₜ | y₁:ₜ₋₁]
-- `Pt`: Predicted covariances (m × m × n)
-- `vt`: Innovations (p × n), where vt[:, t] = yₜ - Z * at[:, t]
-- `Ft`: Innovation covariances (p × p × n)
-- `compute_crosscov`: If true, compute lag-one covariances P_{t+1,t|n} (default: false)
-- `missing_mask`: Optional BitVector indicating missing observations (length n).
-  If not provided, inferred from NaN values in vt.
-- `Ptt`: Optional filtered covariances (m × m × n). Required for cross-cov with missing data.
-  If not provided and compute_crosscov=true, computed from predicted covariances.
+# Fields
+- `αs`: Smoothed states E[αₜ | y₁:ₙ] (m × n)
+- `Vs`: Smoothed covariances Var[αₜ | y₁:ₙ] (m × m × n)
+- `Pcross`: Cross-lag covariances Cov[αₜ₊₁, αₜ | y₁:ₙ] (m × m × (n−1)), or `nothing`
+  when the smoother ran with `crosscov = false`
 
-# Returns
-Named tuple with:
-- `alpha`: Smoothed states (m × n), where alpha[:, t] = E[αₜ | y₁:ₙ]
-- `V`: Smoothed covariances (m × m × n)
-- `P_crosslag`: Cross-lag covariances P_{t+1,t|n} (m × m × (n-1)), only if compute_crosscov=true
+# Accessors
+`smoothed_states`, `smoothed_states_cov` and `crosslag_covs`.
 
-# Missing Data Handling
-When an observation is missing (indicated by `missing_mask[t] == true` or NaN in `vt[:, t]`),
-the smoother uses a simplified recursion that skips the measurement update:
-    r_{t-1} = T' * r_t
-    N_{t-1} = T' * N_t * T
-This is consistent with treating missing observations as having infinite variance.
-
-# Cross-lag covariance formula
-Using Shumway & Stoffer (2017), the lag-one covariance smoother gives:
-    J_t = P_{t|t} * T' * inv(P_{t+1|t})
-    P_{t+1,t|n} = V_{t+1} * J_t'
-where P_{t|t} is the filtered (updated) covariance.
-
-For missing observations at time t, P_{t|t} = P_{t|t-1} (no update).
-
-# Notes
-This follows Durbin & Koopman (2012), Chapter 4, equations (4.32)-(4.44).
-Uses predicted states (at = a_{t|t-1}) not filtered states for the recursion.
-This is used by the EM algorithm which requires E[αₜ αₜ₋₁' | y₁:ₙ] for M-step updates.
+# Construction
+- `kalman_smoother(result)`: smooth the output of `kalman_filter`
+- `kalman_smoother(p, y, a1, P1)`: filter and smooth in one call
+- `kalman_filter_and_smooth(p, y, a1, P1)`: both results, as a `(filter, smoother)` tuple
+- `SmootherResult(ws)`: copy the smoother output of a workspace after
+  `kalman_smoother!(ws)`, so later runs on `ws` don't change it
+- `SmootherResult(model)`: copy the smoothed states of a fitted `StateSpaceModel`
 """
-function kalman_smoother(
-        Z::AbstractMatrix,
+struct SmootherResult{T <: Real}
+    αs::Matrix{T}
+    Vs::Array{T, 3}
+    Pcross::Union{Nothing, Array{T, 3}}
+end
+
+smoothed_states(r::SmootherResult) = r.αs
+smoothed_states_cov(r::SmootherResult) = r.Vs
+
+function crosslag_covs(r::SmootherResult)
+    r.Pcross === nothing && throw(ArgumentError(
+        "crosslag_covs: the smoother ran without cross-lag covariances. " *
+        "Call kalman_smoother(result; crosscov = true)."))
+    return r.Pcross
+end
+
+# A scalar system's matrices as 1 × 1 matrices.
+_as_matrix(x::Real) = fill(x, 1, 1)
+_as_matrix(x::AbstractMatrix) = x
+
+# The RTS recursion on the arrays of a filter output. Durbin & Koopman (2012), §4.4,
+# eqs. (4.32)-(4.44), on the predicted states `at = a_{t|t-1}`. Where a period was only
+# partly observed, the filter stored the reduced-system v_t and F_t in the leading
+# positions, so the recursion uses the matching rows of Z. With `crosscov = true` it
+# also returns the lag-one covariances (Durbin & Koopman 2012, Section 4.7)
+#     P_{t+1,t|n} = (I - P_{t+1} N_t) T P_{t|t},
+# which EM needs for E[αₜ αₜ₋₁' | y₁:ₙ]. No matrix is inverted, so a singular
+# predicted covariance (H = 0, ARMA and companion states) is fine. `Ptt` supplies P_{t|t}; without it P_{t|t} is
+# rebuilt from the predicted covariances. `Z` is either one p × m matrix or, for the
+# linearization of an extended Kalman filter, a p × m × n array with one Zₜ per period.
+function _kalman_smoother(
+        Z::AbstractArray,
         T::AbstractMatrix,
         at::AbstractMatrix,
         Pt::AbstractArray,
         vt::AbstractMatrix,
         Ft::AbstractArray;
-        compute_crosscov::Bool = false,
+        crosscov::Bool = false,
         missing_mask::Union{Nothing, BitVector} = nothing,
         observed_mask::Union{Nothing, AbstractMatrix{Bool}, BitMatrix} = nothing,
         Ptt::Union{Nothing, AbstractArray} = nothing
@@ -76,82 +84,22 @@ function kalman_smoother(
     # Initialize smoothing recursion: r_n = 0, N_n = 0
     r_vec = zeros(ET, state_dim)
     N_mat = zeros(ET, state_dim, state_dim)
+    # N_store[:, :, t] = N_{t-1}, the N in V_t = P_t - P_t N_{t-1} P_t
+    N_store = crosscov ? Array{ET}(undef, state_dim, state_dim, n_obs) : nothing
 
     # Backward recursion: t = n, n-1, ..., 1
-    @inbounds for t in n_obs:-1:1
-        # Get predicted state and covariance at time t
-        a_t = view(at, :, t)
-        P_t = view(Pt, :, :, t)
-
-        # Check for missing observation
-        is_missing = if missing_mask !== nothing
-            missing_mask[t]
-        else
-            any(isnan, view(vt, :, t))
-        end
-
-        if is_missing
-            # Missing observation: use simplified recursion
-            # r_{t-1} = T' * r_t
-            r_new = T' * r_vec
-
-            # N_{t-1} = T' * N_t * T
-            N_new = T' * N_mat * T
-
-            # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
-            alpha_smooth[:, t] = a_t + P_t * r_new
-
-            # Smoothed covariance: V_t = P_t - P_t * N_{t-1} * P_t
-            V_smooth[:, :, t] = P_t - P_t * N_new * P_t
-
-            # Update for next iteration
-            r_vec = r_new
-            N_mat = N_new
-        else
-            # Valid observation. Where the period was only partly observed, the
-            # filter stored the reduced-system v_t and F_t in the leading
-            # positions, so the recursion uses the matching rows of Z.
-            pt = _period_obs_dim(observed_mask, vt, t)
-            rows = _period_obs_rows(observed_mask, vt, t)
-            Zr = _select_rows(Z, rows)
-            v_t = view(vt, 1:pt, t)
-            F_t = view(Ft, 1:pt, 1:pt, t)
-
-            # F_t^{-1}
-            F_inv = inv(F_t)
-
-            # Kalman gain: K_t = T * P_t * Zr' * F_t^{-1}
-            K_t = T * P_t * Zr' * F_inv
-
-            # L_t = T - K_t * Zr
-            L_t = T - K_t * Zr
-
-            # Compute r_{t-1} = Zr' * F_t^{-1} * v_t + L_t' * r_t
-            r_new = Zr' * F_inv * v_t + L_t' * r_vec
-
-            # Compute N_{t-1} = Zr' * F_t^{-1} * Zr + L_t' * N_t * L_t
-            N_new = Zr' * F_inv * Zr + L_t' * N_mat * L_t
-
-            # Smoothed state: α̂_t = a_t + P_t * r_{t-1}
-            alpha_smooth[:, t] = a_t + P_t * r_new
-
-            # Smoothed covariance: V_t = P_t - P_t * N_{t-1} * P_t
-            V_smooth[:, :, t] = P_t - P_t * N_new * P_t
-
-            # Update for next iteration
-            r_vec = r_new
-            N_mat = N_new
-        end
+    for t in n_obs:-1:1
+        (α_t, V_t, r_vec, N_mat) = _rts_step(_period_Z(Z, t), T, at, Pt, vt, Ft, t,
+            r_vec, N_mat;
+            missing_mask, observed_mask)
+        alpha_smooth[:, t] = α_t
+        V_smooth[:, :, t] = V_t
+        crosscov && (N_store[:, :, t] = N_mat)
     end
 
-    # Compute cross-lag covariances if requested
-    # Using Shumway & Stoffer (2017) formula:
-    #   J_t = P_{t|t} * T' * inv(P_{t+1|t})
-    #   P_{t+1,t|n} = V_{t+1} * J_t'
-    #
-    # where P_{t|t} is the filtered (updated) covariance.
-    # For missing observations, P_{t|t} = P_{t|t-1}.
-    if compute_crosscov
+    # Cross-lag covariances P_{t+1,t|n} = (I - P_{t+1|t} N_t) T P_{t|t}, where
+    # P_{t|t} is the filtered covariance (P_{t|t-1} for a missing period).
+    if crosscov
         P_crosslag = Array{ET}(undef, state_dim, state_dim, n_obs - 1)
 
         @inbounds for t in 1:(n_obs - 1)
@@ -177,56 +125,95 @@ function kalman_smoother(
             else
                 # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Zr' * inv(F_t) * Zr * P_{t|t-1}
                 pt = _period_obs_dim(observed_mask, vt, t)
-                Zr = _select_rows(Z, _period_obs_rows(observed_mask, vt, t))
+                Zr = _select_rows(_period_Z(Z, t), _period_obs_rows(observed_mask, vt, t))
                 F_t = view(Ft, 1:pt, 1:pt, t)
                 F_inv = inv(F_t)
                 P_upd_t = P_pred_t - P_pred_t * Zr' * F_inv * Zr * P_pred_t
             end
 
-            # J_t = P_{t|t} * T' * inv(P_{t+1|t}), regularized for numerical stability
-            eps_reg = ET(1e-10) * max(one(ET), tr(P_pred_tp1) / state_dim)
-            J_t = P_upd_t * T' * inv(Symmetric(Matrix(P_pred_tp1) + eps_reg * I))
-
-            # V_{t+1} is the smoothed covariance at t+1
-            V_tp1 = view(V_smooth, :, :, (t + 1))
-
-            # P_{t+1,t|n} = V_{t+1} * J_t'
-            P_crosslag[:, :, t] = V_tp1 * J_t'
+            TPtt = T * P_upd_t
+            P_crosslag[:, :, t] = TPtt - P_pred_tp1 * (view(N_store, :, :, t + 1) * TPtt)
         end
 
-        return (alpha = alpha_smooth, V = V_smooth, P_crosslag = P_crosslag)
+        return SmootherResult(alpha_smooth, V_smooth, P_crosslag)
     else
-        return (alpha = alpha_smooth, V = V_smooth)
+        return SmootherResult(alpha_smooth, V_smooth, nothing)
     end
 end
 
+_period_Z(Z::AbstractMatrix, t) = Z
+_period_Z(Z::AbstractArray{<:Any, 3}, t) = view(Z, :, :, t)
+
+# One period of the backward recursion of `_kalman_smoother`: from `r = r_t` and
+# `N = N_t` it returns the smoothed mean and covariance of period `t` with
+# `r_{t-1}` and `N_{t-1}`.
+function _rts_step(Z, T, at, Pt, vt, Ft, t, r_vec, N_mat; missing_mask, observed_mask)
+    a_t = view(at, :, t)
+    P_t = view(Pt, :, :, t)
+
+    is_missing = if missing_mask !== nothing
+        missing_mask[t]
+    else
+        any(isnan, view(vt, :, t))
+    end
+
+    if is_missing
+        # r_{t-1} = T' r_t, N_{t-1} = T' N_t T
+        r_new = T' * r_vec
+        N_new = T' * N_mat * T
+    else
+        # Where the period was only partly observed, the filter stored the
+        # reduced-system v_t and F_t in the leading positions, so the recursion
+        # uses the matching rows of Z.
+        pt = _period_obs_dim(observed_mask, vt, t)
+        rows = _period_obs_rows(observed_mask, vt, t)
+        Zr = _select_rows(Z, rows)
+        v_t = view(vt, 1:pt, t)
+        F_t = view(Ft, 1:pt, 1:pt, t)
+
+        F_inv = inv(F_t)
+        # K_t = T P_t Z_t' F_t⁻¹, L_t = T - K_t Z_t
+        K_t = T * P_t * Zr' * F_inv
+        L_t = T - K_t * Zr
+
+        # r_{t-1} = Z_t' F_t⁻¹ v_t + L_t' r_t, N_{t-1} = Z_t' F_t⁻¹ Z_t + L_t' N_t L_t
+        r_new = Zr' * F_inv * v_t + L_t' * r_vec
+        N_new = Zr' * F_inv * Zr + L_t' * N_mat * L_t
+    end
+
+    # α̂_t = a_t + P_t r_{t-1}, V_t = P_t - P_t N_{t-1} P_t
+    return (a_t + P_t * r_new, P_t - P_t * N_new * P_t, r_new, N_new)
+end
+
 """
-    kalman_smoother(result::KalmanFilterResult, Z, T; compute_crosscov=false)
+    kalman_smoother(result::KalmanFilterResult; crosscov=false) -> SmootherResult
 
-Run RTS smoother using filter result. Convenience method.
+Run the RTS smoother on the output of [`kalman_filter`](@ref). The system matrices,
+missing-data masks and filtered covariances come from `result`.
 
-Uses `missing_mask` from the filter result for proper handling of missing observations.
+With `crosscov = true` the result also holds the cross-lag covariances
+Cov[αₜ₊₁, αₜ | y₁:ₙ], which EM needs.
 
-# Returns
-Named tuple with:
-- `alpha`: Smoothed states (m × n)
-- `V`: Smoothed covariances (m × m × n)
-- `P_crosslag`: Cross-lag covariances (only if compute_crosscov=true)
+Throws an `ArgumentError` if the filter stopped on an innovation covariance that was not
+positive definite.
+
+# Example
+```julia
+filt = kalman_filter(p, y, a1, P1)
+sm = kalman_smoother(filt)
+smoothed_states(sm)
+```
 """
-function kalman_smoother(
-        result::KalmanFilterResult,
-        Z::AbstractMatrix,
-        T::AbstractMatrix;
-        compute_crosscov::Bool = false
-)
-    return kalman_smoother(
-        Z,
-        T,
+function kalman_smoother(result::KalmanFilterResult; crosscov::Bool = false)
+    _require_output(result, :kalman_smoother)
+    return _kalman_smoother(
+        _as_matrix(result.p.Z),
+        _as_matrix(result.p.T),
         result.at,
         result.Pt,
         result.vt,
         result.Ft;
-        compute_crosscov = compute_crosscov,
+        crosscov = crosscov,
         missing_mask = result.missing_mask,
         observed_mask = result.observed_mask,
         Ptt = result.Ptt
@@ -234,183 +221,38 @@ function kalman_smoother(
 end
 
 """
-    kalman_smoother(p::KFParms, y, a1, P1; compute_crosscov=false) -> NamedTuple
+    kalman_smoother(p::KFParms, y, a1, P1; crosscov=false) -> SmootherResult
 
-High-level Kalman smoother that runs filter and smoother in one call.
-
-# Arguments
-- `p::KFParms`: State-space model parameters (Z, H, T, R, Q)
-- `y`: Observations (p × n matrix)
-- `a1`: Initial state mean (m-vector)
-- `P1`: Initial state covariance (m × m matrix)
-- `compute_crosscov`: If true, compute lag-one covariances (default: false)
-
-# Returns
-Named tuple with:
-- `α`: Smoothed states (m × n), where α[:, t] = E[αₜ | y₁:ₙ]
-- `V`: Smoothed state covariances (m × m × n)
-- `P_crosslag`: Cross-lag covariances (only if compute_crosscov=true)
+Run [`kalman_filter`](@ref) and then the smoother on its output. Same as
+`kalman_smoother(kalman_filter(p, y, a1, P1); crosscov)`.
 
 # Example
 ```julia
 p = KFParms(Z, H, T, R, Q)
-result = kalman_smoother(p, y, a1, P1)
-smoothed_states = result.α
+sm = kalman_smoother(p, y, a1, P1)
+smoothed_states(sm)
 ```
 """
-function kalman_smoother(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix;
-        compute_crosscov::Bool = false
-)
-    # Run filter first
-    filt = kalman_filter(p, y, a1, P1)
-
-    # Run smoother using predicted states (at, Pt)
-    result = kalman_smoother(
-        p.Z,
-        p.T,
-        filt.at,
-        filt.Pt,
-        filt.vt,
-        filt.Ft;
-        compute_crosscov = compute_crosscov,
-        missing_mask = filt.missing_mask,
-        observed_mask = filt.observed_mask,
-        Ptt = filt.Ptt
-    )
-
-    # Return results with α alias for backwards compatibility
-    if compute_crosscov
-        return (α = result.alpha, V = result.V, P_crosslag = result.P_crosslag)
-    else
-        return (α = result.alpha, V = result.V)
-    end
+function kalman_smoother(p::KFParms, y, a1, P1; crosscov::Bool = false)
+    return kalman_smoother(kalman_filter(p, y, a1, P1); crosscov = crosscov)
 end
 
 """
-    kalman_filter_and_smooth(p::KFParms, y, a1, P1)
+    kalman_filter_and_smooth(p::KFParms, y, a1, P1; crosscov=false)
+        -> (KalmanFilterResult, SmootherResult)
 
-Combined filter and smoother for state-space models.
+Run the filter and the smoother, and return both results. AD-compatible.
 
-Returns filtered states, smoothed states, and log-likelihood.
-AD-compatible.
+The tuple can be destructured, or passed to `plot` to compare filtered and smoothed
+states.
 
-# Arguments
-- `p::KFParms`: State-space model parameters (Z, H, T, R, Q)
-- `y`: Observations (p × n matrix)
-- `a1`: Initial state mean (m-vector)
-- `P1`: Initial state covariance (m × m matrix)
-
-# Returns
-Named tuple with:
-- `loglik`: Log-likelihood
-- `a_filtered`: Filtered states (m × n) - same as att from filter result
-- `P_filtered`: Filtered covariances (m × m × n) - same as Ptt from filter result
-- `alpha_smooth`: Smoothed states (m × n)
-- `V_smooth`: Smoothed covariances (m × m × n)
+# Example
+```julia
+filt, sm = kalman_filter_and_smooth(p, y, a1, P1)
+loglikelihood(filt), smoothed_states(sm)
+```
 """
-function kalman_filter_and_smooth(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1::AbstractVector,
-        P1::AbstractMatrix
-)
-    # Run filter
+function kalman_filter_and_smooth(p::KFParms, y, a1, P1; crosscov::Bool = false)
     filt = kalman_filter(p, y, a1, P1)
-
-    # Run smoother using predicted states, passing missing_mask
-    result = kalman_smoother(
-        p.Z,
-        p.T,
-        filt.at,
-        filt.Pt,
-        filt.vt,
-        filt.Ft;
-        missing_mask = filt.missing_mask,
-        observed_mask = filt.observed_mask
-    )
-
-    return (
-        loglik = filt.loglik,
-        a_filtered = filt.att,
-        P_filtered = filt.Ptt,
-        alpha_smooth = result.alpha,
-        V_smooth = result.V
-    )
-end
-
-"""
-    kalman_smoother_scalar(Z, T, at, Pt, vt, Ft; missing_mask=nothing)
-
-Scalar version of RTS smoother for univariate state-space models.
-
-Handles missing observations (NaN in vt or indicated by missing_mask).
-"""
-function kalman_smoother_scalar(
-        Z::Real,
-        T::Real,
-        at::AbstractVector,
-        Pt::AbstractVector,
-        vt::AbstractVector,
-        Ft::AbstractVector;
-        missing_mask::Union{Nothing, BitVector} = nothing
-)
-    n_obs = length(vt)
-    ET = promote_type(typeof(Z), typeof(T), eltype(at), eltype(Pt), eltype(vt), eltype(Ft))
-
-    alpha_smooth = Vector{ET}(undef, n_obs)
-    V_smooth = Vector{ET}(undef, n_obs)
-
-    # Initialize: r_n = 0, N_n = 0
-    r = zero(ET)
-    N = zero(ET)
-
-    @inbounds for t in n_obs:-1:1
-        a_t = at[t]
-        P_t = Pt[t]
-        v_t = vt[t]
-
-        # Check for missing observation
-        is_missing = if missing_mask !== nothing
-            missing_mask[t]
-        else
-            isnan(v_t)
-        end
-
-        if is_missing
-            # Missing observation: simplified recursion
-            r_new = T * r
-            N_new = T * N * T
-
-            # Smoothed estimates
-            alpha_smooth[t] = a_t + P_t * r_new
-            V_smooth[t] = P_t - P_t * N_new * P_t
-
-            r = r_new
-            N = N_new
-        else
-            # Valid observation
-            F_inv = one(ET) / Ft[t]
-
-            # Kalman gain and L
-            K_t = T * P_t * Z * F_inv
-            L_t = T - K_t * Z
-
-            # Recursion
-            r_new = Z * F_inv * v_t + L_t * r
-            N_new = Z * F_inv * Z + L_t * N * L_t
-
-            # Smoothed estimates
-            alpha_smooth[t] = a_t + P_t * r_new
-            V_smooth[t] = P_t - P_t * N_new * P_t
-
-            r = r_new
-            N = N_new
-        end
-    end
-
-    return alpha_smooth, V_smooth
+    return filt, kalman_smoother(filt; crosscov = crosscov)
 end

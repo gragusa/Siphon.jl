@@ -6,42 +6,6 @@ Useful for models like Dynamic Nelson-Siegel where matrix entries are
 complex functions of parameters and external data.
 """
 
-export ParamExpr, MatrixExpr, build_dns_loadings
-
-"""
-    ParamExpr(params, data, expr)
-
-A matrix element that is a function of parameters and external data.
-
-# Arguments
-- `params`: Symbol or tuple of Symbols for parameter names
-- `data`: NamedTuple of external data used in the expression
-- `expr`: Function `(param_values..., data...) -> scalar`
-
-# Example: Nelson-Siegel loading
-```julia
-τ = 30  # maturity in months
-# Loading: (1 - exp(-τ*λ)) / (τ*λ)
-elem = ParamExpr(:λ, (τ=τ,), (λ, τ) -> (1 - exp(-τ*λ)) / (τ*λ))
-```
-"""
-struct ParamExpr
-    params::Tuple{Vararg{Symbol}}
-    data::NamedTuple
-    expr::Function
-end
-
-# Convenience constructors
-ParamExpr(param::Symbol, data::NamedTuple, expr::Function) = ParamExpr((param,), data, expr)
-
-function ParamExpr(params::Tuple{Vararg{Symbol}}, data::Real, expr::Function)
-    ParamExpr(params, (val = data,), (args...) -> expr(args[1:length(params)]..., data))
-end
-
-function ParamExpr(param::Symbol, data::Real, expr::Function)
-    ParamExpr((param,), (val = data,), (p, v) -> expr(p, data))
-end
-
 """
     MatrixExpr(params, data, builder)
 
@@ -76,7 +40,7 @@ Z = MatrixExpr(
 )
 ```
 """
-struct MatrixExpr
+struct MatrixExpr <: AbstractMatrixExpr
     params::Vector{SSMParameter{Float64}}
     data::NamedTuple
     builder::Function
@@ -141,10 +105,10 @@ spec = custom_ssm(
     T = [FreeParam(:φ_L, init=0.99, lower=0.0, upper=0.9999) 0.0 0.0;
          0.0 FreeParam(:φ_S, init=0.99, lower=0.0, upper=0.9999) 0.0;
          0.0 0.0 FreeParam(:φ_C, init=0.99, lower=0.0, upper=0.9999)],
-    R = identity_mat(3),
+    R = I,
     Q = diag_free([:var_L, :var_S, :var_C], init=0.01),
     a1 = [0.0, 0.0, 0.0],
-    P1 = 1e4 * identity_mat(3)
+    P1 = 1e4I
 )
 ```
 """
@@ -159,7 +123,7 @@ function build_dns_loadings(
     function builder(θ, data)
         λ = θ[:λ]
         τ = data.maturities
-        Z = ones(Float64, length(τ), 3)
+        Z = ones(promote_type(typeof(λ), Float64), length(τ), 3)
         for i in eachindex(τ)
             Z[i, 2] = dns_loading1(λ, τ[i])
             Z[i, 3] = dns_loading2(λ, τ[i])
@@ -193,7 +157,7 @@ function build_svensson_loadings(
     function builder(θ, data)
         λ1, λ2 = θ[:λ1], θ[:λ2]
         τ = data.maturities
-        Z = ones(Float64, length(τ), 4)
+        Z = ones(promote_type(typeof(λ1), typeof(λ2), Float64), length(τ), 4)
         for i in eachindex(τ)
             Z[i, 2] = dns_loading1(λ1, τ[i])
             Z[i, 3] = dns_loading2(λ1, τ[i])

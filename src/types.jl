@@ -22,124 +22,87 @@ struct KFParms{Zt, Ht, Tt, Rt, Qt}
     T::Tt
     R::Rt
     Q::Qt
+    function KFParms{Zt, Ht, Tt, Rt, Qt}(Z, H, T, R, Q) where {Zt, Ht, Tt, Rt, Qt}
+        _check_system_dims("KFParms", Z, H, T, R, Q)
+        return new{Zt, Ht, Tt, Rt, Qt}(Z, H, T, R, Q)
+    end
 end
 
-# Size utilities
-numstates(T::AbstractMatrix) = size(T, 1)
-numstates(T::Real) = 1
+function KFParms(Z, H, T, R, Q)
+    KFParms{typeof(Z), typeof(H), typeof(T), typeof(R), typeof(Q)}(
+        Z, H, T, R, Q)
+end
 
-nummeasur(Z::AbstractMatrix) = size(Z, 1)
-nummeasur(Z::Real) = 1
+# Throw a DimensionMismatch naming `caller` unless `size(A) == dims`.
+function _check_size(caller, name, A, dims::Tuple)
+    size(A) == dims && return nothing
+    throw(DimensionMismatch("$caller: $name must be $(join(dims, " × ")), " *
+                            "got $(join(size(A), " × "))"))
+end
+
+# Z is p × m, H p × p, T m × m, R m × r and Q r × r. Scalar systems have nothing to check.
+function _check_system_dims(caller, Z::AbstractMatrix, H::AbstractMatrix,
+        T::AbstractMatrix, R::AbstractMatrix, Q::AbstractMatrix)
+    p, m = size(Z)
+    r = size(Q, 1)
+    _check_size(caller, "H", H, (p, p))
+    _check_size(caller, "T", T, (m, m))
+    _check_size(caller, "R", R, (m, r))
+    _check_size(caller, "Q", Q, (r, r))
+    return nothing
+end
+_check_system_dims(caller, Z, H, T, R, Q) = nothing
 
 # ============================================
-# StaticArrays automatic conversion
+# StaticArrays specialization
 # ============================================
 
 """
-Maximum dimension for automatic conversion to StaticArrays.
-Matrices with max(rows, cols) ≤ STATIC_THRESHOLD are converted.
+    STATIC_THRESHOLD
+
+Largest model dimension for which `static = :auto` runs the StaticArrays
+specialization of the Kalman filter. A model qualifies when its numbers of
+states, observed series and shocks are all at most `STATIC_THRESHOLD`.
 """
 const STATIC_THRESHOLD = 13
 
 """
-    to_static_if_small(x)
+    _use_static(static::Symbol, n_states, n_obs, n_shocks) -> Bool
 
-Convert array to StaticArray if dimensions are small enough (≤ STATIC_THRESHOLD).
-Returns the input unchanged if dimensions exceed threshold or if already a StaticArray.
-
-This enables automatic performance optimization for small state-space models
-by using stack-allocated arrays that the compiler can unroll.
+Resolve the `static = :auto | :on | :off` keyword accepted by the spec-level
+entry points. `:auto` selects StaticArrays when every dimension is at most
+[`Siphon.STATIC_THRESHOLD`](@ref); `:on` forces them, warning above the threshold.
 """
-to_static_if_small(x::Real) = x
-
-function to_static_if_small(x::AbstractVector)
-    n = length(x)
-    n ≤ STATIC_THRESHOLD ? SVector{n}(x) : x
-end
-
-function to_static_if_small(x::AbstractMatrix)
-    m, n = size(x)
-    (m ≤ STATIC_THRESHOLD && n ≤ STATIC_THRESHOLD) ? SMatrix{m, n}(x) : x
-end
-
-# Already static - pass through unchanged
-to_static_if_small(x::StaticArray) = x
-
-"""
-    KFParms_static(Z, H, T, R, Q)
-
-Create KFParms with automatic StaticArrays conversion for small matrices.
-
-Equivalent to `KFParms(to_static_if_small(Z), ...)` for all parameters.
-Use this for potential performance gains when state/observation dimensions are small (≤ 13).
-
-# Example
-```julia
-# These become SMatrix automatically
-p = KFParms_static([1.0;;], [1.0;;], [1.0;;], [1.0;;], [1.0;;])
-typeof(p.Z)  # SMatrix{1, 1, Float64, 1}
-
-# Large matrices stay as Matrix
-p = KFParms_static(rand(20,20), rand(20,20), rand(20,20), rand(20,20), rand(20,20))
-typeof(p.Z)  # Matrix{Float64}
-```
-"""
-function KFParms_static(Z, H, T, R, Q)
-    KFParms(
-        to_static_if_small(Z),
-        to_static_if_small(H),
-        to_static_if_small(T),
-        to_static_if_small(R),
-        to_static_if_small(Q)
-    )
-end
-
-# ============================================
-# Backend selection for filter/smoother
-# ============================================
-
-"""
-    select_backend(n_states::Int, n_obs::Int, backend::Symbol) -> Symbol
-
-Select filter/smoother backend based on problem dimensions.
-
-# Arguments
-- `n_states`: Number of state variables
-- `n_obs`: Number of observable variables
-- `backend`: Requested backend - one of:
-  - `:auto` - Automatically select based on dimensions (default)
-  - `:static` - Force pure/functional implementation with StaticArrays
-  - `:inplace` - Force in-place implementation with KalmanWorkspace
-
-# Returns
-- `:static` if `max(n_states, n_obs) ≤ STATIC_THRESHOLD` and backend is `:auto` or `:static`
-- `:inplace` if dimensions exceed threshold or backend is `:inplace`
-
-# Details
-The pure/functional backend (`:static`) uses StaticArrays for small problems,
-enabling stack allocation and compiler optimizations. It is AD-compatible.
-
-The in-place backend (`:inplace`) uses KalmanWorkspace for zero-allocation
-filter/smoother operations, optimal for large problems and repeated EM iterations.
-It is NOT AD-compatible.
-
-# Example
-```julia
-select_backend(3, 2, :auto)      # → :static (small problem)
-select_backend(20, 50, :auto)    # → :inplace (large problem)
-select_backend(3, 2, :inplace)   # → :inplace (forced)
-```
-"""
-function select_backend(n_states::Int, n_obs::Int, backend::Symbol)
-    if backend == :auto
-        return max(n_states, n_obs) <= STATIC_THRESHOLD ? :static : :inplace
-    elseif backend == :static
-        return :static
-    elseif backend == :inplace
-        return :inplace
+function _use_static(static::Symbol, n_states::Integer, n_obs::Integer, n_shocks::Integer)
+    max_dim = max(n_states, n_obs, n_shocks)
+    if static === :auto
+        return max_dim <= STATIC_THRESHOLD
+    elseif static === :on
+        if max_dim > STATIC_THRESHOLD
+            @warn "static = :on requested but the model has dimension $(max_dim) > " *
+                  "Siphon.STATIC_THRESHOLD = $(STATIC_THRESHOLD). StaticArrays above this " *
+                  "size typically lose to BLAS and compile slowly; consider " *
+                  "static = :auto or :off." maxlog = 1
+        end
+        return true
+    elseif static === :off
+        return false
     else
-        throw(ArgumentError("Invalid backend: $backend. Use :auto, :static, or :inplace"))
+        throw(ArgumentError("static must be :auto, :on or :off, got :$(static)"))
     end
+end
+
+"""
+    _static_system(p::KFParms, a1, P1) -> (p, a1, P1)
+
+Convert every system matrix and the initial state to `SMatrix`/`SVector`, so
+the filter runs its StaticArrays specialization. The conversion covers all
+seven arrays or none: a partly static system would take the generic path.
+"""
+function _static_system(p::KFParms, a1::AbstractVector, P1::AbstractMatrix)
+    sm(A::AbstractMatrix) = SMatrix{size(A, 1), size(A, 2)}(A)
+    p_s = KFParms(sm(p.Z), sm(p.H), sm(p.T), sm(p.R), sm(p.Q))
+    return p_s, SVector{length(a1)}(a1), sm(P1)
 end
 
 # ============================================
@@ -175,26 +138,28 @@ Following FKF (R package) naming conventions:
 
 Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
 reduced-system quantities in their leading rows and columns for that period; the
-observed rows are `findall(view(observed_mask, :, t))`.
+observed rows are `findall(view(observed_mask, :, t))`. The accessors
+`prediction_errors`, `prediction_errors_cov` and `kalman_gains` return them in series
+positions instead.
+
+A model with one state and one series may be given as a `KFParms` of numbers. Its result
+has the same layout with `m = p = 1`, and `p` keeps the numbers.
 
 # Accessor Methods
-Use accessor methods for clear, consistent API:
-- `parameters(r)` → `p` (KFParms)
-- `obs_matrix(r)` → `p.Z`
-- `obs_cov(r)` → `p.H`
-- `transition_matrix(r)` → `p.T`
-- `selection_matrix(r)` → `p.R`
-- `state_cov(r)` → `p.Q`
+The accessors of [`AbstractFilterResult`](@ref):
+- `system_matrices(r)` → `p` (KFParms)
+- `obs_matrix(r)`, `obs_cov(r)`, `transition_matrix(r)`, `selection_matrix(r)`,
+  `state_cov(r)` → `p.Z`, `p.H`, `p.T`, `p.R`, `p.Q`
 - `predicted_states(r)` → `at`
-- `variances_predicted_states(r)` → `Pt`
+- `predicted_states_cov(r)` → `Pt`
 - `filtered_states(r)` → `att`
-- `variances_filtered_states(r)` → `Ptt`
-- `prediction_errors(r)` → `vt`
-- `variances_prediction_errors(r)` → `Ft`
-- `kalman_gains(r)` → `Kt`
+- `filtered_states_cov(r)` → `Ptt`
+- `prediction_errors(r)`, `prediction_errors_cov(r)`, `kalman_gains(r)` → `vt`, `Ft`,
+  `Kt` spread back to series positions (copies)
 - `loglikelihood(r)` → `loglik`
+- `initial_state(r)`, `initial_state_cov(r)` → `at[:, 1]`, `Pt[:, :, 1]`
 """
-struct KalmanFilterResult{T <: Real, P <: KFParms}
+struct KalmanFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Model parameters
     p::P
     # Log-likelihood
@@ -212,6 +177,18 @@ struct KalmanFilterResult{T <: Real, P <: KFParms}
     # Missing data
     missing_mask::BitVector    # n: true where no row of the period was observed
     observed_mask::BitMatrix   # p × n: true where an individual value is present
+    # 0, or the period in which the filter stopped on a non-positive-definite F
+    failed_at::Int
+end
+
+function KalmanFilterResult(
+        p::KFParms, loglik::Real, at::AbstractMatrix, Pt::AbstractArray{<:Any, 3},
+        att::AbstractMatrix, Ptt::AbstractArray{<:Any, 3}, vt::AbstractMatrix,
+        Ft::AbstractArray{<:Any, 3}, Kt::AbstractArray{<:Any, 3},
+        missing_mask::BitVector, observed_mask::BitMatrix
+)
+    return KalmanFilterResult(
+        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask, 0)
 end
 
 # A result built without a per-element mask is fully observed wherever its period
@@ -220,218 +197,30 @@ function KalmanFilterResult(
         p::KFParms, loglik::Real, at::AbstractMatrix, Pt::AbstractArray{<:Any, 3},
         att::AbstractMatrix, Ptt::AbstractArray{<:Any, 3}, vt::AbstractMatrix,
         Ft::AbstractArray{<:Any, 3}, Kt::AbstractArray{<:Any, 3},
-        missing_mask::BitVector
+        missing_mask::BitVector; failed_at::Int = 0
 )
     observed_mask = BitMatrix(undef, size(vt, 1), size(vt, 2))
     for t in axes(observed_mask, 2)
         observed_mask[:, t] .= !missing_mask[t]
     end
     return KalmanFilterResult(
-        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask)
+        p, loglik, at, Pt, att, Ptt, vt, Ft, Kt, missing_mask, observed_mask, failed_at)
 end
 
-# Accessor methods for KalmanFilterResult
-"""
-    parameters(r::KalmanFilterResult) -> KFParms
-
-Return the model parameters (Z, H, T, R, Q).
-"""
-parameters(r::KalmanFilterResult) = r.p
-
-"""
-    obs_matrix(r::KalmanFilterResult)
-
-Return observation matrix Z (p × m).
-"""
-obs_matrix(r::KalmanFilterResult) = r.p.Z
-
-"""
-    obs_cov(r::KalmanFilterResult)
-
-Return observation noise covariance H (p × p).
-"""
-obs_cov(r::KalmanFilterResult) = r.p.H
-
-"""
-    transition_matrix(r::KalmanFilterResult)
-
-Return state transition matrix T (m × m).
-"""
-transition_matrix(r::KalmanFilterResult) = r.p.T
-
-"""
-    selection_matrix(r::KalmanFilterResult)
-
-Return state noise selection matrix R (m × r).
-"""
-selection_matrix(r::KalmanFilterResult) = r.p.R
-
-"""
-    state_cov(r::KalmanFilterResult)
-
-Return state noise covariance Q (r × r).
-"""
-state_cov(r::KalmanFilterResult) = r.p.Q
-
-"""
-    predicted_states(r::KalmanFilterResult) -> Matrix
-
-Return predicted state means E[αₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: at)
-"""
-predicted_states(r::KalmanFilterResult) = r.at
-
-"""
-    variances_predicted_states(r::KalmanFilterResult) -> Array{T,3}
-
-Return predicted state covariances Var[αₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: Pt)
-"""
-variances_predicted_states(r::KalmanFilterResult) = r.Pt
-
-"""
-    filtered_states(r::KalmanFilterResult) -> Matrix
-
-Return filtered state means E[αₜ | y₁:ₜ] for t = 1:n. (FKF: att)
-"""
-filtered_states(r::KalmanFilterResult) = r.att
-
-"""
-    variances_filtered_states(r::KalmanFilterResult) -> Array{T,3}
-
-Return filtered state covariances Var[αₜ | y₁:ₜ] for t = 1:n. (FKF: Ptt)
-"""
-variances_filtered_states(r::KalmanFilterResult) = r.Ptt
-
-"""
-    prediction_errors(r::KalmanFilterResult) -> Matrix
-
-Return prediction errors (innovations) vₜ = yₜ - E[yₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: vt)
-NaN for missing observations.
-"""
-prediction_errors(r::KalmanFilterResult) = r.vt
-
-"""
-    variances_prediction_errors(r::KalmanFilterResult) -> Array{T,3}
-
-Return innovation covariances Var[yₜ | y₁:ₜ₋₁] for t = 1:n. (FKF: Ft)
-"""
-variances_prediction_errors(r::KalmanFilterResult) = r.Ft
-
-"""
-    kalman_gains(r::KalmanFilterResult) -> Array{T,3}
-
-Return Kalman gains Kₜ for t = 1:n. Zero for missing observations.
-"""
-kalman_gains(r::KalmanFilterResult) = r.Kt
-
-"""
-    loglikelihood(r::KalmanFilterResult) -> Real
-
-Return log-likelihood of non-missing observations.
-"""
-loglikelihood(r::KalmanFilterResult) = r.loglik
-
-"""
-    missing_mask(r::KalmanFilterResult) -> BitVector
-
-Return the mask that is true for each period in which no row was observed.
-"""
-missing_mask(r::KalmanFilterResult) = r.missing_mask
-
+# Accessor methods for KalmanFilterResult (the shared ones are in accessors.jl)
 """
     observed_mask(r::KalmanFilterResult) -> BitMatrix
 
 Return the `p × n` mask that is true where an individual observation was present.
 """
-observed_mask(r::KalmanFilterResult) = r.observed_mask
+observed_mask(r::KalmanFilterResult) = _require_output(r, :observed_mask).observed_mask
 
 """
     observed_rows(r::KalmanFilterResult, t::Integer) -> Vector{Int}
 
 Return the indices of the rows observed in period `t`, in increasing order.
 """
-observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(r.observed_mask, :, t))
-
-# ============================================
-# KalmanFilterResultScalar - Scalar version
-# ============================================
-
-"""
-    KalmanFilterResultScalar{T<:Real}
-
-Scalar (univariate state) version of KalmanFilterResult.
-
-Same naming conventions as KalmanFilterResult but with vectors instead of matrices
-for state quantities.
-"""
-struct KalmanFilterResultScalar{T <: Real}
-    loglik::T
-    at::Vector{T}          # n: predicted states
-    Pt::Vector{T}          # n: predicted variances
-    att::Vector{T}         # n: filtered states
-    Ptt::Vector{T}         # n: filtered variances
-    vt::Vector{T}          # n: innovations
-    Ft::Vector{T}          # n: innovation variances
-    missing_mask::BitVector
-end
-
-# Accessor methods for scalar version
-predicted_states(r::KalmanFilterResultScalar) = r.at
-variances_predicted_states(r::KalmanFilterResultScalar) = r.Pt
-filtered_states(r::KalmanFilterResultScalar) = r.att
-variances_filtered_states(r::KalmanFilterResultScalar) = r.Ptt
-prediction_errors(r::KalmanFilterResultScalar) = r.vt
-variances_prediction_errors(r::KalmanFilterResultScalar) = r.Ft
-loglikelihood(r::KalmanFilterResultScalar) = r.loglik
-
-# ============================================
-# SmootherWorkspace - Pre-allocated smoother storage
-# ============================================
-
-"""
-    SmootherWorkspace{T<:Real}
-
-Pre-allocated workspace for Kalman smoother operations.
-
-Allows in-place computation to avoid allocations when smoothing repeatedly.
-
-# Fields
-- `alpha`: Smoothed state means E[αₜ | y₁:ₙ] (m × n)
-- `V`: Smoothed state covariances Var[αₜ | y₁:ₙ] (m × m × n)
-- `r`: Smoothing recursion auxiliary vector (m × n)
-- `N`: Smoothing recursion auxiliary matrix (m × m × n)
-
-# Constructor
-    SmootherWorkspace(m::Int, n::Int, ::Type{T}=Float64) where T
-"""
-mutable struct SmootherWorkspace{T <: Real}
-    alpha::Matrix{T}       # m × n: smoothed states
-    V::Array{T, 3}          # m × m × n: smoothed covariances
-    r::Matrix{T}           # m × n: smoothing recursion auxiliary
-    N::Array{T, 3}          # m × m × n: smoothing recursion auxiliary
-end
-
-function SmootherWorkspace(m::Int, n::Int, ::Type{T} = Float64) where {T}
-    SmootherWorkspace{T}(
-        Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n),
-        Matrix{T}(undef, m, n),
-        Array{T}(undef, m, m, n)
-    )
-end
-
-"""
-    smoothed_states(w::SmootherWorkspace) -> Matrix
-
-Return smoothed state means E[αₜ | y₁:ₙ] from workspace.
-"""
-smoothed_states(w::SmootherWorkspace) = w.alpha
-
-"""
-    variances_smoothed_states(w::SmootherWorkspace) -> Array{T,3}
-
-Return smoothed state covariances Var[αₜ | y₁:ₙ] from workspace.
-"""
-variances_smoothed_states(w::SmootherWorkspace) = w.V
+observed_rows(r::KalmanFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
 
 # ============================================
 # DiffuseFilterResult - Exact diffuse initialization
@@ -459,22 +248,46 @@ The diffuse period ends when `norm(Pinf) < tol`.
 - `vt`: Innovations/prediction errors (p × n), NaN for missing
 - `Ft`: Innovation covariances (p × p × n)
 - `Kt`: Kalman gains (m × p × n)
-- `diffuse_flag`: Vector of length d indicating step type (1=Finf invertible, 0=singular)
-- `missing_mask`: BitVector indicating missing observations
+- `diffuse_flag`: Vector of length d indicating step type (see Notes)
+- `diffuse_ended`: true when the diffuse part of the covariance vanished within the
+  sample; `d` alone cannot tell this apart when `d == n`
+- `tol`: the tolerance the filter ran with
+- `missing_mask`: BitVector, true where no row of the period was observed
+- `observed_mask`: BitMatrix (p × n), true where an individual value is present
+
+Where only some rows of a period are observed, `vt`, `Ft` and `Kt` hold the
+reduced-system quantities in their leading rows and columns for that period; the
+observed rows are `findall(view(observed_mask, :, t))`. The accessors
+`prediction_errors`, `prediction_errors_cov` and `kalman_gains` return them in series
+positions instead.
 
 # Notes
 During the diffuse period (t ≤ d):
 - If `diffuse_flag[t] == 1`: Finf was invertible, used exact diffuse update
-- If `diffuse_flag[t] == 0`: Finf was singular, used Fstar-based update
+- If `diffuse_flag[t] == 2`: Finf was singular but nonzero; the observed rows were
+  processed one at a time (Koopman & Durbin 2000), each taking the exact diffuse
+  update or the Fstar-based one
+- If `diffuse_flag[t] == 0`: Finf was zero, used Fstar-based update
+- If `diffuse_flag[t] == -1`: no row was observed
+
+Rows that take the exact diffuse update add nothing to the log-likelihood; the
+others add their Gaussian term.
+
+`Pt` and `Ptt` hold the finite parts of the predicted and filtered covariances
+(the diffuse parts of the predicted covariance are in `Pinf_store`). In an exact
+diffuse step `Ft` holds `Finf = Z Pinf Z'` and `Kt` holds the gain
+`K⁽⁰⁾ = T Pinf Z' Finf⁻¹` that updates the state, following Durbin & Koopman (2012, §5.2).
+In a row-by-row step `Ft` also holds `Finf`, and `Kt` holds `T G`, where `G` is the
+gain with `a_{t|t} = a_t + G v_t`.
 
 After the diffuse period (t > d), standard Kalman filter recursion is used.
 
 # See Also
-- `kalman_filter_diffuse`: Compute diffuse filter
-- `kalman_loglik_diffuse`: Compute log-likelihood with diffuse initialization
+- `kalman_filter(p, y, a1, P1_star, P1_inf)`: Compute diffuse filter
+- `kalman_loglik(p, y, a1, P1_star, P1_inf)`: Compute log-likelihood with diffuse initialization
 - `KalmanFilterResult`: Standard filter result without diffuse initialization
 """
-struct DiffuseFilterResult{T <: Real, P <: KFParms}
+struct DiffuseFilterResult{T <: Real, P <: KFParms} <: AbstractFilterResult
     # Model parameters
     p::P
     # Log-likelihood (non-diffuse observations only)
@@ -494,27 +307,27 @@ struct DiffuseFilterResult{T <: Real, P <: KFParms}
     vt::Matrix{T}           # p × n
     Ft::Array{T, 3}          # p × p × n
     Kt::Array{T, 3}          # m × p × n
-    # Diffuse step flags: 1=Finf invertible, 0=singular
+    # Diffuse step flags: 1=Finf invertible, 2=singular nonzero, 0=zero, -1=missing
     diffuse_flag::Vector{Int}  # length d
+    diffuse_ended::Bool
+    tol::Float64
     # Missing data
-    missing_mask::BitVector
+    missing_mask::BitVector    # n: true where no row of the period was observed
+    observed_mask::BitMatrix   # p × n: true where an individual value is present
+    # 0, or the period in which the filter stopped on a non-positive-definite F
+    failed_at::Int
 end
 
-# Accessor methods for DiffuseFilterResult
-parameters(r::DiffuseFilterResult) = r.p
-obs_matrix(r::DiffuseFilterResult) = r.p.Z
-obs_cov(r::DiffuseFilterResult) = r.p.H
-transition_matrix(r::DiffuseFilterResult) = r.p.T
-selection_matrix(r::DiffuseFilterResult) = r.p.R
-state_cov(r::DiffuseFilterResult) = r.p.Q
-predicted_states(r::DiffuseFilterResult) = r.at
-variances_predicted_states(r::DiffuseFilterResult) = r.Pt
-filtered_states(r::DiffuseFilterResult) = r.att
-variances_filtered_states(r::DiffuseFilterResult) = r.Ptt
-prediction_errors(r::DiffuseFilterResult) = r.vt
-variances_prediction_errors(r::DiffuseFilterResult) = r.Ft
-kalman_gains(r::DiffuseFilterResult) = r.Kt
-loglikelihood(r::DiffuseFilterResult) = r.loglik
+function DiffuseFilterResult(p::KFParms, loglik::Real, d::Int, at, Pt, att, Ptt,
+        Pinf_store, Pstar_store, vt, Ft, Kt, diffuse_flag::Vector{Int},
+        diffuse_ended::Bool, tol::Real, missing_mask::BitVector, observed_mask::BitMatrix)
+    return DiffuseFilterResult(p, loglik, d, at, Pt, att, Ptt, Pinf_store, Pstar_store,
+        vt, Ft, Kt, diffuse_flag, diffuse_ended, tol, missing_mask, observed_mask, 0)
+end
+
+# Accessor methods for DiffuseFilterResult (the shared ones are in accessors.jl)
+observed_mask(r::DiffuseFilterResult) = _require_output(r, :observed_mask).observed_mask
+observed_rows(r::DiffuseFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
 
 """
     diffuse_period(r::DiffuseFilterResult) -> Int
@@ -529,13 +342,18 @@ diffuse_period(r::DiffuseFilterResult) = r.d
 Return the diffuse (Pinf) and finite (Pstar) covariances during the diffuse period.
 Both arrays have dimension m × m × d where d is the diffuse period length.
 """
-diffuse_covariances(r::DiffuseFilterResult) = (r.Pinf_store, r.Pstar_store)
+function diffuse_covariances(r::DiffuseFilterResult)
+    _require_output(r, :diffuse_covariances)
+    return (r.Pinf_store, r.Pstar_store)
+end
 
 """
     diffuse_flags(r::DiffuseFilterResult) -> Vector{Int}
 
 Return flags indicating which type of diffuse step was used at each time point.
 - 1: Finf was invertible (exact diffuse update)
-- 0: Finf was singular (Fstar-based update)
+- 2: Finf was singular but nonzero (rows processed one at a time)
+- 0: Finf was zero (Fstar-based update)
+- -1: no row was observed
 """
-diffuse_flags(r::DiffuseFilterResult) = r.diffuse_flag
+diffuse_flags(r::DiffuseFilterResult) = _require_output(r, :diffuse_flags).diffuse_flag

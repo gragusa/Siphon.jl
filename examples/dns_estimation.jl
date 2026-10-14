@@ -192,6 +192,20 @@ Profile likelihood: optimize λ while using EM for other parameters.
 This is useful when λ enters non-linearly but other parameters have
 closed-form EM updates.
 """
+# EM with Z held fixed, on Siphon's workspace layer: `em_estimate!` updates
+# T, H and Q in place. A diagonal H estimates only the variances.
+function em_fixed_Z(Z, T, R, H, Q, y, a1, P1; H_diagonal = false, maxiter = 500,
+        tol = 1e-8)
+    kf_ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, size(y, 2))
+    em_ws = Siphon.EMWorkspace(kf_ws)
+    fill!(em_ws.Z_free, false)
+    if H_diagonal
+        em_ws.H_free .= Matrix(I, size(H)) .== 1
+        em_ws.H_diag_only = true
+    end
+    return Siphon.em_estimate!(kf_ws, em_ws, y; maxiter, tol, warn = false)
+end
+
 function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
     Z = dns_loadings(λ_val, maturities)
     p_obs, n = size(y)
@@ -212,23 +226,8 @@ function profile_negloglik_with_em(λ_val, maturities, y; em_iters = 50)
     Q_free = trues(m, m)
 
     # Run EM with full covariance
-    result = Siphon.DSL._em_general_ssm_full_cov(
-        Z,
-        T_init,
-        R,
-        H_init,
-        Q_init,
-        y,
-        a1,
-        P1;
-        Z_free = Z_free,
-        T_free = T_free,
-        H_free = H_free,
-        Q_free = Q_free,
-        maxiter = em_iters,
-        tol_ll = 1e-6,
-        verbose = false
-    )
+    result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+        H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
     return -result.loglik, result
 end
@@ -275,12 +274,12 @@ P1 = 1e4 * Matrix{Float64}(I, 3, 3)
 
 p_final = KFParms(Z_final, H_final, Matrix(T_final), R_final, Matrix(Q_final))
 filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(Z_final, Matrix(T_final), filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 println("\n=== Smoothed Factors ===")
 println("Correlation between true and smoothed factors:")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    corr = cor(factors[i, :], smooth.alpha[i, :])
+    corr = cor(factors[i, :], smoothed_states(smooth)[i, :])
     println("  $name: ", round(corr, digits = 4))
 end
 
@@ -438,19 +437,12 @@ if isfile(data_path)
 
     p_real = KFParms(Z_real, H_real, Matrix(T_real), R_real, Matrix(Q_real))
     filt_real = kalman_filter(p_real, selected_yields, a1_real, P1_real)
-    smooth_real = kalman_smoother(
-        Z_real,
-        Matrix(T_real),
-        filt_real.at,
-        filt_real.Pt,
-        filt_real.vt,
-        filt_real.Ft
-    )
+    smooth_real = kalman_smoother(filt_real)
 
     # Factor statistics
     println("Smoothed factor statistics:")
     for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-        factor = smooth_real.alpha[i, :]
+        factor = smoothed_states(smooth_real)[i, :]
         println(
             "  $name: mean = ",
             round(mean(factor), digits = 2),
@@ -487,23 +479,8 @@ if isfile(data_path)
         H_free = trues(p_obs, p_obs)
         Q_free = trues(m, m)
 
-        result = Siphon.DSL._em_general_ssm_full_cov(
-            Z,
-            T_init,
-            R,
-            H_init,
-            Q_init,
-            y,
-            a1,
-            P1;
-            Z_free = Z_free,
-            T_free = T_free,
-            H_free = H_free,
-            Q_free = Q_free,
-            maxiter = em_iters,
-            tol_ll = 1e-6,
-            verbose = false
-        )
+        result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+            H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
         return -result.loglik, result
     end
@@ -689,23 +666,8 @@ if isfile(data_path)
             H_free = Diagonal(trues(p_obs))
             Q_free = trues(m, m)
 
-            result = Siphon.DSL._em_general_ssm_full_cov(
-                Z,
-                T_init,
-                R,
-                H_init,
-                Q_init,
-                y,
-                a1,
-                P1;
-                Z_free = Z_free,
-                T_free = T_free,
-                H_free = H_free,
-                Q_free = Q_free,
-                maxiter = em_iters,
-                tol_ll = 1e-5,
-                verbose = false
-            )
+            result = em_fixed_Z(Z, T_init, R, H_init, Q_init, y, a1, P1;
+                H_diagonal = H_free isa Diagonal, maxiter = em_iters)
 
             if result.loglik > best_ll
                 best_ll = result.loglik

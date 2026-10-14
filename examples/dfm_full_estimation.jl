@@ -343,7 +343,7 @@ end
 println()
 
 # Factor innovation covariance
-Σ_η = innovation_cov(best_model)
+Σ_η = factor_innovation_cov(best_model)
 println("Factor innovation covariance Σ_η (diagonal):")
 println("  ", round.(diag(Σ_η), digits = 4))
 println()

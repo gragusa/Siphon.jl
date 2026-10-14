@@ -74,26 +74,23 @@ plot(result, filtered=false)     # Predicted states instead of filtered
 
 ## Plotting Smoothed States
 
-The `SmootherResult` wrapper enables plotting smoothed states from any source:
+`kalman_smoother` returns a `SmootherResult`, which plots directly. A workspace or a
+fitted model converts to one:
 
 ```julia
-# Method 1: From KalmanWorkspace (recommended)
-ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
-kalman_filter!(ws, y)
-kalman_smoother!(ws)
-smooth = SmootherResult(ws)
-plot(smooth)
-
-# Method 2: Convenience constructor (runs filter + smoother internally)
+# Functional API
 p = KFParms(Z, H, T, R, Q)
-smooth = SmootherResult(p, y, a1, P1)
+smooth = kalman_smoother(p, y, a1, P1)          # or kalman_smoother(kalman_filter(p, y, a1, P1))
 plot(smooth, vars=1, level=0.90)
 
-# Method 3: Wrap existing smoother NamedTuple output
-filt = kalman_filter(p, y, a1, P1)
-nt = kalman_smoother(p.Z, p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
-smooth = SmootherResult(nt)
-plot(smooth)
+# From a KalmanWorkspace (a copy, unaffected by later runs on ws)
+ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
+kalman_filter_and_smooth!(ws, y)
+smooth = SmootherResult(ws)
+plot(smooth, time=1871:1970)
+
+# From a fitted StateSpaceModel
+smooth = SmootherResult(model)
 ```
 
 ### Keywords
@@ -103,15 +100,15 @@ plot(smooth)
 | `vars` | `:all` | Variables to plot |
 | `level` | `0.95` | Confidence level for bands |
 | `band` | `true` | Whether to show confidence bands |
+| `time` | `1:n` | Time axis |
 
 ## Plotting Forecasts
 
-Wrap forecast output in `ForecastResult`:
+`forecast` returns a `ForecastResult`, which plots against the forecast periods
+`n+1:n+h`:
 
 ```julia
-# Run forecast
-fc_nt = forecast(spec, θ, y, 24)  # 24-step ahead forecast
-fc = ForecastResult(fc_nt)
+fc = forecast(spec, θ, y, 24)  # 24-step ahead forecast
 
 # Plot forecasted observations (default)
 plot(fc)
@@ -130,18 +127,21 @@ plot(fc, what=:states, vars=1)
 | `level` | `0.95` | Confidence level for bands |
 | `what` | `:observations` | Plot `:observations` or `:states` |
 | `band` | `true` | Whether to show confidence bands |
+| `time` | `n+1:n+h` | Time axis |
 
 ## Comparing Filtered vs Smoothed
 
 Plot both filtered and smoothed states together:
 
 ```julia
-result = kalman_filter(p, y, a1, P1)
-smooth = SmootherResult(p, y, a1, P1)
+result, smooth = kalman_filter_and_smooth(p, y, a1, P1)
 
 # Compare on same plot
 plot((result, smooth), vars=1)
 plot((result, smooth), vars=[1,2], band=true)
+
+# The tuple returned by kalman_filter_and_smooth plots directly
+plot(kalman_filter_and_smooth(p, y, a1, P1), vars=1)
 ```
 
 The comparison shows filtered states as dashed blue lines and smoothed states as solid green lines, with optional confidence bands around the smoother.
@@ -251,25 +251,24 @@ The default color scheme uses consistent colors across plot types:
 
 - `KalmanWorkspace`: In-place filter/smoother workspace (recommended)
 - `KalmanFilterResult`: Functional API filter output
-- `SmootherResult`: Wrapper for smoother output
-- `ForecastResult`: Wrapper for forecast output
+- `SmootherResult`: Smoother output (smoothed states, covariances, cross-lag covariances)
+- `ForecastResult`: Forecast output
 - `ObservablePlot`: Marker type for observable prediction plots
 
 ### In-place Functions
 
 - `kalman_filter!`: Run filter in-place
 - `kalman_smoother!`: Run smoother in-place
-- `filter_and_smooth!`: Run both in-place
+- `kalman_filter_and_smooth!`: Run both in-place
 
 ### Accessor Functions
 
 - `smoothed_states`: Get smoothed state means
 - `filtered_states`: Get filtered state means
 - `predicted_states`: Get predicted state means
-- `variances_smoothed_states`: Get smoothed state covariances
+- `smoothed_states_cov`: Get smoothed state covariances
 - `loglikelihood`: Get log-likelihood
 
 ### Helper Functions
 
-- `confidence_bands`: Compute confidence interval bounds
-- `select_vars`: Parse variable selection keywords
+- `Siphon.confidence_bands`: Compute confidence interval bounds

@@ -141,6 +141,8 @@ end
     s = _fullrank_setup()
     ws = _workspace(s)
     @test rank_revealing(ws) == false
+    @test_throws "holds no filter output" innovation_ranks(ws)
+    kalman_filter!(ws, s.y)
     @test innovation_ranks(ws) === ws.Ft_rank
     @test length(innovation_ranks(ws)) == s.n
 
@@ -161,8 +163,8 @@ end
     wc = _workspace(s)
     wr = _workspace(s; rank_revealing = true)
 
-    llc = filter_and_smooth!(wc, s.y)
-    llr = filter_and_smooth!(wr, s.y)
+    llc = kalman_filter_and_smooth!(wc, s.y)
+    llr = kalman_filter_and_smooth!(wr, s.y)
 
     @test llr ≈ llc atol = 1e-10
     @test maximum(abs, wr.at - wc.at) < 1e-10
@@ -183,12 +185,12 @@ end
     post = _dense_posterior(s)
 
     ws = _workspace(s; rank_revealing = true)
-    filter_and_smooth!(ws, s.y; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(ws, s.y; crosscov = false, covariances = false)
     @test maximum(abs, vec(ws.αs) - post) < 1e-6 * max(1, maximum(abs, post))
 
     # The covariance path runs the same factors through a different recursion.
     wv = _workspace(s; rank_revealing = true)
-    filter_and_smooth!(wv, s.y)
+    kalman_filter_and_smooth!(wv, s.y)
     @test maximum(abs, vec(wv.αs) - post) < 1e-6 * max(1, maximum(abs, post))
     @test all(isfinite, wv.Vs)
     for t in 1:s.n
@@ -197,9 +199,10 @@ end
         @test minimum(eigvals(Symmetric((V + V') / 2))) > -1e-8
     end
 
-    # The Cholesky path cannot factor this Fₜ at all.
+    # The Cholesky path cannot factor this Fₜ at all, so the run fails.
     wcx = _workspace(s)
-    @test_throws PosDefException kalman_filter!(wcx, s.y)
+    @test kalman_filter!(wcx, s.y) == -Inf
+    @test_throws "not positive definite" filtered_states(wcx)
 end
 
 @testset "rank-revealing — the simulation smoother runs on a singular model" begin
@@ -207,7 +210,7 @@ end
     ws = _workspace(s; rank_revealing = true)
     kalman_filter!(ws, s.y)
 
-    draws = simulation_smoother(ws, s.y; rng = Xoshiro(31), n_draws = 4)
+    draws = simulation_smoother(ws, s.y, 4; rng = Xoshiro(31))
     @test size(draws) == (s.m, s.n, 4)
     @test all(isfinite, draws)
 
@@ -236,6 +239,11 @@ end
     @test_throws InnovationSupportError kalman_filter!(wb, yoff)
     @test_throws "at period 3" kalman_filter!(wb, yoff)
     @test_throws "incompatible with the model" kalman_filter!(wb, yoff)
+
+    # The interrupted run leaves no output behind, even on a workspace whose
+    # previous run succeeded.
+    @test_throws InnovationSupportError kalman_filter!(ws, yoff)
+    @test_throws "holds no filter output" filtered_states(ws)
 end
 
 @testset "rank-revealing — a known start admits only its own observation" begin
@@ -298,7 +306,7 @@ end
 
     ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
     set_rank_revealing!(ws, true)
-    @test filter_and_smooth!(ws, y) isa Real
+    @test kalman_filter_and_smooth!(ws, y) isa Real
     @test innovation_ranks(ws) == [0, 0, 2]
     @test ws.Ft[:, :, 3] ≈ [0.25 0.0; 0.0 1.0]
     @test maximum(abs, ws.αs - path) < 1e-10

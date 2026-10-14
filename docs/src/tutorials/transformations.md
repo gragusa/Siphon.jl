@@ -94,13 +94,14 @@ So if the optimizer finds ``\theta_u = 4.6``, you get ``\sigma^2 = \exp(4.6) \ap
 
 ```julia
 using Siphon
+using TransformVariables: transform
 
 spec = local_level()
 t = build_transformation(spec)
 
 # Transform from unconstrained to constrained
 θ_u = [4.6, 3.9]  # Unconstrained values
-θ_c = TransformVariables.transform(t, θ_u)
+θ_c = transform(t, θ_u)
 # θ_c = (var_obs = 99.5, var_level = 49.4)
 ```
 
@@ -132,7 +133,7 @@ Q = cov_free(2, :Q)  # 2×2 PD covariance matrix
 ```
 
 This creates:
-- **Standard deviation parameters**: `Q_σ_1`, `Q_σ_2` (positive, use exp transform)
+- **Standard deviation parameters**: `Q_sd_1`, `Q_sd_2` (positive, use exp transform)
 - **Correlation parameters**: `Q_corr_1` (unconstrained, maps to valid correlation)
 
 The matrix is reconstructed as:
@@ -189,6 +190,19 @@ ll = logdensity(ld, θ_u)
 ```
 
 The `SSMLogDensity` type implements `LogDensityProblems.jl` interface, so you can use it with any compatible sampler.
+
+A prior goes in the `prior` keyword. `ParameterPriors` assigns a univariate
+prior to each named parameter, evaluated on the parameter as estimated (a
+variance for `var_*`); parameters without one get a flat prior:
+
+```julia
+prior = ParameterPriors(var_obs = InverseGammaPrior(2.0, 1.0e4),
+                        var_state = InverseGammaPrior(2.0, 1.0e3))
+ld = SSMLogDensity(spec, y; prior)
+```
+
+With Distributions.jl loaded, any univariate distribution works in the same
+place, e.g. `ParameterPriors(var_obs = InverseGamma(2, 1e4))`.
 
 ## Tips and Best Practices
 

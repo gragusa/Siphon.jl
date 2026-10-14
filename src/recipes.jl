@@ -12,25 +12,10 @@ using RecipesBase
 # Helper Functions
 # ============================================================================
 
-"""
-    quantile_normal(p::Real)
-
-Compute the quantile (inverse CDF) of the standard normal distribution.
-
-Uses a rational approximation accurate to about 4.5e-4 for p in (0.5, 1).
-
-# Arguments
-- `p`: Probability value in (0.5, 1)
-
-# Returns
-- Quantile value z such that P(Z ≤ z) = p for Z ~ N(0,1)
-"""
-function quantile_normal(p::Real)
-    # Abramowitz & Stegun approximation 26.2.23
-    t = sqrt(-2 * log(1 - p))
-    c0, c1, c2 = 2.515517, 0.802853, 0.010328
-    d1, d2, d3 = 1.432788, 0.189269, 0.001308
-    return t - (c0 + c1*t + c2*t^2) / (1 + d1*t + d2*t^2 + d3*t^3)
+# Standard normal quantile: the `z` with `P(Z ≤ z) = p` for `Z ~ N(0, 1)`.
+function _quantile_normal(p::Real)
+    0 < p < 1 || throw(DomainError(p, "the normal quantile requires 0 < p < 1"))
+    return -sqrt(oftype(float(p), 2)) * erfcinv(2 * p)
 end
 
 """
@@ -47,7 +32,7 @@ Compute confidence band bounds for a vector of means and variances.
 - `(lower, upper)`: Tuple of vectors with lower and upper bounds
 """
 function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real = 0.95)
-    z = quantile_normal((1 + level) / 2)
+    z = _band_quantile(level)
     std = sqrt.(var)
     lower = mean .- z .* std
     upper = mean .+ z .* std
@@ -55,7 +40,7 @@ function confidence_bands(mean::AbstractVector, var::AbstractVector, level::Real
 end
 
 """
-    confidence_bands(mean::Matrix, cov::Array{T,3}, level::Real=0.95) where T
+    confidence_bands(mean::AbstractMatrix, cov::AbstractArray{<:Real,3}, level::Real=0.95)
 
 Compute confidence bands for matrix of means and 3D array of covariances.
 
@@ -69,11 +54,15 @@ Extracts diagonal variances from covariance matrices.
 # Returns
 - `(lower, upper)`: Tuple of matrices (m × n) with lower and upper bounds
 """
-function confidence_bands(mean::Matrix{T}, cov::Array{T, 3}, level::Real = 0.95) where {T}
+function confidence_bands(
+        mean::AbstractMatrix, cov::AbstractArray{<:Real, 3}, level::Real = 0.95)
     m, n = size(mean)
-    z = quantile_normal((1 + level) / 2)
-    lower = similar(mean)
-    upper = similar(mean)
+    size(cov) == (m, m, n) ||
+        throw(DimensionMismatch("cov must be ($m, $m, $n) for a ($m, $n) mean, got $(size(cov))"))
+    z = _band_quantile(level)
+    T = promote_type(eltype(mean), eltype(cov), typeof(z))
+    lower = similar(mean, T)
+    upper = similar(mean, T)
 
     @inbounds for t in 1:n
         for i in 1:m
@@ -86,30 +75,14 @@ function confidence_bands(mean::Matrix{T}, cov::Array{T, 3}, level::Real = 0.95)
     return lower, upper
 end
 
-"""
-    select_vars(vars, n_vars::Int) -> AbstractVector{Int}
+function _band_quantile(level::Real)
+    0 < level < 1 || throw(DomainError(level, "confidence level must be in (0, 1)"))
+    return _quantile_normal((1 + level) / 2)
+end
 
-Parse variable selection keyword into vector of indices.
-
-# Arguments
-- `vars`: Variable selection - can be:
-  - `:all` or `nothing`: Select all variables (1:n_vars)
-  - `Int`: Single variable index
-  - `Vector{Int}` or `AbstractRange`: Multiple variable indices
-- `n_vars`: Total number of variables available
-
-# Returns
-- Vector or range of selected variable indices
-
-# Examples
-```julia
-select_vars(:all, 5)     # 1:5
-select_vars(3, 5)        # [3]
-select_vars([1,3], 5)    # [1, 3]
-select_vars(2:4, 5)      # 2:4
-```
-"""
-function select_vars(vars, n_vars::Int)
+# Indices selected by a `vars` plot keyword: `:all`/`nothing` (every index), an
+# integer, a vector of integers or a range, each checked against `1:n_vars`.
+function _select_vars(vars, n_vars::Int)
     if vars === :all || vars === nothing
         return 1:n_vars
     elseif vars isa Integer
@@ -134,144 +107,40 @@ function select_vars(vars, n_vars::Int)
 end
 
 # ============================================================================
-# Wrapper Types for Plotting
+# Smoother and forecast results
 # ============================================================================
 
 """
-    SmootherResult{T<:Real}
+    SmootherResult(ws::AbstractFilterWorkspace)
 
-Wrapper for Kalman smoother output to enable plot recipes.
-
-This is a convenience wrapper around the NamedTuple returned by `kalman_smoother()`.
-The underlying `kalman_smoother()` function is unchanged and continues to return
-its original NamedTuple format.
-
-# Fields
-- `alpha::Matrix{T}`: Smoothed states E[αₜ | y₁:ₙ] (m × n)
-- `V::Array{T,3}`: Smoothed covariances Var[αₜ | y₁:ₙ] (m × m × n)
-- `p::Union{KFParms, Nothing}`: Optional model parameters for observable predictions
-- `time::Union{AbstractVector, Nothing}`: Optional time axis for plotting
-
-# Constructors
-```julia
-# Wrap existing smoother output
-nt = kalman_smoother(Z, T, at, Pt, vt, Ft)
-sr = SmootherResult(nt)
-
-# Convenience: run filter+smoother and wrap
-sr = SmootherResult(p, y, a1, P1)
-```
-"""
-struct SmootherResult{T <: Real}
-    alpha::Matrix{T}
-    V::Array{T, 3}
-    p::Union{KFParms, Nothing}
-    time::Union{AbstractVector, Nothing}
-end
-
-# Constructor from NamedTuple (output of kalman_smoother)
-function SmootherResult(
-        nt::NamedTuple;
-        p::Union{KFParms, Nothing} = nothing,
-        time::Union{AbstractVector, Nothing} = nothing
-)
-    SmootherResult(nt.alpha, nt.V, p, time)
-end
-
-# Convenience constructor: run filter+smoother (functional API)
-function SmootherResult(
-        p::KFParms,
-        y::AbstractMatrix,
-        a1,
-        P1;
-        time::Union{AbstractVector, Nothing} = nothing
-)
-    filt = kalman_filter(p, y, a1, P1)
-    nt = kalman_smoother(
-        p.Z,
-        p.T,
-        filt.at,
-        filt.Pt,
-        filt.vt,
-        filt.Ft;
-        missing_mask = filt.missing_mask,
-        Ptt = filt.Ptt
-    )
-    SmootherResult(nt; p = p, time = time)
-end
-
-# Constructor from KalmanWorkspace (in-place API - RECOMMENDED)
-"""
-    SmootherResult(ws::KalmanWorkspace; time=nothing)
-
-Create SmootherResult from a KalmanWorkspace after running `kalman_smoother!(ws)`.
-
-This is the recommended approach for large models as it uses the
-zero-allocation in-place filter and smoother.
+Copy the smoother output of `ws` into a [`SmootherResult`](@ref). Needs a prior
+`kalman_smoother!(ws)` run. The cross-lag covariances are
+copied when that run computed them. Later runs on `ws` don't change the result.
 
 # Example
 ```julia
 ws = KalmanWorkspace(Z, H, T, R, Q, a1, P1, n)
-kalman_filter!(ws, y)
-kalman_smoother!(ws)
+kalman_filter_and_smooth!(ws, y)
 smooth = SmootherResult(ws)
 plot(smooth)
 ```
 """
-function SmootherResult(
-        ws::KalmanWorkspace{T};
-        time::Union{AbstractVector, Nothing} = nothing
-) where {T}
-    SmootherResult{T}(ws.αs, ws.Vs, nothing, time)
+function SmootherResult(ws::AbstractFilterWorkspace)
+    store = _filter_store(_require_smoothed_cov(ws, :SmootherResult))
+    Pcross = store.crosscov ? copy(store.Pcross) : nothing
+    return SmootherResult(copy(store.αs), copy(store.Vs), Pcross)
 end
-
-# Accessor methods
-smoothed_states(r::SmootherResult) = r.alpha
-variances_smoothed_states(r::SmootherResult) = r.V
 
 """
-    ForecastResult{T<:Real}
+    SmootherResult(model::StateSpaceModel)
 
-Wrapper for forecast output to enable plot recipes.
-
-This is a convenience wrapper around the NamedTuple returned by `forecast()`.
-The underlying `forecast()` function is unchanged.
-
-# Fields
-- `yhat::Matrix{T}`: Forecasted observations (p × h)
-- `a::Matrix{T}`: Forecasted states (m × h)
-- `P::Array{T,3}`: State forecast covariances (m × m × h)
-- `F::Array{T,3}`: Observation forecast covariances (p × p × h)
-- `time::Union{AbstractVector, Nothing}`: Optional time axis for forecast horizon
-
-# Constructors
-```julia
-# Wrap existing forecast output
-fc_nt = forecast(spec, θ, y, h)
-fc = ForecastResult(fc_nt)
-
-# With custom time axis
-fc = ForecastResult(fc_nt; time=101:112)
-```
+Copy the smoothed states and covariances of a fitted model into a
+[`SmootherResult`](@ref). The smoother runs first if it has not yet.
 """
-struct ForecastResult{T <: Real}
-    yhat::Matrix{T}
-    a::Matrix{T}
-    P::Array{T, 3}
-    F::Array{T, 3}
-    time::Union{AbstractVector, Nothing}
+function SmootherResult(model::StateSpaceModel)
+    return SmootherResult(copy(smoothed_states(model)), copy(smoothed_states_cov(model)),
+        nothing)
 end
-
-# Constructor from NamedTuple (output of forecast)
-function ForecastResult(nt::NamedTuple; time::Union{AbstractVector, Nothing} = nothing)
-    ForecastResult(nt.yhat, nt.a, nt.P, nt.F, time)
-end
-
-# Accessor methods
-forecast_observations(r::ForecastResult) = r.yhat
-forecast_states(r::ForecastResult) = r.a
-variances_forecast_states(r::ForecastResult) = r.P
-variances_forecast_observations(r::ForecastResult) = r.F
 
 # ============================================================================
 # Color Scheme
@@ -337,7 +206,7 @@ plot(result, filtered=false)    # Predicted instead of filtered
     end
 
     m, n = size(states)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -427,27 +296,27 @@ plot(ws, vars=1, level=0.90)    # State 1 with 90% CI
 
     # Select data based on what to plot
     if what === :smoothed
-        states = ws.αs
-        covs = ws.Vs
+        states = smoothed_states(ws)
+        covs = smoothed_states_cov(ws)
         plot_title = "Smoothed States"
         line_color = SMOOTHER_COLOR
         fill_color = SMOOTHER_FILL
     elseif what === :filtered
-        states = ws.att
-        covs = ws.Ptt
+        states = filtered_states(ws)
+        covs = filtered_states_cov(ws)
         plot_title = "Filtered States"
         line_color = FILTER_COLOR
         fill_color = FILTER_FILL
     else  # :predicted
-        states = ws.at
-        covs = ws.Pt
+        states = predicted_states(ws)
+        covs = predicted_states_cov(ws)
         plot_title = "Predicted States"
         line_color = PREDICTED_COLOR
         fill_color = PREDICTED_FILL
     end
 
     m, n = size(states)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
@@ -507,9 +376,11 @@ Plot smoothed states with confidence bands.
 - `level=0.95`: Confidence level for bands
 - `band=true`: Show confidence bands
 
+- `time=nothing`: Custom time axis (default: 1:n)
+
 # Examples
 ```julia
-smooth = SmootherResult(p, y, a1, P1)
+smooth = kalman_smoother(p, y, a1, P1)
 plot(smooth)                       # All smoothed states
 plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
 ```
@@ -518,16 +389,17 @@ plot(smooth, vars=1, level=0.90)   # State 1 with 90% CI
     vars = get(plotattributes, :vars, :all)
     level = get(plotattributes, :level, 0.95)
     band = get(plotattributes, :band, true)
+    time_axis = get(plotattributes, :time, nothing)
 
-    alpha = result.alpha
-    V = result.V
+    alpha = result.αs
+    V = result.Vs
 
     m, n = size(alpha)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
-    t_axis = result.time !== nothing ? result.time : 1:n
+    t_axis = time_axis !== nothing ? time_axis : 1:n
 
     if n_vars > 1
         layout --> (n_vars, 1)
@@ -583,10 +455,11 @@ Plot forecasted states or observations with confidence bands.
 - `level=0.95`: Confidence level for bands
 - `what=:observations`: Plot :observations (yhat) or :states (a)
 - `band=true`: Show confidence bands
+- `time=nothing`: Custom time axis (default: `forecast_periods(fc)`)
 
 # Examples
 ```julia
-fc = ForecastResult(forecast_output)
+fc = forecast(model, 12)
 plot(fc)                           # Forecasted observations (default)
 plot(fc, what=:states, vars=1)     # Forecasted state 1
 plot(fc, level=0.90)               # 90% CI
@@ -611,18 +484,18 @@ plot(fc, level=0.90)               # 90% CI
     end
 
     dim, h = size(means)
-    var_indices = select_vars(vars, dim)
+    var_indices = _select_vars(vars, dim)
     n_vars = length(var_indices)
 
-    # Time axis
-    t_axis = result.time !== nothing ? result.time : 1:h
+    time_axis = get(plotattributes, :time, nothing)
+    t_axis = time_axis !== nothing ? time_axis : forecast_periods(result)
 
     if n_vars > 1
         layout --> (n_vars, 1)
     end
 
     legend --> :topright
-    xlabel --> "Forecast Horizon"
+    xlabel --> "Time"
 
     for (subplot_idx, var_idx) in enumerate(var_indices)
         fc_mean = means[var_idx, :]
@@ -671,12 +544,11 @@ Plot filtered and smoothed states together for comparison.
 - `vars=:all`: Which state variables to plot
 - `level=0.95`: Confidence level for bands (applied to smoother only)
 - `band=true`: Show confidence bands for smoother
+- `time=nothing`: Custom time axis (default: 1:n)
 
 # Example
 ```julia
-result = kalman_filter(p, y, a1, P1)
-smooth = SmootherResult(p, y, a1, P1)
-plot((result, smooth), vars=1)  # Compare state 1
+plot(kalman_filter_and_smooth(p, y, a1, P1), vars=1)  # Compare state 1
 ```
 """
 @recipe function f(results::Tuple{KalmanFilterResult, SmootherResult})
@@ -685,13 +557,14 @@ plot((result, smooth), vars=1)  # Compare state 1
     vars = get(plotattributes, :vars, :all)
     level = get(plotattributes, :level, 0.95)
     band = get(plotattributes, :band, true)
+    time_axis = get(plotattributes, :time, nothing)
 
     m, n = size(filt.att)
-    var_indices = select_vars(vars, m)
+    var_indices = _select_vars(vars, m)
     n_vars = length(var_indices)
 
     # Time axis
-    t_axis = smooth.time !== nothing ? smooth.time : 1:n
+    t_axis = time_axis !== nothing ? time_axis : 1:n
 
     if n_vars > 1
         layout --> (n_vars, 1)
@@ -704,8 +577,8 @@ plot((result, smooth), vars=1)  # Compare state 1
     for (subplot_idx, var_idx) in enumerate(var_indices)
         # Smoother confidence band (if requested)
         if band
-            smooth_mean = smooth.alpha[var_idx, :]
-            smooth_var = [smooth.V[var_idx, var_idx, t] for t in 1:n]
+            smooth_mean = smooth.αs[var_idx, :]
+            smooth_var = [smooth.Vs[var_idx, var_idx, t] for t in 1:n]
             lower, upper = confidence_bands(smooth_mean, smooth_var, level)
 
             @series begin
@@ -740,7 +613,7 @@ plot((result, smooth), vars=1)  # Compare state 1
             linecolor --> SMOOTHER_COLOR
             label --> "Smoothed"
             ylabel --> "State $var_idx"
-            t_axis, smooth.alpha[var_idx, :]
+            t_axis, smooth.αs[var_idx, :]
         end
     end
 end
@@ -798,7 +671,7 @@ plot(result, ObservablePlot, actual=y)      # With actual data overlay
     # Compute predictions
     yhat = Z * at  # p × n
 
-    var_indices = select_vars(vars, p_obs)
+    var_indices = _select_vars(vars, p_obs)
     n_vars = length(var_indices)
 
     t_axis = time_axis !== nothing ? time_axis : 1:n

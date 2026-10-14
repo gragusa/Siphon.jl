@@ -5,42 +5,36 @@ This page documents helper functions for constructing state space matrices.
 ## Diagonal Matrices
 
 ```@docs
-Siphon.DSL.diag_free
-Siphon.DSL.scalar_free
-Siphon.DSL.diag_fixed
+Siphon.diag_free
+Siphon.scalar_free
 ```
 
-## Identity and Zero Matrices
-
-```@docs
-Siphon.DSL.identity_mat
-Siphon.DSL.zeros_mat
-Siphon.DSL.ones_mat
-```
+Fixed matrices are plain Julia matrices (`zeros`, `ones`, `Diagonal`); `custom_ssm`
+also accepts a scaled identity `I`.
 
 ## Covariance Matrices
 
 ```@docs
-Siphon.DSL.cov_free
-Siphon.DSL.CovFree
+Siphon.cov_free
+Siphon.CovFree
 ```
 
 ## Structured Matrices
 
 ```@docs
-Siphon.DSL.lower_triangular_free
-Siphon.DSL.symmetric_free
+Siphon.lower_triangular_free
+Siphon.symmetric_free
 ```
 
 ## Selection and Companion Matrices
 
 ```@docs
-Siphon.DSL.selection_mat
-Siphon.DSL.companion_mat
+Siphon.selection_mat
+Siphon.companion_free
 ```
 
 ## Combining Blocks
 
 ```@docs
-Siphon.DSL.block_diag
+Siphon.block_diag
 ```

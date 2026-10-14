@@ -101,9 +101,9 @@ SUITE["dsl"] = BenchmarkGroup()
 # Spec construction benchmarks. Templates take ParamSpec kwargs:
 # `:free`, a fixed Real, or a NamedTuple `(init=, lower=, upper=)` for a
 # free parameter with a custom starting point.
-SUITE["dsl"]["local_level"] = @benchmarkable local_level(var_obs = (init = 225.0,))
+SUITE["dsl"]["local_level"] = @benchmarkable local_level(var_obs = FreeParam(init = 225.0))
 SUITE["dsl"]["local_linear_trend"] = @benchmarkable local_linear_trend()
-SUITE["dsl"]["ar1"] = @benchmarkable ar1(ρ = (init = 0.9, lower = -0.99, upper = 0.99))
+SUITE["dsl"]["ar1"] = @benchmarkable ar1(ρ = FreeParam(lower = -0.99, upper = 0.99, init = 0.9))
 SUITE["dsl"]["dynamic_factor_10obs_3factors"] = @benchmarkable dynamic_factor(10, 3; factor_lags = 2)
 
 # ----------------------------------------------------------------------------
@@ -195,7 +195,7 @@ SUITE["mle"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 30)
     y = generate_local_level_data(rng, 200)
-    spec = local_level(var_obs = (init = 100.0,), var_level = (init = 50.0,))
+    spec = local_level(var_obs = FreeParam(init = 100.0), var_level = FreeParam(init = 50.0))
 
     SUITE["mle"]["local_level_n200"] = @benchmarkable begin
         m = StateSpaceModel($spec, size($y, 2))
@@ -221,7 +221,7 @@ SUITE["em"] = BenchmarkGroup()
 
 let rng = StableRNG(DEFAULT_SEED + 40)
     y = generate_local_level_data(rng, 200)
-    spec = local_level(var_obs = (init = 100.0,), var_level = (init = 50.0,))
+    spec = local_level(var_obs = FreeParam(init = 100.0), var_level = FreeParam(init = 50.0))
 
     SUITE["em"]["local_level_n200_iter50"] = @benchmarkable begin
         m = StateSpaceModel($spec, size($y, 2))

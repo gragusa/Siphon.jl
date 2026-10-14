@@ -41,35 +41,38 @@ println("Parameters: ", param_names(spec))
 
 ## The `FreeParam` Type
 
-`FreeParam` marks a matrix element as an estimated parameter:
+`FreeParam` marks a matrix element as an estimated parameter. A plain number
+marks a fixed element.
 
 ```julia
 FreeParam(name::Symbol;
-    init = 0.0,           # Initial value for optimization
-    lower = -Inf,         # Lower bound
-    upper = Inf           # Upper bound
+    lower = nothing,      # Lower bound (unset: -Inf)
+    upper = nothing,      # Upper bound (unset: Inf)
+    init = nothing        # Starting value (unset: a point inside the bounds)
 )
+FreeParam(name, lower, upper, init)  # positional, same order as SSMParameter
 ```
+
+An unset `init` is the midpoint of two finite bounds, one unit inside a single
+finite bound, or `0.0`. An `init` on a finite bound is an error, because the
+transformation to unconstrained space maps it to ±∞. When an unset `init` is on
+the diagonal of `H` or `Q`, maximum likelihood rescales it to the data.
+
+Using the same name in several cells makes them share one parameter. Every
+occurrence must have the same bounds and `init`; otherwise `custom_ssm` throws.
 
 ### Examples
 
 ```julia
-# Variance parameter (use lower=0.0 for positivity constraint)
-FreeParam(:var_obs, init=100.0, lower=0.0)
+# Variance parameter (lower=0.0 for positivity); init defaults to 1.0
+FreeParam(:var_obs; lower=0.0)
+FreeParam(:var_obs; lower=0.0, init=100.0)
 
 # Bounded coefficient (e.g., AR coefficient)
-FreeParam(:ρ, init=0.8, lower=-0.99, upper=0.99)
+FreeParam(:ρ; lower=-0.99, upper=0.99, init=0.8)
 
 # Unbounded coefficient
-FreeParam(:β, init=0.0)
-```
-
-### The `@P` Macro
-
-For quick parameter specification:
-
-```julia
-@P(:σ, 1.0)  # Equivalent to FreeParam(:σ, init=1.0)
+FreeParam(:β)
 ```
 
 ## Example: Local Linear Trend Model
@@ -90,11 +93,11 @@ spec = custom_ssm(
     H = [FreeParam(:var_obs, init=1.0, lower=0.0)],
     T = [1.0 1.0;   # Level depends on previous level + slope
          0.0 1.0],  # Slope is a random walk
-    R = Matrix(1.0I, 2, 2),  # Both states receive shocks
+    R = I,          # Both states receive shocks
     Q = [FreeParam(:var_level, init=0.01, lower=0.0)  0.0;
          0.0  FreeParam(:var_slope, init=0.0001, lower=0.0)],
     a1 = [0.0, 0.0],
-    P1 = 1e7 * Matrix(1.0I, 2, 2),
+    P1 = 1e7I,
     name = :LocalLinearTrend
 )
 
@@ -117,47 +120,42 @@ H = diag_free(3, :var_obs)
 H = diag_free(3, :var_obs; init=2.0)
 ```
 
-### Scalar Matrices
+### Scalar Parameters
 
 ```julia
-# Scalar times identity
-H = scalar_free(3, :var_obs; init=1.0)
-# One parameter var_obs, applied to all diagonal elements
+# A 1×1 matrix holding one free variance
+H = scalar_free(:var_obs; init=1.0)
 ```
 
-### Fixed Diagonal Matrices
+### Fixed Matrices
+
+Fixed matrices are ordinary Julia matrices: `zeros(3, 2)`, `ones(2, 2)`,
+`Diagonal([1.0, 2.0, 3.0])`. `custom_ssm` also accepts a scaled identity `I`
+and sizes it from the other inputs: m × m for `Z`, `T`, `R` and `P1` (m is the
+length of `a1`), p × p for `H`, and r × r for `Q`.
 
 ```julia
-# Fixed diagonal values
-H = diag_fixed(3, [1.0, 2.0, 3.0])
-```
-
-### Identity and Zero Matrices
-
-```julia
-Z = identity_mat(3)     # 3×3 identity
-R = zeros_mat(3, 2)     # 3×2 zeros
-O = ones_mat(2, 2)      # 2×2 ones
+R = I        # m × m identity
+P1 = 1e7I    # diffuse initial covariance
 ```
 
 ### Selection Matrix
 
 ```julia
-# Select specific states for observation
-# If n_states=4 and we observe states 1 and 3:
-Z = selection_mat([1, 3], 4)  # 2×4 matrix
+# 3 states, of which the first 2 receive shocks
+R = selection_mat(3, 2)  # 3×2 matrix
 ```
 
 ### Companion Matrix
 
-For VAR/ARMA models in companion form:
+For AR models in companion form:
 
 ```julia
 # AR(2) companion matrix with free coefficients
-T = companion_mat(2, :φ; init=[0.5, 0.3])
-# Creates parameters φ_1, φ_2
-# Matrix: [φ_1  φ_2]
-#         [1    0  ]
+T = companion_free(2, :φ; init=0.5)
+# Creates parameters φ_1 (init 0.5) and φ_2 (init 0.25)
+# Matrix: [φ_1  1]
+#         [φ_2  0]
 ```
 
 ### Lower Triangular Free
@@ -209,11 +207,11 @@ y_t = \Phi y_{t-1} + \varepsilon_t, \quad \varepsilon_t \sim N(0, \Sigma)
 
 ```julia
 spec = custom_ssm(
-    Z = identity_mat(2),          # Observe both states
-    H = zeros_mat(2, 2),          # No measurement error (VAR is exact)
+    Z = I,                    # Observe both states
+    H = zeros(2, 2),          # No measurement error (VAR is exact)
     T = [FreeParam(:φ_11, init=0.5)  FreeParam(:φ_12, init=0.1);
          FreeParam(:φ_21, init=0.1)  FreeParam(:φ_22, init=0.5)],
-    R = identity_mat(2),
+    R = I,
     Q = diag_free(2, :var_innov),  # Diagonal innovation covariance
     a1 = [0.0, 0.0],
     P1 = 1e4 * Matrix(1.0I, 2, 2),
@@ -237,18 +235,18 @@ This uses the decomposition ``\Sigma = D \cdot \text{Corr} \cdot D`` where:
 ### Parameters Created
 
 For `cov_free(n, :prefix)`:
-- `n` standard deviation parameters: `prefix_σ_1`, ..., `prefix_σ_n`
+- `n` standard deviation parameters: `prefix_sd_1`, ..., `prefix_sd_n`
 - `n(n-1)/2` correlation parameters: `prefix_corr_1`, ...
 
 ### Example: VAR with Correlated Innovations
 
 ```julia
 spec = custom_ssm(
-    Z = identity_mat(2),
-    H = zeros_mat(2, 2),
+    Z = I,
+    H = zeros(2, 2),
     T = [FreeParam(:φ_11, init=0.5)  FreeParam(:φ_12, init=0.0);
          FreeParam(:φ_21, init=0.0)  FreeParam(:φ_22, init=0.5)],
-    R = identity_mat(2),
+    R = I,
     Q = cov_free(2, :Q),  # Full 2×2 covariance
     a1 = [0.0, 0.0],
     P1 = 1e4 * Matrix(1.0I, 2, 2),
@@ -256,21 +254,19 @@ spec = custom_ssm(
 )
 
 println("Parameters: ", param_names(spec))
-# [:φ_11, :φ_12, :φ_21, :φ_22, :Q_σ_1, :Q_σ_2, :Q_corr_1]
+# [:φ_11, :φ_12, :φ_21, :φ_22, :Q_sd_1, :Q_sd_2, :Q_corr_1]
 ```
 
 ## Parameter-Dependent Matrices with `MatrixExpr`
 
 For advanced models where matrix elements depend on parameters in complex ways (e.g., yield curve models), use `MatrixExpr`:
 
-```julia
-struct MatrixExpr
-    params::Vector{SSMParameter}  # Parameters used
-    data::NamedTuple              # Static data (e.g., maturities)
-    builder::Function             # Function to build the matrix
-    dims::Tuple{Int,Int}          # Matrix dimensions
-end
-```
+A `MatrixExpr` holds
+
+- `params`: the `SSMParameter`s the matrix depends on,
+- `data`: a `NamedTuple` of fixed data (for example, maturities),
+- `builder`: a function `(θ, data) -> matrix`, where `θ` maps parameter names to values,
+- `dims`: the size of the matrix.
 
 ### Example: Nelson-Siegel Yield Curve Model
 
@@ -297,8 +293,8 @@ function dns_builder(θ::Dict, data)
     Z = zeros(T, n, 3)
     for i in 1:n
         Z[i, 1] = one(T)
-        Z[i, 2] = dns_loading1(λ, τ[i])
-        Z[i, 3] = dns_loading2(λ, τ[i])
+        Z[i, 2] = Siphon.dns_loading1(λ, τ[i])
+        Z[i, 3] = Siphon.dns_loading2(λ, τ[i])
     end
     return Z
 end
@@ -317,7 +313,7 @@ spec = custom_ssm(
     Z = Z_expr,
     H = diag_free(6, :var_obs),
     T = diag_free(3, :φ; lower=-0.999, upper=0.999, init=0.9),
-    R = identity_mat(3),
+    R = I,
     Q = diag_free(3, :var_factor),
     a1 = [0.0, 0.0, 0.0],
     P1 = 1e4 * Matrix(1.0I, 3, 3),
@@ -330,12 +326,15 @@ spec = custom_ssm(
 Siphon.jl provides convenience functions for DNS models:
 
 ```julia
-# Build DNS Z matrix directly
-Z = build_dns_loadings(maturities, :λ; λ_init=0.0609)
+# DNS loadings as a MatrixExpr with the free decay parameter :λ
+Z = Siphon.build_dns_loadings(maturities; λ_init=0.0609)
 
-# Or Svensson (4-factor) loadings
-Z = build_svensson_loadings(maturities, :λ1, :λ2; λ1_init=0.05, λ2_init=0.10)
+# Svensson (4-factor) loadings with decay parameters :λ1 and :λ2
+Z = Siphon.build_svensson_loadings(maturities; λ1_init=0.05, λ2_init=0.10)
 ```
+
+Both return a `MatrixExpr` that can be passed as `Z` to `custom_ssm`.
+[`dns_model`](@ref) builds the complete DNS specification.
 
 ## Putting It All Together: A Complete Example
 
@@ -355,8 +354,8 @@ spec = custom_ssm(
     H = diag_free(2, :var_obs; init=0.5),
     T = [FreeParam(:φ_1, init=0.8, lower=-0.99, upper=0.99)  0.0;
          0.0  FreeParam(:φ_2, init=0.6, lower=-0.99, upper=0.99)],
-    R = identity_mat(2),
-    Q = cov_free(2, :Q; init_σ=1.0),
+    R = I,
+    Q = cov_free(2, :Q; init_sd=1.0),
     a1 = [0.0, 0.0],
     P1 = 10.0 * Matrix(1.0I, 2, 2),
     name = :BivariateAR1
@@ -382,8 +381,8 @@ end
 # Get smoothed states
 ss = build_linear_state_space(spec, result.θ, y)
 filt = kalman_filter(ss.p, y, ss.a1, ss.P1)
-smooth = kalman_smoother(ss.p.Z, ss.p.T, filt.at, filt.Pt, filt.vt, filt.Ft)
-println("\nSmoothed state at t=100: ", smooth.alpha[:, 100])
+smooth = kalman_smoother(filt)
+println("\nSmoothed state at t=100: ", smoothed_states(smooth)[:, 100])
 ```
 
 ## Tips and Best Practices

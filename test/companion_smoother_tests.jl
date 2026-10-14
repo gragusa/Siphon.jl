@@ -95,7 +95,7 @@ end
     # quarters apart and there is no shift block at all.
     dense = randn(Xoshiro(5), s.m, s.m)
     dense ./= 2 * maximum(abs, eigvals(dense))
-    update_params!(ws; Tmat = dense)
+    update_params!(ws; T = dense)
     @test_throws "not block-companion" set_companion_structure!(ws, s.nser)
     @test companion_block(ws) == 0
 end
@@ -116,7 +116,7 @@ end
 
     dense = randn(Xoshiro(6), s.m, s.m)
     dense ./= 2 * maximum(abs, eigvals(dense))
-    update_params!(ws; Tmat = dense)
+    update_params!(ws; T = dense)
     @test_throws "declares a companion transition" kalman_filter!(ws, s.y)
 end
 
@@ -128,7 +128,7 @@ end
 
     redrawn = copy(s.Tm)
     redrawn[1:s.nser, :] = 0.1 .* randn(Xoshiro(7), s.nser, s.m)
-    update_params!(ws; Tmat = redrawn)
+    update_params!(ws; T = redrawn)
     @test kalman_filter!(ws, s.y) isa Real
     @test companion_block(ws) == s.nser
 end
@@ -155,8 +155,8 @@ end
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
 
-    filter_and_smooth!(wg, s.y)
-    filter_and_smooth!(wc, s.y)
+    kalman_filter_and_smooth!(wg, s.y; crosscov = true)
+    kalman_filter_and_smooth!(wc, s.y; crosscov = true)
 
     @test wc.αs == wg.αs
     @test wc.Vs == wg.Vs
@@ -184,8 +184,8 @@ end
     wg = _companion_workspace(s)
     wm = _companion_workspace(s)
 
-    filter_and_smooth!(wg, s.y; crosscov = false)
-    filter_and_smooth!(wm, s.y; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(wg, s.y; crosscov = false)
+    kalman_filter_and_smooth!(wm, s.y; crosscov = false, covariances = false)
 
     scale = max(1, maximum(abs, wg.αs))
     @test maximum(abs, wm.αs - wg.αs) < 1e-11 * scale
@@ -196,8 +196,8 @@ end
     wg = _companion_workspace(s; block = s.nser)
     wm = _companion_workspace(s; block = s.nser)
 
-    filter_and_smooth!(wg, s.y; crosscov = false)
-    filter_and_smooth!(wm, s.y; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(wg, s.y; crosscov = false)
+    kalman_filter_and_smooth!(wm, s.y; crosscov = false, covariances = false)
 
     scale = max(1, maximum(abs, wg.αs))
     @test maximum(abs, wm.αs - wg.αs) < 1e-11 * scale
@@ -240,7 +240,7 @@ end
     post = mu + Sig * Zb' * (pinv(Zb * Sig * Zb') * (yv - Zb * mu))
 
     ws = _companion_workspace(s; block = p)
-    filter_and_smooth!(ws, s.y; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(ws, s.y; crosscov = false, covariances = false)
 
     @test maximum(abs, vec(ws.αs) - post) < 1e-6 * max(1, maximum(abs, post))
 end
@@ -253,6 +253,21 @@ end
         ws; crosscov = true, covariances = false)
 end
 
+@testset "mean-only smoother — the covariance accessors throw afterwards" begin
+    s = _companion_setup()
+    ws = _companion_workspace(s)
+    kalman_filter_and_smooth!(ws, s.y)
+    kalman_smoother!(ws; covariances = false)
+
+    @test smoothed_states(ws) === ws.αs
+    @test_throws "smoothed means only" smoothed_states_cov(ws)
+    @test_throws "smoothed means only" SmootherResult(ws)
+    @test_throws "skipped the cross-lag" crosslag_covs(ws)
+
+    kalman_smoother!(ws)
+    @test smoothed_states_cov(ws) === ws.Vs
+end
+
 @testset "mean-only smoother — a fully missing dataset gives the prior path" begin
     # With nothing observed the smoothed mean is the prior mean at every period,
     # which exercises the branch that never touches an observation.
@@ -260,7 +275,7 @@ end
     ws = _companion_workspace(s)
     ynan = fill(NaN, s.nser, s.n)
 
-    filter_and_smooth!(ws, ynan; crosscov = false, covariances = false)
+    kalman_filter_and_smooth!(ws, ynan; crosscov = false, covariances = false)
     expected = copy(s.a1)
     for t in 1:s.n
         @test ws.αs[:, t] ≈ expected atol = 1e-12
@@ -275,8 +290,8 @@ end
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
 
-    dg = simulation_smoother(wg, s.y; rng = Xoshiro(11), n_draws = 3)
-    dc = simulation_smoother(wc, s.y; rng = Xoshiro(11), n_draws = 3)
+    dg = simulation_smoother(wg, s.y, 3; rng = Xoshiro(11))
+    dc = simulation_smoother(wc, s.y, 3; rng = Xoshiro(11))
 
     @test maximum(abs, dg - dc) < 1e-12 * max(1, maximum(abs, dg))
 end
@@ -291,8 +306,8 @@ end
     wc = _companion_workspace(s; block = s.nser)
 
     nd = 4000
-    dg = simulation_smoother(wg, s.y; rng = Xoshiro(13), n_draws = nd)
-    dc = simulation_smoother(wc, s.y; rng = Xoshiro(13), n_draws = nd)
+    dg = simulation_smoother(wg, s.y, nd; rng = Xoshiro(13))
+    dc = simulation_smoother(wc, s.y, nd; rng = Xoshiro(13))
     fg = reshape(dg, s.m * s.n, nd)
     fc = reshape(dc, s.m * s.n, nd)
 

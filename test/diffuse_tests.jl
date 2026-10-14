@@ -8,6 +8,7 @@ using Test
 using Siphon
 using LinearAlgebra
 using Random
+using ForwardDiff
 
 @testset "Exact diffuse filter - local level model" begin
     Random.seed!(1234)
@@ -119,6 +120,153 @@ end
     @test isfinite(loglikelihood(result))
     d = diffuse_period(result)
     @test d >= 2  # Need at least 2 observations to identify both states
+end
+
+@testset "Diffuse filter - multi-step diffuse period matches the approximate limit" begin
+    # A local linear trend has d = 2, so the second diffuse step starts from a
+    # nonzero Pstar. After the diffuse period the exact filter is the κ → ∞ limit
+    # of the approximate one; the approximate likelihood of periods d+1:n is the
+    # difference of two full-sample likelihoods.
+    rng = MersenneTwister(8901)
+    n = 40
+    y = cumsum(cumsum(randn(rng, 1, n); dims = 2); dims = 2) .+ 5 .* randn(rng, 1, n)
+    p = KFParms([1.0 0.0], [25.0;;], [1.0 1.0; 0.0 1.0], Matrix(1.0I, 2, 2),
+        [1.0 0.0; 0.0 0.1])
+    a1, P1_star, P1_inf = zeros(2), zeros(2, 2), Matrix(1.0I, 2, 2)
+    res = kalman_filter(p, y, a1, P1_star, P1_inf)
+    d = diffuse_period(res)
+    @test d == 2
+    @test diffuse_flags(res) == [1, 1]
+
+    P_big = 1e8 * Matrix(1.0I, 2, 2)
+    approx = kalman_filter(p, y, a1, P_big)
+    @test res.Pt[:, :, d + 1] ≈ approx.Pt[:, :, d + 1] rtol = 1e-5
+    @test res.loglik ≈
+          kalman_loglik(p, y, a1, P_big) -
+          kalman_loglik(p, y[:, 1:d], a1, P_big) rtol = 1e-6
+    @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
+    @test predicted_states(res)[:, (d + 1):end] ≈ predicted_states(approx)[:, (d + 1):end] rtol = 1e-5
+
+    # The last diffuse step resolves every diffuse direction, so its filtered
+    # covariance is finite and matches the limit too.
+    @test res.Ptt[:, :, d] ≈ approx.Ptt[:, :, d] rtol = 1e-5
+
+    # Covariances stay symmetric, and the stored filtered covariance predicts the
+    # next period's covariance in every period, diffuse or not.
+    RQR = p.R * p.Q * p.R'
+    @test all(t -> res.Pt[:, :, t] ≈ res.Pt[:, :, t]', 1:n)
+    @test all(t -> res.Pt[:, :, t + 1] ≈ p.T * res.Ptt[:, :, t] * p.T' + RQR, 1:(n - 1))
+
+    # The in-place filter stores the same quantities, including the diffuse-period
+    # gain K⁽⁰⁾ and filtered covariance.
+    ws = DiffuseKalmanWorkspace(p.Z, p.H, p.T, p.R, p.Q, a1, P1_star, P1_inf, n)
+    @test kalman_filter!(ws, y) ≈ res.loglik
+    @test predicted_states(ws) ≈ predicted_states(res)
+    @test filtered_states(ws) ≈ filtered_states(res)
+    @test predicted_states_cov(ws) ≈ res.Pt
+    @test filtered_states_cov(ws) ≈ res.Ptt
+    @test kalman_gains(ws) ≈ kalman_gains(res)
+end
+
+@testset "Diffuse filter - singular nonzero Finf is processed row by row" begin
+    # Two series load on one diffuse level, so Finf = Z*Pinf*Z' is singular but
+    # nonzero. The first row resolves the level; the second contributes the
+    # density of the difference of the two series. The exact likelihood is the
+    # κ → ∞ limit of the approximate one plus ½ log(2πκ) for the diffuse row.
+    rng = MersenneTwister(2)
+    n = 40
+    y = cumsum(randn(rng, 1, n); dims = 2) .+ randn(rng, 2, n)
+    p = KFParms(reshape([1.0, 1.0], 2, 1), [1.0 0.0; 0.0 2.0], [1.0;;], [1.0;;], [0.5;;])
+    res = kalman_filter(p, y, [0.0], [0.0;;], [1.0;;])
+    @test diffuse_period(res) == 1
+    @test diffuse_flags(res) == [2]
+
+    # The filtered variance of the level is h₁h₂/(h₁ + h₂). A Float64
+    # approximate filter loses that to cancellation, so the reference runs in
+    # BigFloat.
+    @test res.Ptt[1, 1, 1] ≈ 2 / 3
+    setprecision(BigFloat, 256) do
+        κ = big(10)^20
+        pb = KFParms(big.(p.Z), big.(p.H), big.(p.T), big.(p.R), big.(p.Q))
+        approx = kalman_filter(pb, big.(y), [big(0.0)], [κ;;])
+        @test res.loglik ≈ approx.loglik + log(2π * κ) / 2 atol = 1e-10
+        @test predicted_states(res) ≈ predicted_states(approx) atol = 1e-12
+        @test res.Ptt ≈ approx.Ptt atol = 1e-12
+    end
+    @test kalman_loglik(p, y, [0.0], [0.0;;], [1.0;;]) ≈ res.loglik
+
+    ws = DiffuseKalmanWorkspace(p.Z, p.H, p.T, p.R, p.Q, [0.0], [0.0;;], [1.0;;], n)
+    @test kalman_filter!(ws, y) ≈ res.loglik
+    @test diffuse_flags(ws) == [2]
+    @test filtered_states(ws) ≈ filtered_states(res)
+    @test kalman_gains(ws) ≈ kalman_gains(res)
+
+    # The likelihood is differentiable through the row-by-row step.
+    ll(θ) = kalman_loglik(
+        KFParms(reshape([1.0, 1.0], 2, 1), [θ[1] 0.0; 0.0 θ[2]], [1.0;;], [1.0;;],
+            [θ[3];;]), y, [0.0], [0.0;;], [1.0;;])
+    θ = [1.0, 2.0, 0.5]
+    h = 1e-6
+    fd = [(ll(θ + h * e) - ll(θ - h * e)) / (2h) for e in eachcol(Matrix(1.0I, 3, 3))]
+    @test ForwardDiff.gradient(ll, θ) ≈ fd rtol = 1e-5
+end
+
+@testset "Diffuse filter - row-by-row step with correlated errors and a partial period" begin
+    # Three noisy measurements of a local linear trend with correlated errors.
+    # Fully observed, Finf is singular in both diffuse steps. With rows 2 and 3
+    # missing at t = 1 and row 1 at t = 2, the first step is a one-row exact step
+    # and the second a row-by-row step on a partial period. The reference is the
+    # approximate filter at κ = 1e20 in BigFloat, so every quantity must match
+    # its κ → ∞ limit, and the exact likelihood exceeds the approximate one by
+    # ½ log(2πκ) for each of the two diffuse rows (both have Finf,ᵢ = 1 here).
+    setprecision(BigFloat, 256) do
+        n = 12
+        Z = [1.0 0.0; 1.0 0.0; 1.0 0.0]
+        H = [2.0 0.5 0.3; 0.5 1.0 0.2; 0.3 0.2 1.5]
+        Tm = [1.0 1.0; 0.0 1.0]
+        R, Q = Matrix(1.0I, 2, 2), [0.5 0.0; 0.0 0.05]
+        p = KFParms(Z, H, Tm, R, Q)
+        pb = KFParms(big.(Z), big.(H), big.(Tm), big.(R), big.(Q))
+        a1, P1_star, P1_inf = zeros(2), zeros(2, 2), Matrix(1.0I, 2, 2)
+        κ = big(10)^20
+        RQR = R * Q * R'
+
+        for (partial, flags) in ((false, [2, 2]), (true, [1, 2]))
+            rng = MersenneTwister(1)
+            y = repeat(cumsum(randn(rng, n))', 3) .+ randn(rng, 3, n)
+            if partial
+                y[2:3, 1] .= NaN
+                y[1, 2] = NaN
+            end
+            res = kalman_filter(p, y, a1, P1_star, P1_inf)
+            d = diffuse_period(res)
+            @test d == 2
+            @test diffuse_flags(res) == flags
+
+            approx = kalman_filter(pb, big.(y), big.(a1), κ .* big.(P1_inf))
+            @test res.loglik ≈ approx.loglik + log(2π * κ) atol = 1e-10
+            @test kalman_loglik(p, y, a1, P1_star, P1_inf) ≈ res.loglik
+            @test res.Pt[:, :, d + 1] ≈ approx.Pt[:, :, d + 1] atol = 1e-12
+            @test res.Ptt[:, :, d] ≈ approx.Ptt[:, :, d] atol = 1e-12
+            @test res.at[:, (d + 1):end] ≈ approx.at[:, (d + 1):end] atol = 1e-12
+            @test res.att[:, d:end] ≈ approx.att[:, d:end] atol = 1e-12
+
+            # The stored filtered covariance and gain predict the next period.
+            @test all(t -> res.Pt[:, :, t + 1] ≈ Tm * res.Ptt[:, :, t] * Tm' + RQR,
+                1:(n - 1))
+            @test all(1:(n - 1)) do t
+                pt = count(!isnan, view(y, :, t))
+                res.at[:, t + 1] ≈ Tm * res.at[:, t] + res.Kt[:, 1:pt, t] * res.vt[1:pt, t]
+            end
+
+            ws = DiffuseKalmanWorkspace(Z, H, Tm, R, Q, a1, P1_star, P1_inf, n)
+            @test kalman_filter!(ws, y) ≈ res.loglik
+            @test diffuse_flags(ws) == flags
+            @test filtered_states(ws) ≈ filtered_states(res)
+            @test filtered_states_cov(ws) ≈ res.Ptt
+            @test kalman_gains(ws) ≈ kalman_gains(res)
+        end
+    end
 end
 
 @testset "Diffuse filter - missing data handling" begin
@@ -399,10 +547,20 @@ end
     @test Siphon.shock_dim(ws) == r_dim
     @test Siphon.n_times(ws) == n
 
-    # Check storage dimensions
+    # The filter accessors throw until the filter has run
+    @test_throws "Call kalman_filter!(ws, y) first" predicted_states(ws)
+    @test_throws "Call kalman_filter!(ws, y) first" diffuse_flags(ws)
+
+    # Check storage dimensions after a run
+    set_params!(ws, [1.0 0.0 0.0; 0.0 1.0 0.0], Matrix(1.0I, p_dim, p_dim),
+        Matrix(0.5I, m_dim, m_dim), [1.0 0.0; 0.0 1.0; 0.0 0.0],
+        Matrix(1.0I, r_dim, r_dim))
+    Siphon.set_initial_diffuse!(ws, zeros(m_dim), Matrix(1.0I, m_dim, m_dim),
+        zeros(m_dim, m_dim))
+    kalman_filter!(ws, randn(MersenneTwister(5), p_dim, n))
     @test size(predicted_states(ws)) == (m_dim, n)
     @test size(filtered_states(ws)) == (m_dim, n)
-    @test size(variances_predicted_states(ws)) == (m_dim, m_dim, n)
+    @test size(predicted_states_cov(ws)) == (m_dim, m_dim, n)
     @test size(prediction_errors(ws)) == (p_dim, n)
     @test size(kalman_gains(ws)) == (m_dim, p_dim, n)
 end

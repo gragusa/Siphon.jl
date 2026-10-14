@@ -6,54 +6,80 @@ Matrix-based state-space model specification for custom models.
 Use `custom_ssm` when the pre-built templates don't fit your model.
 """
 
-export custom_ssm, FreeParam, @P
-
 """
-    FreeParam(name; init=0.0, lower=-Inf, upper=Inf)
+    FreeParam(name; lower, upper, init)
+    FreeParam(name, lower, upper, init)
 
-Mark a matrix element as a free parameter to be estimated.
+Mark a matrix element as a free parameter to be estimated; a plain number marks
+a fixed element. The arguments are in the same order as [`SSMParameter`](@ref).
 
-# Arguments
-- `name::Symbol`: Parameter name
-- `init`: Initial value for optimization
-- `lower`, `upper`: Bounds for optimization (TransformVariables.jl handles transformations)
+Any field may be left unset (`nothing`). Unset bounds mean unbounded. An unset
+`init` is a point inside the bounds: the midpoint of two finite bounds, one unit
+inside a single finite bound, or `0.0`. Maximum likelihood rescales an unset
+`init` on the diagonal of `H` or `Q` to the data (see [`optimize_ssm`](@ref)).
+`custom_ssm` and `custom_ekf` require a name.
+
+The same name may appear in several cells, which then share one parameter. Every
+occurrence must give the same bounds and `init`.
 
 # Example
 ```julia
-# A variance parameter (estimate variance directly, lower=0 triggers asℝ₊)
-H = [FreeParam(:var_obs, init=100.0, lower=0.0)]
+# A variance (lower = 0 gives a positive transformation); init defaults to 1.0
+H = [FreeParam(:var_obs; lower = 0.0)]
 
-# A coefficient with bounds
-T = [FreeParam(:ρ, init=0.8, lower=-0.99, upper=0.99)]
+# A bounded coefficient
+T = [FreeParam(:ρ; lower = -0.99, upper = 0.99, init = 0.8)]
 ```
 """
 struct FreeParam
-    name::Symbol
-    init::Float64
-    lower::Float64
-    upper::Float64
+    name::Union{Symbol, Nothing}
+    lower::Union{Float64, Nothing}
+    upper::Union{Float64, Nothing}
+    init::Union{Float64, Nothing}
+
+    function FreeParam(name, lower, upper, init)
+        lo = _float_or_nothing(lower)
+        up = _float_or_nothing(upper)
+        x = _float_or_nothing(init)
+        lo !== nothing && up !== nothing && !(lo < up) &&
+            throw(ArgumentError("FreeParam $(repr(name)): lower bound $lo must be below upper bound $up"))
+        if x !== nothing
+            _check_init(name, something(lo, -Inf), something(up, Inf), x)
+        end
+        new(name, lo, up, x)
+    end
 end
 
-function FreeParam(name::Symbol; init = 0.0, lower = -Inf, upper = Inf)
-    FreeParam(name, Float64(init), Float64(lower), Float64(upper))
+function FreeParam(name::Union{Symbol, Nothing} = nothing;
+        lower = nothing, upper = nothing, init = nothing)
+    FreeParam(name, lower, upper, init)
 end
 
-# Short alias for convenience
-const P = FreeParam
+_float_or_nothing(::Nothing) = nothing
+_float_or_nothing(x::Real) = Float64(x)
 
-"""
-    @P(name, init=0.0)
+# The parameter a FreeParam declares in `custom_ssm`/`custom_ekf`.
+function SSMParameter(fp::FreeParam)
+    fp.name === nothing &&
+        throw(ArgumentError("a FreeParam in a model matrix needs a name, e.g. FreeParam(:ρ)"))
+    SSMParameter(fp.name; lower = something(fp.lower, -Inf),
+        upper = something(fp.upper, Inf), init = fp.init)
+end
 
-Shorthand macro for creating a FreeParam.
-
-# Examples
-```julia
-@P(:σ_obs, 10.0)           # Same as FreeParam(:σ_obs, init=10.0)
-@P(:ρ, 0.8)                # Same as FreeParam(:ρ, init=0.8)
-```
-"""
-macro P(name, init = 0.0)
-    :(FreeParam($(esc(name)), init = $(esc(init))))
+# Add `p` to `params` unless a parameter of that name is already there, in which
+# case the two must agree.
+function _add_param!(params::Vector{SSMParameter{Float64}}, param_set::Set{Symbol},
+        p::SSMParameter)
+    if p.name in param_set
+        q = params[findfirst(x -> x.name == p.name, params)]
+        (q.lower, q.upper, q.init) == (p.lower, p.upper, p.init) || throw(ArgumentError(
+            "parameter :$(p.name) is declared twice with different settings: " *
+            "(lower, upper, init) = $((q.lower, q.upper, q.init)) and " *
+            "$((p.lower, p.upper, p.init))"))
+        return params
+    end
+    push!(param_set, p.name)
+    push!(params, p)
 end
 
 # Type for matrix elements that can be Real or FreeParam
@@ -64,8 +90,10 @@ const MatrixInput = Union{Real, FreeParam}
 
 Create a state-space model specification from explicit matrices.
 
-Use `FreeParam(:name, init=val, lower=lb, upper=ub)` to mark elements for estimation.
-Use regular numbers for fixed values.
+Use `FreeParam(:name; lower, upper, init)` to mark elements for estimation and
+plain numbers for fixed values. Each matrix may be a matrix or vector of such
+elements, a `Diagonal`, a scaled identity `I` (sized from the other inputs), a
+[`cov_free`](@ref) marker, or a `MatrixExpr`.
 
 # Arguments
 - `Z`: Observation matrix (p × m)
@@ -73,23 +101,37 @@ Use regular numbers for fixed values.
 - `T`: Transition matrix (m × m)
 - `R`: Selection matrix (m × r)
 - `Q`: State covariance (r × r)
-- `a1`: Initial state mean (m-vector)
+- `a1`: Initial state mean (m-vector); it sets the state dimension m
 - `P1`: Initial state covariance (m × m)
 - `name`: Model name (default: :CustomSSM)
+
+`I` is sized as m × m for `Z`, `T`, `R` and `P1`, as p × p for `H`, and as
+r × r for `Q`, where p and r are the row count of `Z` and the column count of `R`.
 
 # Example
 ```julia
 # Local level model
 spec = custom_ssm(
     Z = [1.0],
-    H = [FreeParam(:var_obs, init=225.0, lower=0.0)],
+    H = [FreeParam(:var_obs; lower = 0.0, init = 225.0)],
     T = [1.0],
     R = [1.0],
-    Q = [FreeParam(:var_level, init=100.0, lower=0.0)],
+    Q = [FreeParam(:var_level; lower = 0.0, init = 100.0)],
     a1 = [0.0],
     P1 = [1e7]
 )
 param_names(spec)  # [:var_obs, :var_level]
+
+# Local linear trend with identity selection and diffuse P1
+spec = custom_ssm(
+    Z = [1.0 0.0],
+    H = [FreeParam(:var_obs; lower = 0.0)],
+    T = [1.0 1.0; 0.0 1.0],
+    R = I,
+    Q = diag_free([:var_level, :var_slope]),
+    a1 = zeros(2),
+    P1 = 1e7I
+)
 ```
 
 See also: `local_level`, `ar1`, `arma`, `dynamic_factor` for pre-built templates.
@@ -98,7 +140,14 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     # Collect parameters and MatrixExpr objects
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
+
+    # Size any `I` inputs: a1 gives m, Z gives p, R gives r.
+    a1_vec = _to_vector(a1)
+    m = length(a1_vec)
+    Z, T, R, P1 = map(x -> _sized(x, m), (Z, T, R, P1))
+    H = _sized(H, _input_dims(Z)[1])
+    Q = _sized(Q, _input_dims(R)[2])
 
     # Process each matrix, handling MatrixExpr specially
     Z_spec, Z_dims = _process_matrix_input(:Z, Z, params, param_set, matrix_exprs)
@@ -108,8 +157,6 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     Q_spec, Q_dims = _process_matrix_input(:Q, Q, params, param_set, matrix_exprs)
     P1_spec, P1_dims = _process_matrix_input(:P1, P1, params, param_set, matrix_exprs)
 
-    # Process a1 vector
-    a1_vec = _to_vector(a1)
     a1_elems = _build_vector_spec(a1_vec, params, param_set)
 
     # Infer dimensions
@@ -145,66 +192,40 @@ function custom_ssm(; Z, H, T, R, Q, a1, P1, name::Symbol = :CustomSSM)
     )
 end
 
-# Check if something is a MatrixExpr (duck typing to avoid circular dependency)
-function _is_matrix_expr(x)
-    hasfield(typeof(x), :builder) &&
-        hasfield(typeof(x), :dims) &&
-        hasfield(typeof(x), :params)
-end
+# A scaled identity becomes an n × n matrix; other inputs pass through.
+_sized(x, n::Int) = x
+_sized(J::UniformScaling, n::Int) = Matrix(J, n, n)
 
-# Check if something is a CovFree specification
-_is_cov_free(x) = x isa CovFree
+_input_dims(x::CovFree) = (x.n, x.n)
+_input_dims(x::MatrixExpr) = x.dims
+_input_dims(x) = size(_to_matrix(x))
 
 """
 Process a matrix input, handling regular matrices, MatrixExpr, and CovFree.
 Returns (SSMMatrixSpec, dims).
 """
 function _process_matrix_input(name::Symbol, input, params, param_set, matrix_exprs)
-    if _is_cov_free(input)
-        # Handle CovFree - create parameters and CovMatrixExpr
+    if input isa CovFree
         n = input.n
         prefix = input.prefix
-
-        # Create σ parameters (positive, use lower=0.0 for asℝ₊ transform)
-        σ_param_names = Symbol[]
-        for i in 1:n
-            pname = Symbol("$(prefix)_σ_$i")
-            if !(pname in param_set)
-                push!(
-                    params,
-                    SSMParameter(pname; lower = 0.0, upper = Inf, init = input.init_σ)
-                )
-                push!(param_set, pname)
-            end
-            push!(σ_param_names, pname)
+        sd_names = [Symbol("$(prefix)_sd_$i") for i in 1:n]
+        corr_names = [Symbol("$(prefix)_corr_$i") for i in 1:(n * (n - 1) ÷ 2)]
+        for pname in sd_names
+            _add_param!(params, param_set,
+                SSMParameter(pname; lower = 0.0, upper = Inf, init = input.init_sd))
         end
-
-        # Create correlation parameters (unconstrained)
-        n_corr = n * (n - 1) ÷ 2
-        corr_param_names = Symbol[]
-        for i in 1:n_corr
-            pname = Symbol("$(prefix)_corr_$i")
-            if !(pname in param_set)
-                push!(params, SSMParameter(pname; lower = -Inf, upper = Inf, init = 0.0))
-                push!(param_set, pname)
-            end
-            push!(corr_param_names, pname)
+        for pname in corr_names
+            _add_param!(params, param_set, SSMParameter(pname; init = 0.0))
         end
-
-        # Create CovMatrixExpr and store it
-        expr = CovMatrixExpr(n, σ_param_names, corr_param_names)
-        matrix_exprs[name] = expr
+        matrix_exprs[name] = CovMatrixExpr(n, sd_names, corr_names)
 
         # Return placeholder spec with correct dimensions
         return (SSMMatrixSpec((n, n)), (n, n))
 
-    elseif _is_matrix_expr(input)
+    elseif input isa MatrixExpr
         # It's a MatrixExpr - extract params and store it
         for p in input.params
-            if !(p.name in param_set)
-                push!(params, p)
-                push!(param_set, p.name)
-            end
+            _add_param!(params, param_set, p)
         end
         matrix_exprs[name] = input
         # Return a placeholder spec with correct dimensions
@@ -273,6 +294,10 @@ function _to_matrix(x::FreeParam)
     Matrix{MatrixInput}(fill(x, 1, 1))
 end
 
+function _to_matrix(::UniformScaling)
+    throw(ArgumentError("cannot size `I` here; pass an explicit matrix such as Matrix(1.0I, n, n)"))
+end
+
 # Helper to convert input to vector
 function _to_vector(x::AbstractVector{<:MatrixInput})
     convert(Vector{MatrixInput}, x)
@@ -316,20 +341,7 @@ function _build_matrix_spec(
 
         elem = mat[i, j]
         if elem isa FreeParam
-            # Add parameter if not already added
-            if !(elem.name in param_set)
-                push!(
-                    params,
-                    SSMParameter(
-                        elem.name;
-                        init = elem.init,
-                        lower = elem.lower,
-                        upper = elem.upper
-                    )
-                )
-                push!(param_set, elem.name)
-            end
-            # Create parameter reference
+            _add_param!(params, param_set, SSMParameter(elem))
             spec.elements[(i, j)] = ParameterRef(elem.name)
         else
             # Fixed value
@@ -350,18 +362,7 @@ function _build_vector_spec(
 
     for elem in vec
         if elem isa FreeParam
-            if !(elem.name in param_set)
-                push!(
-                    params,
-                    SSMParameter(
-                        elem.name;
-                        init = elem.init,
-                        lower = elem.lower,
-                        upper = elem.upper
-                    )
-                )
-                push!(param_set, elem.name)
-            end
+            _add_param!(params, param_set, SSMParameter(elem))
             push!(elems, ParameterRef(elem.name))
         else
             push!(elems, FixedValue(Float64(elem)))

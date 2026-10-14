@@ -43,12 +43,12 @@ println("\n=== Model Specifications ===")
 spec_diag = dns_model(
     maturities;
     T_structure = :diagonal,  # 3 params: T_L, T_S, T_C
-    H_structure = :diagonal,  # p params: H_1, ..., H_p
-    Q_structure = :diagonal,  # 3 params: Q_L, Q_S, Q_C
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    H_structure = :diagonal,  # p params: var_obs_1, ..., var_obs_p
+    Q_structure = :diagonal,  # 3 params: var_L, var_S, var_C
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("\nDiagonal model parameters: ", param_names(spec_diag))
@@ -59,11 +59,11 @@ spec_full = dns_model(
     maturities;
     T_structure = :full,      # 9 params: T_1_1, T_1_2, ..., T_3_3
     H_structure = :diagonal,  # p params
-    Q_structure = :full,      # 6 params (via Cholesky): Q_σ_L, Q_σ_S, Q_σ_C, Q_corr_1, Q_corr_2, Q_corr_3
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    Q_structure = :full,      # 6 params (via Cholesky): Q_sd_L, Q_sd_S, Q_sd_C, Q_corr_1, Q_corr_2, Q_corr_3
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 println("\nFull model parameters: ", param_names(spec_full))
@@ -180,11 +180,11 @@ P1 = 1e4 * Matrix{Float64}(I, 3, 3)
 
 # Filter and smooth
 filt = kalman_filter(p_final, yields, a1, P1)
-smooth = kalman_smoother(Z_opt, T_est, filt.at, filt.Pt, filt.vt, filt.Ft)
+smooth = kalman_smoother(filt)
 
 println("Correlation between true and smoothed factors:")
 for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-    corr = cor(factors[i, :], smooth.alpha[i, :])
+    corr = cor(factors[i, :], smoothed_states(smooth)[i, :])
     println("  $name: ", round(corr, digits = 4))
 end
 
@@ -219,10 +219,10 @@ spec_diag_T_full = dns_model(
     T_structure = :full,
     H_structure = :diagonal,
     Q_structure = :diagonal,  # Diagonal Q
-    λ_init = 0.06,
-    T_init = 0.95,
-    Q_init = 0.01,
-    H_init = 0.001
+    λ = FreeParam(init = 0.06),
+    T = FreeParam(init = 0.95),
+    Q = FreeParam(init = 0.01),
+    H = FreeParam(init = 0.001)
 )
 
 result_diag = profile_em_ssm(
@@ -295,10 +295,10 @@ if isfile(data_path)
         T_structure = :full,
         H_structure = :diagonal,
         Q_structure = :full,
-        λ_init = 0.06,
-        T_init = 0.95,
-        Q_init = 0.1,
-        H_init = 0.01
+        λ = FreeParam(init = 0.06),
+        T = FreeParam(init = 0.95),
+        Q = FreeParam(init = 0.1),
+        H = FreeParam(init = 0.01)
     )
 
     println("\n=== Profile EM on Real Data ===")
@@ -349,18 +349,11 @@ if isfile(data_path)
     P1_real = 1e4 * Matrix{Float64}(I, 3, 3)
 
     filt_real = kalman_filter(p_real, selected_yields, a1_real, P1_real)
-    smooth_real = kalman_smoother(
-        Z_real,
-        T_real,
-        filt_real.at,
-        filt_real.Pt,
-        filt_real.vt,
-        filt_real.Ft
-    )
+    smooth_real = kalman_smoother(filt_real)
 
     println("\nSmoothed factor statistics:")
     for (i, name) in enumerate(["Level", "Slope", "Curvature"])
-        factor = smooth_real.alpha[i, :]
+        factor = smoothed_states(smooth_real)[i, :]
         println(
             "  $name: mean = ",
             round(mean(factor), digits = 2),

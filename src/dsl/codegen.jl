@@ -9,20 +9,14 @@ Supports both:
 - NamedTuple parameters (accessed by name, from TransformVariables)
 """
 
-export CovMatrixExpr
-
-using LinearAlgebra
-using TransformVariables
-using TransformVariables: corr_cholesky_factor
-
 # ============================================
 # Transformation Builder
 # ============================================
 
 """
-    build_transformation(spec::SSMSpec)
+    build_transformation(spec::AbstractSSMSpec)
 
-Build a TransformVariables transformation from an SSMSpec.
+Build a TransformVariables transformation from a model specification.
 
 Returns a transformation that maps ℝⁿ → NamedTuple with the parameter names
 and appropriate constraints (positive for variances, bounded for others).
@@ -31,13 +25,17 @@ and appropriate constraints (positive for variances, bounded for others).
 ```julia
 spec = local_level()
 t = build_transformation(spec)
-# t transforms ℝ² → (σ_obs = ..., σ_level = ...)
+# t transforms ℝ² → (var_obs = ..., var_level = ...)
 
+using TransformVariables: transform
 θ_nt = transform(t, randn(2))
 # θ_nt is a NamedTuple with positive values
+
+# Without loading TransformVariables, use transform_to_constrained:
+θ_nt, logjac = transform_to_constrained(spec, randn(2))
 ```
 """
-function build_transformation(spec::SSMSpec)
+function build_transformation(spec::AbstractSSMSpec)
     transforms = [_param_to_transform(p) for p in spec.params]
     names = Tuple(p.name for p in spec.params)
     as(NamedTuple{names}(Tuple(transforms)))
@@ -48,27 +46,22 @@ end
 
 Convert a parameter's bounds to a TransformVariables scalar transformation.
 
-Note: For semi-infinite intervals `[a, ∞)` where `a >= 0`, we use `asℝ₊` (exp transform).
-Small positive lower bounds like 1e-6 are treated as zero since they are typically
-numerical safeguards rather than meaningful constraints.
+- `(-∞, ∞)`: identity
+- `[0, ∞)`: `exp`
+- `[a, ∞)` or `(-∞, b]`: shifted `exp`, so the bound holds for every finite `a`, `b`
+- `[a, b]`: scaled logistic
 """
 function _param_to_transform(p::SSMParameter)
     if p.lower == -Inf && p.upper == Inf
-        # Unbounded
         asℝ
-    elseif p.lower >= 0.0 && p.upper == Inf
-        # Positive (common for standard deviations, variances)
-        # Use exp transform - works for any non-negative lower bound
+    elseif p.lower == 0.0 && p.upper == Inf
         asℝ₊
-    elseif p.lower == -Inf && p.upper < Inf
-        # Upper bounded
-        as(Real, -Inf, p.upper)
-    elseif p.lower > -Inf && p.upper < Inf
-        # Bounded interval [a, b] with a < b
-        as(Real, p.lower, p.upper)
     else
-        # Fallback to unbounded
-        asℝ
+        # TransformVariables needs its own `∞` for an open end: a Float64 `Inf`
+        # builds a logistic of infinite width.
+        lo = p.lower == -Inf ? -TransformVariables.∞ : p.lower
+        hi = p.upper == Inf ? TransformVariables.∞ : p.upper
+        as(Real, lo, hi)
     end
 end
 
@@ -91,7 +84,7 @@ Represents Σ = D * Corr * D where:
 - `corr_param_names::Vector{Symbol}`: Names of correlation parameters (unconstrained)
 - `var_init::Vector{Float64}`: Initial variance values (to avoid sqrt/square roundoff)
 """
-struct CovMatrixExpr
+struct CovMatrixExpr <: AbstractMatrixExpr
     n::Int
     σ_param_names::Vector{Symbol}
     corr_param_names::Vector{Symbol}
@@ -184,6 +177,28 @@ function build_from_expr(
     return (Σ + Σ') / 2
 end
 
+"""
+    cov_expr_params(expr::CovMatrixExpr, Σ::AbstractMatrix) -> (σ, corr)
+
+Standard deviations `σ` and unconstrained correlation parameters `corr` for
+which `build_from_expr(expr, θ)` returns `Σ`. Throws an `ArgumentError` unless
+`Σ` is positive definite.
+"""
+function cov_expr_params(expr::CovMatrixExpr, Σ::AbstractMatrix)
+    n = expr.n
+    size(Σ) == (n, n) ||
+        throw(DimensionMismatch("Σ must be $n × $n, got $(size(Σ))"))
+    σ = sqrt.(diag(Σ))
+    all(>(0), σ) ||
+        throw(ArgumentError("Σ must have a positive diagonal, got $(diag(Σ))"))
+    n == 1 && return σ, eltype(σ)[]
+    D⁻¹ = Diagonal(inv.(σ))
+    chol = cholesky(Symmetric(D⁻¹ * Σ * D⁻¹), check = false)
+    issuccess(chol) || throw(ArgumentError("Σ must be positive definite"))
+    corr = TransformVariables.inverse(corr_cholesky_factor(n), UpperTriangular(chol.U))
+    return σ, corr
+end
+
 # ============================================
 # Matrix Building - Core Functions
 # ============================================
@@ -227,34 +242,6 @@ function evaluate_element(elem::ParameterRef, θ::NamedTuple)
     getproperty(θ, elem.name)
 end
 
-function evaluate_element(elem::Expr, θ::NamedTuple)
-    evaluate_expr(elem, θ)
-end
-
-function evaluate_expr(ex::Expr, θ::NamedTuple)
-    if ex.head == :call
-        func = ex.args[1]
-        args = [evaluate_expr(a, θ) for a in ex.args[2:end]]
-        return eval(Expr(:call, func, args...))
-    elseif ex.head == :ref
-        error("Array indexing not supported in parameter expressions")
-    else
-        return eval(ex)
-    end
-end
-
-function evaluate_expr(sym::Symbol, θ::NamedTuple)
-    if haskey(θ, sym)
-        return getproperty(θ, sym)
-    else
-        return eval(sym)
-    end
-end
-
-function evaluate_expr(val::Number, θ::NamedTuple)
-    val
-end
-
 # ============================================
 # Building KFParms and Initial State
 # ============================================
@@ -294,7 +281,7 @@ end
 
 Build a matrix from a MatrixExpr using NamedTuple parameters.
 """
-function build_from_expr(expr, θ::NamedTuple)
+function build_from_expr(expr::MatrixExpr, θ::NamedTuple)
     T = _eltype(θ)
     # Create a Dict for the builder function (it expects Dict)
     θ_dict = Dict{Symbol, T}()
@@ -310,12 +297,30 @@ end
     build_initial_state(spec::SSMSpec, θ::NamedTuple)
 
 Build initial state (a1, P1) from specification and NamedTuple parameters.
+For an exact diffuse spec, `P1` is the finite part `P1_star`; see
+`build_diffuse_covariance` for the diffuse part.
 """
 function build_initial_state(spec::SSMSpec, θ::NamedTuple)
     T = _eltype(θ)
     a1 = T[evaluate_element(elem, θ) for elem in spec.a1]
-    P1 = build_matrix(spec.P1, θ)
+    P1 = build_matrix_or_expr(:P1, spec, θ)
     (a1, P1)
+end
+
+"""
+    build_diffuse_covariance(spec::SSMSpec, θ) -> Union{Nothing, Matrix}
+
+The diffuse part `P1_inf` of the initial state covariance, or `nothing` when
+the spec does not use exact diffuse initialisation.
+"""
+function build_diffuse_covariance(spec::SSMSpec, θ::NamedTuple)
+    spec.P1_inf === nothing ? nothing : build_matrix(spec.P1_inf, θ)
+end
+
+function build_diffuse_covariance(spec::SSMSpec, theta::AbstractVector)
+    spec.P1_inf === nothing && return nothing
+    param_map = Dict{Symbol, Int}(p.name => i for (i, p) in enumerate(spec.params))
+    return build_matrix(spec.P1_inf, theta, param_map)
 end
 
 # ============================================
@@ -354,34 +359,6 @@ function evaluate_element(elem::ParameterRef, theta::AbstractVector, param_map::
     theta[idx]
 end
 
-function evaluate_element(elem::Expr, theta::AbstractVector, param_map::Dict)
-    evaluate_expr(elem, theta, param_map)
-end
-
-function evaluate_expr(ex::Expr, theta::AbstractVector, param_map::Dict)
-    if ex.head == :call
-        func = ex.args[1]
-        args = [evaluate_expr(a, theta, param_map) for a in ex.args[2:end]]
-        return eval(Expr(:call, func, args...))
-    elseif ex.head == :ref
-        error("Array indexing not supported in parameter expressions")
-    else
-        return eval(ex)
-    end
-end
-
-function evaluate_expr(sym::Symbol, theta::AbstractVector, param_map::Dict)
-    if haskey(param_map, sym)
-        return theta[param_map[sym]]
-    else
-        return eval(sym)
-    end
-end
-
-function evaluate_expr(val::Number, theta::AbstractVector, param_map::Dict)
-    val
-end
-
 """
     build_kfparms(spec::SSMSpec, theta::AbstractVector)
 
@@ -415,7 +392,7 @@ function build_matrix_or_expr(
 end
 
 function build_from_expr(
-        expr,
+        expr::MatrixExpr,
         theta::AbstractVector{T},
         param_map::Dict{Symbol, Int}
 ) where {T}
@@ -437,7 +414,7 @@ function build_initial_state(spec::SSMSpec, theta::AbstractVector{T}) where {T}
     param_map = Dict{Symbol, Int}(p.name => i for (i, p) in enumerate(spec.params))
 
     a1 = T[evaluate_element(elem, theta, param_map) for elem in spec.a1]
-    P1 = build_matrix(spec.P1, theta, param_map)
+    P1 = build_matrix_or_expr(:P1, spec, theta, param_map)
 
     (a1, P1)
 end
@@ -447,7 +424,7 @@ end
 # ============================================
 
 """
-    build_linear_state_space(spec::SSMSpec, θ, y; use_static=true)
+    build_linear_state_space(spec::SSMSpec, θ, y; static=:auto)
 
 Build state-space model components from specification.
 
@@ -457,63 +434,96 @@ Accepts either a Vector or NamedTuple of parameters.
 - `spec::SSMSpec`: Model specification
 - `θ`: Parameters (Vector or NamedTuple)
 - `y`: Observations (used for dimension inference in some models)
-- `use_static::Bool=true`: If true, automatically convert small matrices (dimensions ≤ 13)
-  to StaticArrays for better performance
+- `static::Symbol=:auto`: Whether to store the system as StaticArrays, which lets
+  the filter run without heap allocations. `:auto` does so when the numbers of
+  states, observed series and shocks are all at most [`Siphon.STATIC_THRESHOLD`](@ref);
+  `:on` and `:off` force the choice. All matrices and the initial state are
+  converted together. Exact diffuse models are never converted, and `:on` throws
+  for them.
 
 Returns a NamedTuple with:
 - `p`: KFParms struct with system matrices (Z, H, T, R, Q)
 - `a1`: Initial state mean vector
-- `P1`: Initial state covariance matrix
+- `P1`: Initial state covariance matrix (the finite part `P1_star` under exact
+  diffuse initialisation)
+- `P1_inf`: Diffuse part of the initial covariance, or `nothing` when the spec
+  does not use exact diffuse initialisation
 """
 function build_linear_state_space(
         spec::SSMSpec,
         θ::Union{AbstractVector, NamedTuple},
         y;
-        use_static::Bool = true
+        static::Symbol = :auto
 )
     kfparms = build_kfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
+    P1_inf = build_diffuse_covariance(spec, θ)
 
-    if use_static
-        # Convert to StaticArrays if dimensions are small
-        p = KFParms_static(kfparms.Z, kfparms.H, kfparms.T, kfparms.R, kfparms.Q)
-        a1_out = to_static_if_small(a1)
-        P1_out = to_static_if_small(P1)
-        return (p = p, a1 = a1_out, P1 = P1_out)
+    use_static = _use_static(static, spec.n_states, spec.n_obs, spec.n_shocks)
+    if P1_inf !== nothing
+        # The exact diffuse filter has no StaticArrays specialization
+        static === :on && throw(ArgumentError(
+            "static = :on is not available with exact diffuse initialization " *
+            "(diffuse = :exact); use static = :auto or :off."))
+        return (p = kfparms, a1 = a1, P1 = P1, P1_inf = P1_inf)
+    elseif use_static
+        p, a1_s, P1_s = _static_system(kfparms, a1, P1)
+        return (p = p, a1 = a1_s, P1 = P1_s, P1_inf = P1_inf)
     else
-        return (p = kfparms, a1 = a1, P1 = P1)
+        return (p = kfparms, a1 = a1, P1 = P1, P1_inf = P1_inf)
     end
 end
 
+# Log-likelihood and filter for the output of `build_linear_state_space`,
+# using the exact diffuse filter when the model has a diffuse part.
+function _ss_loglik(ss, y)
+    ss.P1_inf === nothing ? kalman_loglik(ss.p, y, ss.a1, ss.P1) :
+    kalman_loglik(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+end
+function _ss_filter(ss, y)
+    ss.P1_inf === nothing ? kalman_filter(ss.p, y, ss.a1, ss.P1) :
+    kalman_filter(ss.p, y, ss.a1, ss.P1, ss.P1_inf)
+end
+
 """
-    objective_function(spec::SSMSpec, y)
+    objective_function(spec::SSMSpec, y; static=:auto)
 
 Create a negative log-likelihood function for optimization.
 
 Returns a callable that computes -loglik for a given parameter vector theta.
-Uses the AD-compatible kalman_loglik function.
+Uses the AD-compatible kalman_loglik function. `static` is passed to
+[`build_linear_state_space`](@ref).
 """
-function objective_function(spec::SSMSpec, y)
+function objective_function(spec::SSMSpec, y; static::Symbol = :auto)
+    y = _nan_obs(y)
     function negloglik(theta)
-        kfparms = build_kfparms(spec, theta)
-        a1, P1 = build_initial_state(spec, theta)
-        ll = kalman_loglik(kfparms, y, a1, P1)
-        return -ll
+        ss = build_linear_state_space(spec, theta, y; static)
+        return -_ss_loglik(ss, y)
     end
     return negloglik
 end
 
 """
-    ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
+    ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; static=:auto)
 
 Compute log-likelihood directly from spec and NamedTuple parameters.
 
-This is the recommended high-level API for likelihood evaluation.
+This is the recommended high-level API for likelihood evaluation. `static` is
+passed to [`build_linear_state_space`](@ref).
 """
-function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix)
-    kfparms = build_kfparms(spec, θ)
-    a1, P1 = build_initial_state(spec, θ)
-    kalman_loglik(kfparms, y, a1, P1)
+function ssm_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix; static::Symbol = :auto)
+    _spec_loglik(spec, θ, _nan_obs(y), static)
+end
+
+"""
+    _spec_loglik(spec, θ::NamedTuple, y, static::Symbol)
+
+Log-likelihood of `y` under `spec` at constrained parameters `θ`. The single
+evaluation path shared by maximum likelihood and the log-density.
+"""
+function _spec_loglik(spec::SSMSpec, θ::NamedTuple, y::AbstractMatrix, static::Symbol)
+    ss = build_linear_state_space(spec, θ, y; static)
+    return _ss_loglik(ss, y)
 end
 
 # Alias for consistency

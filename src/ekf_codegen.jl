@@ -93,37 +93,30 @@ end
 # ============================================================================
 
 """
-    build_nonlinear_state_space(spec::EKFSpec, θ, y; use_static=true)
+    build_nonlinear_state_space(spec::EKFSpec, θ, y)
 
 Build the EKF parameter container, initial state, and observation matrix
-needed to evaluate `ekf_loglik`. Returns a NamedTuple `(p, a1, P1)`.
+needed to evaluate `kalman_loglik`. Returns a NamedTuple `(p, a1, P1)`.
 
-`use_static` is currently a no-op for the EKF path — the measurement object
-typically owns the parts that would benefit from `SMatrix` conversion (e.g.
-loadings) and we should not blindly convert user-owned data. This kwarg is
-preserved for API symmetry with `build_linear_state_space`.
+Unlike `build_linear_state_space`, it takes no `static` keyword: the
+measurement object owns the parts that StaticArrays would convert (e.g.
+loadings), so the EKF path does not convert them.
 """
-function build_nonlinear_state_space(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix;
-        use_static::Bool = true)
+function build_nonlinear_state_space(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
     p = build_ekfparms(spec, θ)
     a1, P1 = build_initial_state(spec, θ)
     return (; p, a1, P1)
 end
 
 """
-    Siphon.ekf_loglik(spec::EKFSpec, θ, y; use_static=true) -> loglik
+    ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
 
-Evaluate the EKF log-likelihood for an `EKFSpec` at constrained parameters
-`θ::NamedTuple`. Equivalent to `ekf_loglik(p, y, a1, P1)` after building
+Evaluate the extended Kalman filter log-likelihood of an `EKFSpec` at constrained
+parameters `θ`. Equivalent to `kalman_loglik(p, y, a1, P1)` after building
 `(p, a1, P1)` from the spec.
-
-Adds a method to the parent-module `Siphon.ekf_loglik` so callers can use the
-same name regardless of whether they have an `EKFParms` or an `EKFSpec`.
 """
-function ekf_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix;
-        use_static::Bool = true)
-    ss = build_nonlinear_state_space(spec, θ, y; use_static = use_static)
-    return ekf_loglik(ss.p, y, ss.a1, ss.P1)
+function ssm_loglik(spec::EKFSpec, θ::NamedTuple, y::AbstractMatrix)
+    _spec_loglik(spec, θ, _nan_obs(y), :off)
 end
 
 # ============================================================================
@@ -142,30 +135,44 @@ Parallel to `custom_ssm` for the linear case.
 - `measurement` — either a fixed `AbstractEKFMeasurement` or a
   `MeasurementExpr` (parameters + builder + data).
 - `H, T, R, Q` — system matrices using the same DSL inputs as `custom_ssm`
-  (numbers, `FreeParam`, `MatrixExpr`, `cov_free`, etc.).
+  (numbers, `FreeParam`, `MatrixExpr`, `cov_free`, etc.). `T`, `R`, `Q` and `P1`
+  may be a scaled identity `I`; `H` must be sized explicitly.
 - `a1` — initial-state mean (numbers and/or `FreeParam`).
 - `P1` — initial-state covariance (`SSMMatrixSpec` input).
 - `jacobian_mode` — `ADJacobian()` (default) or `AnalyticJacobian()`.
 - `name` — model name.
 
 The returned `EKFSpec` collects all free parameters from the matrix payloads
-plus those declared on the `MeasurementExpr` (deduplicated by name).
+plus those declared on the `MeasurementExpr`; a name used more than once must
+carry the same settings each time. The measurement is evaluated once, at the
+initial parameter values and `a1`, to check that its length matches the size
+of `H`.
 
 # Example
 ```julia
-struct MyMeasurement{LT,T} <: Siphon.AbstractEKFMeasurement; Λ::LT; r_LB::T; end
-Siphon.measurement(m::MyMeasurement, β, t) = m.r_LB .+ softplus.(m.Λ * β .- m.r_LB)
-# (plus measurement!/measurement_jacobian! if AnalyticJacobian() is desired)
+using LinearAlgebra
 
+# Yields bounded below by r_LB: h(β) = r_LB + softplus(Λβ - r_LB)
+struct MyMeasurement{LT,T} <: Siphon.AbstractEKFMeasurement
+    Λ::LT
+    r_LB::T
+end
+softplus(x) = log1p(exp(x))
+Siphon.measurement(m::MyMeasurement, β, t) = m.r_LB .+ softplus.(m.Λ * β .- m.r_LB)
+
+p, m = 4, 2
+Λ = [ones(p) range(1.0, 0.2; length = p)]
+
+# The Jacobian comes from automatic differentiation (ADJacobian(), the default).
+# For AnalyticJacobian(), also define measurement! and measurement_jacobian!.
 spec = custom_ekf(
     measurement = MyMeasurement(Λ, 0.0),
-    jacobian_mode = AnalyticJacobian(),
-    H = diag_free(:σ_y, p; init=0.05),
-    T = diag_free(:ψ, m; init=0.95, lower=-0.999, upper=0.999),
-    R = identity_mat(m),
-    Q = diag_free(:σ_state, m; init=0.1),
+    H = diag_free(p, :var_y; init=0.05),
+    T = diag_free(m, :ψ; init=0.95, lower=-0.999, upper=0.999),
+    R = I,
+    Q = diag_free(m, :var_state; init=0.1),
     a1 = zeros(m),
-    P1 = 100.0 * I(m),
+    P1 = 100.0I,
 )
 ```
 """
@@ -175,7 +182,12 @@ function custom_ekf(; measurement,
         name::Symbol = :CustomEKF)
     params = SSMParameter{Float64}[]
     param_set = Set{Symbol}()
-    matrix_exprs = Dict{Symbol, Any}()
+    matrix_exprs = Dict{Symbol, AbstractMatrixExpr}()
+
+    # Size any `I` inputs: a1 gives m, R gives r.
+    a1_vec = _to_vector(a1)
+    T, R, P1 = map(x -> _sized(x, length(a1_vec)), (T, R, P1))
+    Q = _sized(Q, _input_dims(R)[2])
 
     # Process system matrices (reuses linear DSL machinery)
     H_spec, H_dims = _process_matrix_input(:H, H, params, param_set, matrix_exprs)
@@ -184,17 +196,12 @@ function custom_ekf(; measurement,
     Q_spec, Q_dims = _process_matrix_input(:Q, Q, params, param_set, matrix_exprs)
     P1_spec, P1_dims = _process_matrix_input(:P1, P1, params, param_set, matrix_exprs)
 
-    # a1
-    a1_vec = _to_vector(a1)
     a1_elems = _build_vector_spec(a1_vec, params, param_set)
 
     # Measurement parameters
     if measurement isa MeasurementExpr
         for p in measurement.params
-            if !(p.name in param_set)
-                push!(params, p)
-                push!(param_set, p.name)
-            end
+            _add_param!(params, param_set, p)
         end
     end
 
@@ -211,10 +218,23 @@ function custom_ekf(; measurement,
         throw(DimensionMismatch("a1 must have length $m, got $(length(a1_vec))"))
     P1_dims == (m, m) || throw(DimensionMismatch("P1 must be ($m, $m), got $P1_dims"))
 
-    return EKFSpec{typeof(measurement), typeof(jacobian_mode)}(
+    spec = EKFSpec{typeof(measurement), typeof(jacobian_mode)}(
         name, m, p, r,
         params, measurement, jacobian_mode,
         H_spec, T_spec, R_spec, Q_spec,
         a1_elems, P1_spec, matrix_exprs
     )
+    _check_measurement_length(spec)
+    return spec
+end
+
+# The measurement's output length must equal the size of H. It is evaluated at
+# the initial parameter values, the initial state mean and t = 1.
+function _check_measurement_length(spec::EKFSpec)
+    θ = NamedTuple{Tuple(param_names(spec))}(Tuple(initial_values(spec)))
+    a1, _ = build_initial_state(spec, θ)
+    k = length(measurement(build_measurement(spec, θ), a1, 1))
+    k == spec.n_obs || throw(DimensionMismatch(
+        "the measurement returns $k values but H is $(spec.n_obs) × $(spec.n_obs)"))
+    return nothing
 end

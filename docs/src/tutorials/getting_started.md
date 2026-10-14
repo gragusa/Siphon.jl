@@ -55,7 +55,7 @@ using DataFrames
 
 # Load the Nile data
 nile = CSV.read("test/Nile.csv", DataFrame; header=false)
-y = permutedims(Matrix(nile))  # Convert to 1×n matrix (p × T format)
+y = Float64.(permutedims(Matrix(nile)))  # 1 × n matrix (p × T format)
 
 println("Number of observations: ", size(y, 2))
 ```
@@ -278,7 +278,7 @@ spec = local_linear_trend()
 
 ```julia
 # AR(1) with measurement noise
-spec = ar1(ρ_init=0.9)
+spec = ar1(ρ = FreeParam(init = 0.9))
 # Parameters: (:ρ, :var_obs, :var_state)
 ```
 
@@ -398,8 +398,8 @@ println("First post-diffuse filtered state: ", result.att[:, d+1])
 For large-scale applications, use `DiffuseKalmanWorkspace`:
 
 ```julia
-# Create diffuse workspace
-ws = DiffuseKalmanWorkspace(Z, H, T, R, Q, a1, P1_star, P1_inf, n)
+# Create diffuse workspace from the system matrices of `p` above
+ws = DiffuseKalmanWorkspace(p.Z, p.H, p.T, p.R, p.Q, a1, P1_star, P1_inf, size(y, 2))
 
 # Run filter (workspace type determines diffuse algorithm)
 ll = kalman_filter!(ws, y)
@@ -407,7 +407,16 @@ ll = kalman_filter!(ws, y)
 # Access results
 d = diffuse_period(ws)
 att = filtered_states(ws)
+
+# Exact diffuse smoother
+kalman_smoother!(ws)
+alpha = smoothed_states(ws)
 ```
+
+`kalman_smoother(result)` smooths the output of the functional
+`kalman_filter(p, y, a1, P1_star, P1_inf)` in the same way. Both need the diffuse
+period to end within the sample; otherwise some smoothed variances are infinite and
+they throw an `ArgumentError`.
 
 ### When to Use Exact Diffuse
 
@@ -423,7 +432,8 @@ Approximate diffuse is sufficient when:
 
 ## Working with Missing Data
 
-Siphon.jl handles missing observations automatically using NaN:
+Missing observations are entered as `NaN` or `missing`; the filter skips them
+and the smoother interpolates through them:
 
 ```julia
 # Create data with missing values
@@ -431,6 +441,7 @@ y_missing = copy(y)
 y_missing[1, 20:25] .= NaN  # Mark as missing
 
 # Use the unified API
+spec = local_level()
 θ = (var_obs=15099.0, var_level=1469.0)
 model = StateSpaceModel(spec, θ, size(y_missing, 2))
 
@@ -440,6 +451,25 @@ kalman_smoother!(model)
 # The smoother will interpolate through missing periods
 println("Smoothed states through missing period: ", smoothed_states(model)[1, 18:27])
 ```
+
+## Disturbance Smoothing and Diagnostics
+
+The disturbance smoother estimates the shocks εₜ and ηₜ given the whole sample. Their
+standardized values, the auxiliary residuals, flag outliers (large values of the
+observation residual) and level shifts (large values of the state residual):
+
+```julia
+ds = disturbance_smoother(model)
+ε̂ = smoothed_obs_disturbances(ds)        # p × n
+η̂ = smoothed_state_disturbances(ds)      # r × n
+aux = auxiliary_residuals(ds)
+findall(abs.(aux.obs) .> 2.5)            # candidate outliers
+findall(abs.(aux.state) .> 2.5)          # candidate breaks in the level
+```
+
+The same function takes the output of `kalman_filter(p, y, a1, P1)` or a
+`KalmanWorkspace` after `kalman_filter!(ws, y)`. Exact diffuse initialization is not
+supported.
 
 ## Next Steps
 

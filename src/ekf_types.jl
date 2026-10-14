@@ -51,8 +51,11 @@ struct AnalyticJacobian <: AbstractEKFJacobianMode end
 """
     FiniteDiffJacobian()
 
-Use central finite differences on the pure measurement map. Diagnostic only;
-should not be selected by default in production code.
+Use central finite differences on the measurement map: the pure `measurement` in the
+functional filter, and `measurement!` in `EKFWorkspace`. The step for state element j
+is `√eps · max(|aⱼ|, 1)`. Useful to check an analytic Jacobian, or when neither an
+analytic Jacobian nor ForwardDiff is available. The Jacobian is less accurate than
+with the other two modes.
 """
 struct FiniteDiffJacobian <: AbstractEKFJacobianMode end
 
@@ -68,8 +71,8 @@ fixed data (e.g. factor loadings, lower bounds, maturity grids) and define one
 or both of:
 
   - `measurement(model, a, t)::AbstractVector` — pure functional map (used by
-    AD and the functional `ekf_loglik`).
-  - `measurement!(out, model, a, t)` — mutating map (used by `ekf_filter!`).
+    AD and the functional `kalman_loglik`).
+  - `measurement!(out, model, a, t)` — mutating map (used by `kalman_filter!`).
 
 The Jacobian `∂h/∂a` may be supplied as
 
@@ -86,40 +89,56 @@ abstract type AbstractEKFMeasurement end
     measurement(model::AbstractEKFMeasurement, a, t) -> AbstractVector
 
 Pure functional measurement map. Must be defined for the AD-Jacobian path and
-for the functional `ekf_loglik`.
+for the functional `kalman_loglik`.
 """
-function measurement(model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement, (model, a, t)))
-end
+function measurement end
 
 """
     measurement!(out, model::AbstractEKFMeasurement, a, t)
 
 Mutating measurement map writing `h(a, t)` into `out`. Required for the
-in-place `ekf_filter!` path.
+in-place `kalman_filter!` path.
 """
-function measurement!(out, model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement!, (out, model, a, t)))
-end
+function measurement! end
 
 """
     measurement_jacobian(model::AbstractEKFMeasurement, a, t) -> AbstractMatrix
 
 Pure analytic Jacobian `∂h/∂a` evaluated at `a`. Optional.
 """
-function measurement_jacobian(model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement_jacobian, (model, a, t)))
-end
+function measurement_jacobian end
 
 """
     measurement_jacobian!(Z, model::AbstractEKFMeasurement, a, t)
 
 Mutating analytic Jacobian writing `∂h/∂a` into `Z`. Required for the in-place
-`ekf_filter!` path under `AnalyticJacobian()`.
+`kalman_filter!` path under `AnalyticJacobian()`.
 """
-function measurement_jacobian!(Z, model::AbstractEKFMeasurement, a, t)
-    throw(MethodError(measurement_jacobian!, (Z, model, a, t)))
+function measurement_jacobian! end
+
+"""
+    LinearMeasurement(Z) <: AbstractEKFMeasurement
+
+The linear measurement h(α, t) = Z α, with all four protocol methods defined, so it
+works with every Jacobian mode and with `EKFWorkspace`. The extended Kalman filter with
+a `LinearMeasurement` reproduces the linear Kalman filter. It is useful as a check of
+an EKF setup, and as the linear part of a measurement that is nonlinear only in some
+rows.
+
+# Example
+```julia
+p = EKFParms(LinearMeasurement(Z), H, T, R, Q)
+kalman_loglik(p, y, a1, P1) ≈ kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)
+```
+"""
+struct LinearMeasurement{ZT <: AbstractMatrix} <: AbstractEKFMeasurement
+    Z::ZT
 end
+
+measurement(m::LinearMeasurement, a, t) = m.Z * a
+measurement!(out, m::LinearMeasurement, a, t) = mul!(out, m.Z, a)
+measurement_jacobian(m::LinearMeasurement, a, t) = m.Z
+measurement_jacobian!(Z, m::LinearMeasurement, a, t) = copyto!(Z, m.Z)
 
 # ============================================================================
 # EKFParms
@@ -171,7 +190,7 @@ EKF-specific fields:
 - `yt` — predicted measurement `h(a_t, t)` (p × n)
 - `Zt` — measurement Jacobian `∂h/∂α` evaluated at `a_t` (p × m × n)
 """
-struct EKFFilterResult{T <: Real, P <: EKFParms}
+struct EKFFilterResult{T <: Real, P <: EKFParms} <: AbstractFilterResult
     p::P
     loglik::T
     at::Matrix{T}           # m × n
@@ -184,36 +203,39 @@ struct EKFFilterResult{T <: Real, P <: EKFParms}
     Ft::Array{T, 3}         # p × p × n
     Kt::Array{T, 3}         # m × p × n
     missing_mask::BitVector
+    failed_at::Int          # 0, or the period in which the filter stopped
 end
 
-# Reuse linear accessors where possible
-parameters(r::EKFFilterResult) = r.p
-obs_cov(r::EKFFilterResult) = r.p.H
-transition_matrix(r::EKFFilterResult) = r.p.T
-selection_matrix(r::EKFFilterResult) = r.p.R
-state_cov(r::EKFFilterResult) = r.p.Q
-predicted_states(r::EKFFilterResult) = r.at
-variances_predicted_states(r::EKFFilterResult) = r.Pt
-filtered_states(r::EKFFilterResult) = r.att
-variances_filtered_states(r::EKFFilterResult) = r.Ptt
-prediction_errors(r::EKFFilterResult) = r.vt
-variances_prediction_errors(r::EKFFilterResult) = r.Ft
-kalman_gains(r::EKFFilterResult) = r.Kt
-loglikelihood(r::EKFFilterResult) = r.loglik
+function EKFFilterResult(p::EKFParms, loglik::Real, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt,
+        missing_mask::BitVector)
+    return EKFFilterResult(p, loglik, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt, missing_mask, 0)
+end
+
+# The EKF rejects partially observed periods, so a period is observed in full or not at all.
+_observed_mask(r::EKFFilterResult) = repeat(.!transpose(r.missing_mask), size(r.vt, 1))
+observed_mask(r::EKFFilterResult) = _observed_mask(_require_output(r, :observed_mask))
+
+# The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
+# single observation matrix.
+function obs_matrix(::EKFFilterResult)
+    throw(ArgumentError(
+        "the extended Kalman filter has no observation matrix; " *
+        "use measurement_jacobians for the linearisation at each period"))
+end
 
 """
     predicted_observations(r::EKFFilterResult) -> Matrix
 
 Return predicted measurements `h(a_t, t)` for t = 1:n (p × n).
 """
-predicted_observations(r::EKFFilterResult) = r.yt
+predicted_observations(r::EKFFilterResult) = _require_output(r, :predicted_observations).yt
 
 """
     measurement_jacobians(r::EKFFilterResult) -> Array{T,3}
 
 Return measurement Jacobians `∂h/∂α |_{α=a_t}` for t = 1:n (p × m × n).
 """
-measurement_jacobians(r::EKFFilterResult) = r.Zt
+measurement_jacobians(r::EKFFilterResult) = _require_output(r, :measurement_jacobians).Zt
 
 # ============================================================================
 # Element-type helper for AD compatibility
