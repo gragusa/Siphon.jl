@@ -249,6 +249,11 @@ function Base.show(io::IO, r::SmootherResult)
         r.Pcross === nothing ? "" : ", with cross-lag covariances", ")")
 end
 
+function Base.show(io::IO, r::DisturbanceSmootherResult)
+    print(io, "DisturbanceSmootherResult(p = ", size(r.εs, 1), ", r = ", size(r.ηs, 1),
+        ", n = ", size(r.εs, 2), ")")
+end
+
 function Base.show(io::IO, r::ForecastResult)
     print(io, "ForecastResult(p = ", size(r.yhat, 1), ", m = ", size(r.a, 1),
         ", h = ", size(r.yhat, 2), ", origin = ", r.origin, ")")

@@ -895,10 +895,14 @@ Other author answers, verbatim:
 ### CHUNK-028: add-disturbance-smoother
 - **Kind**: `implement`
 - **Description**: O7 and B13 in the review. `docs/src/index.md:21` promises disturbance smoothing, but none exists. Implement a disturbance smoother (smoothed ε̂, η̂ and their variances, D&K §4.5) in the functional and in-place APIs, with accessors and tests. This is also useful for auxiliary residuals and outlier and break diagnostics, which econometrics practitioners use.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-015
 - **Cluster**: missing-operations
 - **Notes**:
+  - **Design (implementer's call):** a separate result type `DisturbanceSmootherResult{T}` with fields `εs`, `Vε`, `ηs`, `Vη`, `εs_std`, `ηs_std`. Its accessors are `smoothed_obs_disturbances[_cov]`, `smoothed_state_disturbances[_cov]` and `auxiliary_residuals` (a NamedTuple `(obs, state)`, NaN where the estimator variance is zero). Entry points: `disturbance_smoother(::KalmanFilterResult)`, `disturbance_smoother(p, y, a1, P1)`, `disturbance_smoother(ws::KalmanWorkspace)`, `disturbance_smoother!(out, ws)` and `disturbance_smoother(model::StateSpaceModel)`. The workspace stays as it is; nothing is added to `KalmanWorkspace`. The in-place version makes three small per-call allocations (Q R', Q R' N, and a p × p buffer), constant in n, and leaves `αs`/`Vs` untouched.
+  - A standalone backward recursion in `src/disturbance_smoother.jl` runs the r/N recursion itself, so it needs `kalman_filter` but not `kalman_smoother`. Partly observed periods use H Wₜ' (unobserved rows are smoothed through the covariance of a full H). The rank-revealing path works through `_apply_Finv!`.
+  - Exact diffuse (`DiffuseFilterResult`, `DiffuseKalmanWorkspace`, `diffuse = :exact` models) throws an `ArgumentError`; see Open Questions. EKF and `DynamicFactorModel` have no method.
+  - Verification: brute-force Gaussian conditioning on (α₁, η, ε) at 1e-12 (full H, R of size 2 × 1, and partial and full missing periods), the rank-revealing case, scalar KFParms, ForwardDiff vs. finite differences, and the model identities ε̂ = y − α̂, η̂ = Δα̂ for the local level. Tests: `test/disturbance_smoother_tests.jl`. Docs: `api/core.md`, plus a section in `getting_started.md`. The conversion guide is unchanged (a pure addition).
 
 ### CHUNK-029: add-ekf-smoother-and-model
 - **Kind**: `implement`
@@ -1016,6 +1020,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-025 (add-show-equality-hash) → next: CHUNK-026
 - 2026-10-14 CHUNK-026 (unify-construction-conventions) → next: CHUNK-027
 - 2026-10-14 CHUNK-027 (add-diffuse-smoother) → next: CHUNK-028
+- 2026-10-14 CHUNK-028 (add-disturbance-smoother) → next: CHUNK-029
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1043,3 +1048,4 @@ Other author answers, verbatim:
 - `SmootherWorkspace{T}(m, n)` fills its arrays with `undef`, which conflicts with the policy that no function returns uninitialized memory. Zero-fill it in CHUNK-030 if the type stays public.
 - `SimulationSmootherWorkspace`/`simulation_smoother` and `EMWorkspace` still reject a `DiffuseKalmanWorkspace`. The simulation smoother would need an exact diffuse initial draw (Durbin & Koopman 2002, Section 5 of that paper), and EM would need diffuse cross-lag covariances. These are possible feature chunks.
 - `_diffuse_step_flag!` keeps the existing criterion `|det Finf| > tol`, which is not scale-invariant (Finf in large units always counts as invertible). A relative criterion, such as the smallest Cholesky pivot relative to the largest, would be more robust.
+- The disturbance smoother rejects exact diffuse output. Supporting it means exporting r⁽⁰⁾/N⁽⁰⁾ (and the diffuse-period u/D terms, Durbin & Koopman Section 5.3) from `_diffuse_smoother_backward!`. It is a possible feature chunk.

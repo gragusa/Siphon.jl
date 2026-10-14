@@ -393,6 +393,9 @@ include("construction_tests.jl")
 # Exact diffuse smoother
 include("diffuse_smoother_tests.jl")
 
+# Disturbance smoother
+include("disturbance_smoother_tests.jl")
+
 # Known bugs, pinned with @test_broken
 include("known_bugs_tests.jl")
 

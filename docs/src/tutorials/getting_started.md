@@ -450,6 +450,25 @@ kalman_smoother!(model)
 println("Smoothed states through missing period: ", smoothed_states(model)[1, 18:27])
 ```
 
+## Disturbance Smoothing and Diagnostics
+
+The disturbance smoother estimates the shocks εₜ and ηₜ given the whole sample. Their
+standardized values, the auxiliary residuals, flag outliers (large values of the
+observation residual) and level shifts (large values of the state residual):
+
+```julia
+ds = disturbance_smoother(model)
+ε̂ = smoothed_obs_disturbances(ds)        # p × n
+η̂ = smoothed_state_disturbances(ds)      # r × n
+aux = auxiliary_residuals(ds)
+findall(abs.(aux.obs) .> 2.5)            # candidate outliers
+findall(abs.(aux.state) .> 2.5)          # candidate breaks in the level
+```
+
+The same function takes the output of `kalman_filter(p, y, a1, P1)` or a
+`KalmanWorkspace` after `kalman_filter!(ws, y)`. Exact diffuse initialization is not
+supported.
+
 ## Next Steps
 
 - Learn how to specify [Custom Models](custom_models.md) using the DSL

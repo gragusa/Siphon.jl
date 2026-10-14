@@ -31,6 +31,19 @@ kalman_filter_and_smooth
 SmootherResult
 ```
 
+## Disturbance Smoother
+
+```@docs
+disturbance_smoother
+disturbance_smoother!
+DisturbanceSmootherResult
+smoothed_obs_disturbances
+smoothed_obs_disturbances_cov
+smoothed_state_disturbances
+smoothed_state_disturbances_cov
+auxiliary_residuals
+```
+
 ## Prediction and Forecasting
 
 ```@docs

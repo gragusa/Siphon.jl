@@ -46,6 +46,9 @@ export predicted_states, predicted_states_cov, filtered_states, filtered_states_
 export prediction_errors, prediction_errors_cov
 export kalman_gains, loglikelihood
 export smoothed_states, smoothed_states_cov, crosslag_covs
+export DisturbanceSmootherResult, disturbance_smoother, disturbance_smoother!
+export smoothed_obs_disturbances, smoothed_obs_disturbances_cov
+export smoothed_state_disturbances, smoothed_state_disturbances_cov, auxiliary_residuals
 
 # Model specification: parameters, matrix specs, templates, estimation
 include("dsl/types.jl")
@@ -68,6 +71,9 @@ include("predict.jl")
 # In-place filter/smoother for large models
 include("inplace.jl")
 include("em_spec.jl")
+
+# Disturbance smoother (functional, in-place and model methods)
+include("disturbance_smoother.jl")
 
 # In-place EKF workspace (depends on inplace.jl loading first so its
 # `set_params!` / `update_params!` exist; we add EKF-typed methods on top.)
