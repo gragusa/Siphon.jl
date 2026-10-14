@@ -98,7 +98,7 @@ export ismissing_period, isincomplete_period, count_missing_periods,
        count_incomplete_periods
 
 # EKF extension exports
-export AbstractEKFMeasurement, EKFParms, EKFFilterResult
+export AbstractEKFMeasurement, LinearMeasurement, EKFParms, EKFFilterResult
 export AbstractEKFJacobianMode, ADJacobian, AnalyticJacobian, FiniteDiffJacobian
 export measurement, measurement!, measurement_jacobian, measurement_jacobian!
 export EKFWorkspace

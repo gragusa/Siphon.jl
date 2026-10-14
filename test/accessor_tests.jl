@@ -93,7 +93,7 @@ end
     Matrix(0.2I, 2, 2)
     a1, P1 = zeros(2), Matrix(1.0I, 2, 2)
     y = randn(rng, 2, 25)
-    meas = EKFTestLinearMeasurement(Z)
+    meas = LinearMeasurement(Z)
 
     res = kalman_filter(EKFParms(meas, H, Tm, R, Q), y, a1, P1)
     ws = EKFWorkspace(meas, ADJacobian(), H, Tm, R, Q, a1, P1, size(y, 2))

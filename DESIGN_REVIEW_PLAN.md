@@ -98,6 +98,10 @@ Other author answers, verbatim:
 
 - **CHUNK-024** (2026-10-14, author's answer): **`StateSpaceModel` stores a copy of the data** at `fit!` (MLE and EM) and `kalman_filter!(model, y)`; `vcov`/`stderror` compute the observed-information covariance lazily from it (delta method, as in `optimize_ssm_with_stderr`), after either estimator. Rejected: computing vcov at MLE fit time only; deferring standard errors.
 
+- **CHUNK-029** (2026-10-14, author's answers):
+  - **EKF model support: generalize `StateSpaceModel`** to `StateSpaceModel{T, S<:AbstractSSMSpec}`. EKF specs dispatch to the EKF filter and smoother, and `fit!(EM())` on an EKF spec throws a clear error. Rejected: a separate `EKFModel` type.
+  - **Split:** CHUNK-029 keeps the functional EKF smoother, the built-in linear measurement, `FiniteDiffJacobian` in `EKFWorkspace` (implemented rather than dropped, since the functional path already supports it) and the docstring fixes. Model support moves to the new CHUNK-041.
+
 ## Chunks
 
 ### CHUNK-001: preflight
@@ -911,8 +915,22 @@ Other author answers, verbatim:
   - Add an EKF model wrapper or `StateSpaceModel` support, with `fit!(MLE())`, `smoothed_states` and `forecast`.
   - Ship a built-in linear measurement type; the tests write their own `EKFTestLinearMeasurement`.
   - Implement `FiniteDiffJacobian` in `EKFWorkspace` or drop it. It is exported but rejected there (`ekf_inplace.jl:318`).
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-002, CHUNK-016
+- **Cluster**: missing-operations
+- **Notes**:
+  - Split per the Decisions entry: model support is CHUNK-041.
+  - **Functional smoother:** `_kalman_smoother` takes `Z` either as a p × m matrix or as a p × m × n per-period array (`_period_Z`). `kalman_smoother(::EKFFilterResult; crosscov)`, `kalman_smoother(p::EKFParms, y, a1, P1)` and `kalman_filter_and_smooth(p::EKFParms, …)` live in `ekf_ad.jl`, because `smoother_ad.jl` loads before the EKF types. They are AD-compatible.
+  - **`LinearMeasurement(Z)`** is exported, defined in `ekf_types.jl` with all four protocol methods. The tests' `EKFTestLinearMeasurement` was replaced by it, and the tutorial now uses the built-in type.
+  - **`FiniteDiffJacobian` in `EKFWorkspace`:** central differences through `measurement!` with the functional path's step (√eps·max(|aⱼ|, 1)), using `tmp_m2`/`tmp_p1`/`tmp_p2`. The filter stays allocation-free. The protocol check requires `measurement!`.
+  - Verification: all three modes reproduce the linear smoother (means, covariances, cross-lag; 1e-12, or 1e-7 for finite differences). On the softplus yield-curve model the functional and in-place smoothers agree to 1e-10, and the AD gradient matches the linear smoother. Finite-difference Jacobians agree with AD to 1e-6, since the rounding error is near 1e-8.
+  - Docs: `tutorials/ekf.md`, `api/ekf.md`, conversion guide (new capabilities, plus the possible `LinearMeasurement` name clash).
+
+### CHUNK-041: ekf-statespacemodel
+- **Kind**: `implement`
+- **Description**: Split from CHUNK-029. Generalize `StateSpaceModel` to hold an `EKFSpec` (`StateSpaceModel{T, S<:AbstractSSMSpec}`): `StateSpaceModel(ekf_spec, n)`, `fit!(MLE(), model, y)` (via the EKF log-likelihood), `kalman_filter!(model, y)`, `smoothed_states`/`smoothed_states_cov` (via the functional EKF smoother), `forecast(model, h)`, and the StatsAPI accessors that apply. `fit!(EM())` on an EKF spec throws an `ArgumentError`. Linear-only accessors (`obs_matrix`, …) throw as they do on `EKFFilterResult`.
+- **Status**: `not-started`
+- **Depends on**: CHUNK-029
 - **Cluster**: missing-operations
 - **Notes**:
 
@@ -1021,6 +1039,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-026 (unify-construction-conventions) → next: CHUNK-027
 - 2026-10-14 CHUNK-027 (add-diffuse-smoother) → next: CHUNK-028
 - 2026-10-14 CHUNK-028 (add-disturbance-smoother) → next: CHUNK-029
+- 2026-10-14 CHUNK-029 (add-ekf-smoother-and-model; split, model part → CHUNK-041) → next: CHUNK-041
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

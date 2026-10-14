@@ -1,7 +1,7 @@
 """
     ekf_ad.jl
 
-Functional, AD-compatible Extended Kalman Filter likelihood and filter.
+Functional, AD-compatible Extended Kalman Filter likelihood, filter and smoother.
 
 The implementation mirrors `kalman_loglik` / `kalman_filter` in `filter_ad.jl`
 with two changes per step:
@@ -289,4 +289,52 @@ function kalman_filter(
         p, loglik + const_term, at_store, Pt_store, att_store, Ptt_store,
         yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask
     )
+end
+
+# ============================================================================
+# EKF smoother
+# ============================================================================
+
+"""
+    kalman_smoother(result::EKFFilterResult; crosscov=false) -> SmootherResult
+    kalman_smoother(p::EKFParms, y, a1, P1; crosscov=false) -> SmootherResult
+    kalman_filter_and_smooth(p::EKFParms, y, a1, P1; crosscov=false)
+        -> (EKFFilterResult, SmootherResult)
+
+Run the extended RTS smoother on the output of the extended Kalman filter. It is the
+linear smoother applied to the filter's linearization, with Zₜ = ∂h/∂α at the
+predicted state aₜ in place of a constant Z. AD-compatible.
+
+Throws an `ArgumentError` if the filter stopped on an innovation covariance that was not
+positive definite.
+
+# Example
+```julia
+p = EKFParms(LinearMeasurement(Z), H, T, R, Q)
+sm = kalman_smoother(kalman_filter(p, y, a1, P1))
+smoothed_states(sm)
+```
+"""
+function kalman_smoother(result::EKFFilterResult; crosscov::Bool = false)
+    _require_output(result, :kalman_smoother)
+    return _kalman_smoother(
+        result.Zt,
+        _as_matrix(result.p.T),
+        result.at,
+        result.Pt,
+        result.vt,
+        result.Ft;
+        crosscov = crosscov,
+        missing_mask = result.missing_mask,
+        Ptt = result.Ptt
+    )
+end
+
+function kalman_smoother(p::EKFParms, y, a1, P1; crosscov::Bool = false)
+    return kalman_smoother(kalman_filter(p, y, a1, P1); crosscov = crosscov)
+end
+
+function kalman_filter_and_smooth(p::EKFParms, y, a1, P1; crosscov::Bool = false)
+    filt = kalman_filter(p, y, a1, P1)
+    return filt, kalman_smoother(filt; crosscov = crosscov)
 end

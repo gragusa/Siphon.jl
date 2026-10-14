@@ -123,8 +123,7 @@ mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <
     Kt::Array{T, 3}        # m × p × n
     missing_mask::BitVector
 
-    # Smoother storage (allocated for parity with KalmanWorkspace; populated
-    # only after a smoother pass is implemented).
+    # Smoother storage, filled by kalman_smoother!
     αs::Matrix{T}
     Vs::Array{T, 3}
     Pcross::Array{T, 3}
@@ -329,7 +328,13 @@ end
 
 function _check_measurement_protocol(
         model, ::FiniteDiffJacobian, m::Int, p::Int, ::Type{T}) where {T}
-    error("FiniteDiffJacobian() is diagnostic only and not supported in EKFWorkspace.")
+    a_probe = zeros(T, m)
+    out_probe = zeros(T, p)
+    if !hasmethod(measurement!, Tuple{
+        typeof(out_probe), typeof(model), typeof(a_probe), Int})
+        error("EKFWorkspace with FiniteDiffJacobian() requires `measurement!(out, model, a, t)` to be defined for $(typeof(model)).")
+    end
+    return nothing
 end
 
 # ============================================================================
@@ -418,6 +423,29 @@ end
     # per-step allocations are whatever the user's measurement! body itself
     # does on Dual inputs (e.g. a temporary state-vector product).
     ForwardDiff.jacobian!(ws.tmp_Zt, cache.f!, cache.y_buf, a, cache.cfg)
+    return ws.tmp_Zt
+end
+
+# Central differences with the step of the functional `_ekf_jacobian`. Uses `tmp_m2`
+# for the shifted state and `tmp_p1`/`tmp_p2` for the two evaluations, which are free
+# at this point of each filter step.
+function _ekf_jacobian!(ws::EKFWorkspace{T}, ::FiniteDiffJacobian, a, t::Int) where {T}
+    h_step = sqrt(eps(T))
+    a_shift = ws.tmp_m2
+    y_plus, y_minus = ws.tmp_p1, ws.tmp_p2
+    copyto!(a_shift, a)
+    for j in eachindex(a_shift)
+        aj = a_shift[j]
+        δ = max(h_step * abs(aj), h_step)
+        a_shift[j] = aj + δ
+        measurement!(y_plus, ws.measurement, a_shift, t)
+        a_shift[j] = aj - δ
+        measurement!(y_minus, ws.measurement, a_shift, t)
+        a_shift[j] = aj
+        for i in eachindex(y_plus)
+            ws.tmp_Zt[i, j] = (y_plus[i] - y_minus[i]) / (2δ)
+        end
+    end
     return ws.tmp_Zt
 end
 

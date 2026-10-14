@@ -22,11 +22,11 @@ This tutorial covers:
 
 1. The measurement protocol (`AbstractEKFMeasurement`, `measurement` /
    `measurement!` / `measurement_jacobian!`).
-2. Two Jacobian modes: `ADJacobian()` (ForwardDiff, default) and
-   `AnalyticJacobian()` (user-supplied).
+2. Three Jacobian modes: `ADJacobian()` (ForwardDiff, default),
+   `AnalyticJacobian()` (user-supplied) and `FiniteDiffJacobian()`.
 3. Three layers of the API, which are the linear filter's functions selected by the
-   argument types: the functional `kalman_loglik` / `kalman_filter` on an
-   `EKFParms`, the in-place `kalman_filter!` + `kalman_smoother!` on an
+   argument types: the functional `kalman_loglik` / `kalman_filter` /
+   `kalman_smoother` on an `EKFParms`, the in-place `kalman_filter!` + `kalman_smoother!` on an
    `EKFWorkspace`, and `optimize_ssm` on an `EKFSpec` for MLE.
 4. A worked example: a shadow-rate dynamic Nelson-Siegel ("SB-DNS") yield-curve
    model fit by EKF MLE.
@@ -48,29 +48,29 @@ without forced allocation.
 
 ### Linear measurement (sanity-check example)
 
-A "linear measurement" wrapped as an EKF measurement should reproduce the linear
-Kalman filter exactly:
+`LinearMeasurement(Z)` is the linear measurement h(α, t) = Z α. It defines all four
+methods, and the extended Kalman filter built on it reproduces the linear Kalman
+filter:
 
 ```julia
 using Siphon, LinearAlgebra
 
+p = EKFParms(LinearMeasurement(Z), H, T, R, Q)
+kalman_loglik(p, y, a1, P1) ≈ kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)
+```
+
+Its definition shows the protocol for a measurement type of your own:
+
+```julia
 struct LinearMeasurement{ZT<:AbstractMatrix} <: Siphon.AbstractEKFMeasurement
     Z::ZT
 end
 
-# Pure functional (used by AD path)
-Siphon.measurement(m::LinearMeasurement, a, t) = m.Z * a
-
-# In-place (used by EKFWorkspace)
-Siphon.measurement!(out, m::LinearMeasurement, a, t) = (mul!(out, m.Z, a); out)
-
-# Analytic Jacobian (constant, equal to Z)
-Siphon.measurement_jacobian(m::LinearMeasurement, a, t)         = m.Z
-Siphon.measurement_jacobian!(Z, m::LinearMeasurement, a, t)     = (copyto!(Z, m.Z); Z)
+Siphon.measurement(m::LinearMeasurement, a, t) = m.Z * a              # AD and functional paths
+Siphon.measurement!(out, m::LinearMeasurement, a, t) = mul!(out, m.Z, a)   # EKFWorkspace
+Siphon.measurement_jacobian(m::LinearMeasurement, a, t) = m.Z
+Siphon.measurement_jacobian!(Z, m::LinearMeasurement, a, t) = copyto!(Z, m.Z)
 ```
-
-With this in place, `kalman_loglik` on the `EKFParms` matches `kalman_loglik` on the
-equivalent `KFParms` to machine precision.
 
 ## Three API Layers
 
@@ -80,6 +80,7 @@ equivalent `KFParms` to machine precision.
 p = EKFParms(measurement, AnalyticJacobian(), H, T, R, Q)
 ll  = kalman_loglik(p, y, a1, P1)     # log-likelihood only
 res = kalman_filter(p, y, a1, P1)     # full result with at, Pt, att, Ptt, ...
+sm  = kalman_smoother(res)            # SmootherResult; crosscov = true for lag-one covariances
 ```
 
 `kalman_filter` returns an `EKFFilterResult` with the same accessors as
@@ -87,8 +88,12 @@ res = kalman_filter(p, y, a1, P1)     # full result with at, Pt, att, Ptt, ...
 * `predicted_observations(res)` — the per-step ``\hat{y}_t = h(a_t, t)``
 * `measurement_jacobians(res)` — the per-step ``Z_t``
 
+The smoother runs the linear smoother on the filter's linearization, with the
+stored Jacobians in place of Z. `kalman_filter_and_smooth(p, y, a1, P1)` returns both
+results.
+
 The functional path is AD-compatible: ForwardDiff propagates through
-`kalman_loglik` for parameter gradients.
+`kalman_loglik` and `kalman_smoother` for parameter gradients.
 
 ### 2. In-place API — `EKFWorkspace`, `kalman_filter!`, `kalman_smoother!`
 
@@ -315,7 +320,11 @@ and `Vs = smoothed_states_cov(ws)` is positive semidefinite throughout.
   truncated observations) and for cases where the analytic Jacobian is very
   cheap relative to AD. Implement `measurement!` and `measurement_jacobian!`.
 
-* **`FiniteDiffJacobian()`** is diagnostic only.
+* **`FiniteDiffJacobian()`** uses central differences on `measurement` (functional
+  path) or `measurement!` (`EKFWorkspace`). It is less accurate than the other two
+  modes, with errors near 1e-8 in the Jacobian. Use it to check an analytic Jacobian,
+  or when the measurement works with neither ForwardDiff nor a hand-written
+  Jacobian.
 
 ## Performance Notes
 

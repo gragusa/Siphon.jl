@@ -56,9 +56,10 @@ _as_matrix(x::AbstractMatrix) = x
 # also returns the lag-one covariances of Shumway & Stoffer (2017):
 #     J_t = P_{t|t} T' P_{t+1|t}⁻¹,  P_{t+1,t|n} = V_{t+1} J_t',
 # which EM needs for E[αₜ αₜ₋₁' | y₁:ₙ]. `Ptt` supplies P_{t|t}; without it P_{t|t} is
-# rebuilt from the predicted covariances.
+# rebuilt from the predicted covariances. `Z` is either one p × m matrix or, for the
+# linearization of an extended Kalman filter, a p × m × n array with one Zₜ per period.
 function _kalman_smoother(
-        Z::AbstractMatrix,
+        Z::AbstractArray,
         T::AbstractMatrix,
         at::AbstractMatrix,
         Pt::AbstractArray,
@@ -85,7 +86,8 @@ function _kalman_smoother(
 
     # Backward recursion: t = n, n-1, ..., 1
     for t in n_obs:-1:1
-        (α_t, V_t, r_vec, N_mat) = _rts_step(Z, T, at, Pt, vt, Ft, t, r_vec, N_mat;
+        (α_t, V_t, r_vec, N_mat) = _rts_step(_period_Z(Z, t), T, at, Pt, vt, Ft, t,
+            r_vec, N_mat;
             missing_mask, observed_mask)
         alpha_smooth[:, t] = α_t
         V_smooth[:, :, t] = V_t
@@ -124,7 +126,7 @@ function _kalman_smoother(
             else
                 # Compute from predicted: P_{t|t} = P_{t|t-1} - P_{t|t-1} * Zr' * inv(F_t) * Zr * P_{t|t-1}
                 pt = _period_obs_dim(observed_mask, vt, t)
-                Zr = _select_rows(Z, _period_obs_rows(observed_mask, vt, t))
+                Zr = _select_rows(_period_Z(Z, t), _period_obs_rows(observed_mask, vt, t))
                 F_t = view(Ft, 1:pt, 1:pt, t)
                 F_inv = inv(F_t)
                 P_upd_t = P_pred_t - P_pred_t * Zr' * F_inv * Zr * P_pred_t
@@ -146,6 +148,9 @@ function _kalman_smoother(
         return SmootherResult(alpha_smooth, V_smooth, nothing)
     end
 end
+
+_period_Z(Z::AbstractMatrix, t) = Z
+_period_Z(Z::AbstractArray{<:Any, 3}, t) = view(Z, :, :, t)
 
 # One period of the backward recursion of `_kalman_smoother`: from `r = r_t` and
 # `N = N_t` it returns the smoothed mean and covariance of period `t` with

@@ -229,6 +229,13 @@ generic functions:
 Error messages on an unrun EKF workspace now name `kalman_filter!(ws, y)` and
 `kalman_smoother!(ws)`.
 
+New for the extended Kalman filter: `kalman_smoother(::EKFFilterResult)` and
+`kalman_filter_and_smooth(p::EKFParms, …)` smooth in the functional API (before, only
+the in-place workspace could). `EKFWorkspace` accepts `FiniteDiffJacobian()`, which
+used to throw. Siphon now exports `LinearMeasurement`, so code that defines its own
+type of that name, as the EKF tutorial used to, should use the built-in one or rename
+its type.
+
 ### Models with one state and one series
 
 A `KFParms` whose fields are numbers selects the scalar kernel. It returns an ordinary

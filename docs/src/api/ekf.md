@@ -12,6 +12,7 @@ Siphon.measurement
 Siphon.measurement!
 Siphon.measurement_jacobian
 Siphon.measurement_jacobian!
+LinearMeasurement
 ```
 
 ## Jacobian Modes
@@ -31,8 +32,9 @@ Siphon.EKFFilterResult
 ```
 
 The extended Kalman filter is selected by passing an `EKFParms` to the generic
-functions: `kalman_loglik(p, y, a1, P1)` and `kalman_filter(p, y, a1, P1)`, documented
-on the [Core Functions](core.md) page.
+functions: `kalman_loglik(p, y, a1, P1)`, `kalman_filter(p, y, a1, P1)`,
+`kalman_smoother` and `kalman_filter_and_smooth`, documented on the
+[Core Functions](core.md) page.
 
 ### Accessors on `EKFFilterResult`
 

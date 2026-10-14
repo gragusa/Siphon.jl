@@ -51,8 +51,11 @@ struct AnalyticJacobian <: AbstractEKFJacobianMode end
 """
     FiniteDiffJacobian()
 
-Use central finite differences on the pure measurement map. Diagnostic only;
-should not be selected by default in production code.
+Use central finite differences on the measurement map: the pure `measurement` in the
+functional filter, and `measurement!` in `EKFWorkspace`. The step for state element j
+is `√eps · max(|aⱼ|, 1)`. Useful to check an analytic Jacobian, or when neither an
+analytic Jacobian nor ForwardDiff is available. The Jacobian is less accurate than
+with the other two modes.
 """
 struct FiniteDiffJacobian <: AbstractEKFJacobianMode end
 
@@ -112,6 +115,30 @@ Mutating analytic Jacobian writing `∂h/∂a` into `Z`. Required for the in-pla
 `kalman_filter!` path under `AnalyticJacobian()`.
 """
 function measurement_jacobian! end
+
+"""
+    LinearMeasurement(Z) <: AbstractEKFMeasurement
+
+The linear measurement h(α, t) = Z α, with all four protocol methods defined, so it
+works with every Jacobian mode and with `EKFWorkspace`. The extended Kalman filter with
+a `LinearMeasurement` reproduces the linear Kalman filter. It is useful as a check of
+an EKF setup, and as the linear part of a measurement that is nonlinear only in some
+rows.
+
+# Example
+```julia
+p = EKFParms(LinearMeasurement(Z), H, T, R, Q)
+kalman_loglik(p, y, a1, P1) ≈ kalman_loglik(KFParms(Z, H, T, R, Q), y, a1, P1)
+```
+"""
+struct LinearMeasurement{ZT <: AbstractMatrix} <: AbstractEKFMeasurement
+    Z::ZT
+end
+
+measurement(m::LinearMeasurement, a, t) = m.Z * a
+measurement!(out, m::LinearMeasurement, a, t) = mul!(out, m.Z, a)
+measurement_jacobian(m::LinearMeasurement, a, t) = m.Z
+measurement_jacobian!(Z, m::LinearMeasurement, a, t) = copyto!(Z, m.Z)
 
 # ============================================================================
 # EKFParms
