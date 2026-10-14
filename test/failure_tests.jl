@@ -268,3 +268,15 @@ end
     @test_logs (:warn, r"EM did not converge") match_mode=:any fit!(EM(),
         DynamicFactorModel(4, 1, 80), dfm_y; maxiter = 2)
 end
+
+@testset "Maximum likelihood from a failing start" begin
+    # Z = 0 and H = 0 give F = 0 in every period, so the log-likelihood is -Inf
+    # for every parameter value.
+    spec = custom_ssm(Z = [0.0], H = [0.0],
+        T = [FreeParam(:ρ; init = 0.5, lower = -0.99, upper = 0.99)], R = [1.0],
+        Q = [FreeParam(:var_state; init = 1.0, lower = 0.0)], a1 = [0.0], P1 = [1.0])
+    y = randn(MersenneTwister(5), 1, 30)
+    @test ssm_loglik(spec, (ρ = 0.5, var_state = 1.0), y) == -Inf
+    @test_throws "the log-likelihood at the starting values is -Inf" optimize_ssm(spec, y)
+    @test_throws "maximum likelihood cannot start" fit!(MLE(), StateSpaceModel(spec, 30), y)
+end

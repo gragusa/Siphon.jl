@@ -151,7 +151,6 @@ mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <
     r_smooth::Vector{T}
     N_smooth::Matrix{T}
     L_smooth::Matrix{T}
-    J_smooth::Matrix{T}
 
     # Scalars
     loglik::T
@@ -252,7 +251,6 @@ function EKFWorkspace{T}(
         zeros(T, m),        # r_smooth
         zeros(T, m, m),     # N_smooth
         zeros(T, m, m),     # L_smooth
-        zeros(T, m, m),     # J_smooth
         zero(T),                    # loglik
         0,                          # n_obs_valid
         _NOT_RUN,                   # status
@@ -724,42 +722,16 @@ function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
             end
         end
 
-        # Lag-1 cross-covariance via Shumway–Stoffer:
-        # P_{t, t-1 | n} = V_t * J_{t-1}'  with  J_{t-1} = P_{t-1|t-1} T' P_{t|t-1}^{-1}.
+        # Lag-1 cross-covariance (Durbin & Koopman 2012, Section 4.7):
+        # P_{t, t-1 | n} = (I - P_t N_{t-1}) T P_{t-1|t-1}, with N_smooth = N_{t-1}.
+        # No matrix is inverted, so a singular P_t is fine.
         if crosscov && t > 1
-            V_t = view(ws.Vs, :, :, t)
             Ptt_tm1 = view(ws.Ptt, :, :, (t - 1))
-            Pt_t = view(ws.Pt, :, :, t)
-
-            # tmp_mm1 = Ptt_{t-1} * T'
-            mul!(ws.tmp_mm1, Ptt_tm1, ws.Tmat')
-
-            # Cholesky on a (symmetrised + lightly regularised) copy of Pt_t
-            copyto!(ws.tmp_mm2, Pt_t)
-            eps_reg = T(1e-10) * max(one(T), tr(ws.tmp_mm2) / m)
-            for j in 1:m
-                for i in 1:(j - 1)
-                    avg = (ws.tmp_mm2[i, j] + ws.tmp_mm2[j, i]) / 2
-                    ws.tmp_mm2[i, j] = avg
-                    ws.tmp_mm2[j, i] = avg
-                end
-                ws.tmp_mm2[j, j] += eps_reg
-            end
-            chol_P = cholesky!(Symmetric(ws.tmp_mm2, :L))
-
-            # J_smooth := J' so that V_t * J_smooth = P_{t, t-1 | n}
-            for j in 1:m, i in 1:m
-
-                ws.J_smooth[i, j] = ws.tmp_mm1[j, i]
-            end
-            L_P = LowerTriangular(chol_P.L)
-            for j in 1:m
-                col = view(ws.J_smooth, :, j)
-                ldiv!(L_P, col)
-                ldiv!(L_P', col)
-            end
+            mul!(ws.tmp_mm1, ws.Tmat, Ptt_tm1)
+            mul!(ws.tmp_mm2, ws.N_smooth, ws.tmp_mm1)
             Pcross_t = view(ws.Pcross, :, :, (t - 1))
-            mul!(Pcross_t, V_t, ws.J_smooth)
+            copyto!(Pcross_t, ws.tmp_mm1)
+            mul!(Pcross_t, P_t, ws.tmp_mm2, -one(T), one(T))
         end
     end
 

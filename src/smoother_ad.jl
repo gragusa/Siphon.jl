@@ -53,9 +53,10 @@ _as_matrix(x::AbstractMatrix) = x
 # eqs. (4.32)-(4.44), on the predicted states `at = a_{t|t-1}`. Where a period was only
 # partly observed, the filter stored the reduced-system v_t and F_t in the leading
 # positions, so the recursion uses the matching rows of Z. With `crosscov = true` it
-# also returns the lag-one covariances of Shumway & Stoffer (2017):
-#     J_t = P_{t|t} T' P_{t+1|t}⁻¹,  P_{t+1,t|n} = V_{t+1} J_t',
-# which EM needs for E[αₜ αₜ₋₁' | y₁:ₙ]. `Ptt` supplies P_{t|t}; without it P_{t|t} is
+# also returns the lag-one covariances (Durbin & Koopman 2012, Section 4.7)
+#     P_{t+1,t|n} = (I - P_{t+1} N_t) T P_{t|t},
+# which EM needs for E[αₜ αₜ₋₁' | y₁:ₙ]. No matrix is inverted, so a singular
+# predicted covariance (H = 0, ARMA and companion states) is fine. `Ptt` supplies P_{t|t}; without it P_{t|t} is
 # rebuilt from the predicted covariances. `Z` is either one p × m matrix or, for the
 # linearization of an extended Kalman filter, a p × m × n array with one Zₜ per period.
 function _kalman_smoother(
@@ -83,6 +84,8 @@ function _kalman_smoother(
     # Initialize smoothing recursion: r_n = 0, N_n = 0
     r_vec = zeros(ET, state_dim)
     N_mat = zeros(ET, state_dim, state_dim)
+    # N_store[:, :, t] = N_{t-1}, the N in V_t = P_t - P_t N_{t-1} P_t
+    N_store = crosscov ? Array{ET}(undef, state_dim, state_dim, n_obs) : nothing
 
     # Backward recursion: t = n, n-1, ..., 1
     for t in n_obs:-1:1
@@ -91,15 +94,11 @@ function _kalman_smoother(
             missing_mask, observed_mask)
         alpha_smooth[:, t] = α_t
         V_smooth[:, :, t] = V_t
+        crosscov && (N_store[:, :, t] = N_mat)
     end
 
-    # Compute cross-lag covariances if requested
-    # Using Shumway & Stoffer (2017) formula:
-    #   J_t = P_{t|t} * T' * inv(P_{t+1|t})
-    #   P_{t+1,t|n} = V_{t+1} * J_t'
-    #
-    # where P_{t|t} is the filtered (updated) covariance.
-    # For missing observations, P_{t|t} = P_{t|t-1}.
+    # Cross-lag covariances P_{t+1,t|n} = (I - P_{t+1|t} N_t) T P_{t|t}, where
+    # P_{t|t} is the filtered covariance (P_{t|t-1} for a missing period).
     if crosscov
         P_crosslag = Array{ET}(undef, state_dim, state_dim, n_obs - 1)
 
@@ -132,15 +131,8 @@ function _kalman_smoother(
                 P_upd_t = P_pred_t - P_pred_t * Zr' * F_inv * Zr * P_pred_t
             end
 
-            # J_t = P_{t|t} * T' * inv(P_{t+1|t}), regularized for numerical stability
-            eps_reg = ET(1e-10) * max(one(ET), tr(P_pred_tp1) / state_dim)
-            J_t = P_upd_t * T' * inv(Symmetric(Matrix(P_pred_tp1) + eps_reg * I))
-
-            # V_{t+1} is the smoothed covariance at t+1
-            V_tp1 = view(V_smooth, :, :, (t + 1))
-
-            # P_{t+1,t|n} = V_{t+1} * J_t'
-            P_crosslag[:, :, t] = V_tp1 * J_t'
+            TPtt = T * P_upd_t
+            P_crosslag[:, :, t] = TPtt - P_pred_tp1 * (view(N_store, :, :, t + 1) * TPtt)
         end
 
         return SmootherResult(alpha_smooth, V_smooth, P_crosslag)

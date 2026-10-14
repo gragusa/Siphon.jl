@@ -1018,18 +1018,28 @@ Other author answers, verbatim:
 ### CHUNK-042: fix-static-kernel-numerics
 - **Kind**: `implement`
 - **Description**: Found by CHUNK-032 when running `docs/src/tutorials/estimation_methods.md`. On the DNS example (8 maturities, 3 states, `P1 = 1e7`, H ≈ 1e-4), the static multivariate kernel returns `-Inf` at the starting values and at the profile-EM optimum ("innovation covariance not positive definite in period 2"), while `static = :off` gives 2881 / 3662. Under `static = :auto` this affects `ssm_loglik`, `optimize_ssm`, `fit!(MLE())` and `kalman_filter!(::StateSpaceModel)`. Second defect: `optimize_ssm` then reports `converged = true` with `loglik = -Inf` and θ equal to the starting values, which is a silent failure. Fix the static kernel numerics (see the `inv(cholesky(F))` open question; the dynamic path symmetrizes the filtered covariance, the static one may not), and make MLE throw or warn when the objective is `-Inf` at θ0 or at the returned optimum. Test: the DNS case at `:on` matches `:off`; `optimize_ssm` with a `-Inf` start does not report convergence. Verify by running `estimation_methods.md`.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-032
 - **Cluster**: release
 - **Notes**:
+  - Cause: the static `kalman_loglik` and both `kalman_filter` kernels (static and dynamic) formed `inv(chol(F))` and updated P as `(T - KZ) P T'` (the static loglik's comment wrongly called it Joseph form). With P1 = 1e7 and H ≈ 1e-4, F has condition number ~1e11, and the explicit inverse lost enough accuracy to make F₂ indefinite. The dynamic `kalman_loglik`, which already used Cholesky solves, was fine.
+  - Fix (`filter_ad.jl`): all three kernels now use `M = P Z' F⁻¹` from `chol \ (Z P)`, `quad = v' (chol \ v)`, `P_filt = P - M (Z P)` symmetrized, `K = T M`. Static loglik still allocates 0 bytes (≈77 ns/period on a 3-obs, 2-state model).
+  - `_mle` (`dsl/optimization.jl`) throws an `ArgumentError` when the log-likelihood at θ0 is not finite, and `converged` requires a finite objective (the warning now prints the log-likelihood). Covers `optimize_ssm`, `fit!(MLE())` and the EKF path.
+  - Tests: "Static and dynamic kernels agree under an ill-conditioned F" (api_coverage; 5 of 6 checks fail on the old kernels) and "Maximum likelihood from a failing start" (failure_tests). `estimation_methods.md` now runs every DNS block.
+  - Not changed: the exact diffuse kernels (`filter_ad.jl` ~1219/1291/1500/1600) and the scalar kernels still use `inv(chol)`/`1/F`; see Open Questions.
 
 ### CHUNK-043: fix-em-arma-smoother-posdef
 - **Kind**: `implement`
 - **Description**: Found by CHUNK-032. `fit!(EM(), StateSpaceModel(arma(2, 0), n), y)` on simulated AR(2) data throws `PosDefException` from `cholesky!` in `_kalman_smoother_cov!` (`inplace.jl` ~1356), called from `em_estimate!`. The ARMA state has H = 0 and a singular R Q Rᵀ. Find which matrix is factorized, make the smoother handle a singular (PSD) covariance or report a clear error, and decide whether EM should support AR templates. Add a regression test.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-032
 - **Cluster**: release
 - **Notes**:
+  - Cause: the lag-one cross covariance used `J = P_{t-1|t-1} T' P_{t|t-1}⁻¹` with a 1e-10 ridge; under H = 0 in companion form P_{t|t-1} is singular and `cholesky!` threw. The same pattern was in `ekf_inplace.jl` and `smoother_ad.jl`.
+  - Fix: all three use `Cov[α_t, α_{t-1} | y] = (I - P_t N_{t-1}) T P_{t-1|t-1}` (Durbin & Koopman 2012, §4.7; equal to V_t J' when P_t is invertible), with no inverse. The functional smoother stores N_{t-1} per period when `crosscov = true`. The unused `J_smooth` scratch fields of `KalmanWorkspace` and `EKFWorkspace` were removed.
+  - Second finding: with the crash gone, `fit!(EM())` on `arma(2, 0)` "converged" in 3 iterations with φ2 stuck at its init (0.25; MLE gives −0.067). A state with a zero row of R is an exact function of the others, so the M-step reproduces that row of T. `_em_layout` now blocks T parameters in rows whose R row is fixed at zero, and `fit!(EM())` throws naming them (same mechanism as the existing "it enters R" check). Decision on "should EM support AR templates": only `arma(1, 0)`; higher AR orders need MLE. The ARMA tutorial says so.
+  - Existing test changed: "block_diag matches manual block-diagonal spec under EM" ran EM on a `companion_free(2, :φ)` block with a shock-free lag state; under the old code φ_2 stayed at 0.25 (loglik −301.6 vs MLE −292.7), so both specs were "equal" but wrong. The test now gives every state a shock (R = I, Q gains `q_lag`), keeps the equivalence checks, and checks only ρ against the truth (the AR(2) block is weakly identified at n = 120: EM and MLE both give φ_1 ≈ 0.24, h1 → 0).
+  - Tests (em_tests): "Cross-lag covariances with a singular predicted covariance" (in-place vs functional agree, finite, zero for the exactly observed state) and "fit!(EM) on autoregressive templates" (arma(2,0) throws; arma(1,0) EM ≈ MLE).
 
 ### CHUNK-033: finalize-conversion-guide
 - **Kind**: `implement`
@@ -1088,6 +1098,7 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-030 (remove-dead-exports-and-utilities) → next: CHUNK-031
 - 2026-10-14 CHUNK-031 (annotate-public-api) → next: CHUNK-032
 - 2026-10-14 CHUNK-032 (sync-docs; added CHUNK-042, CHUNK-043) → next: CHUNK-042
+- 2026-10-14 CHUNK-042 (fix-static-kernel-numerics), CHUNK-043 (fix-em-arma-smoother-posdef) → next: CHUNK-033
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.
@@ -1121,3 +1132,5 @@ Other author answers, verbatim:
 - `custom_ssm` reads a `Vector` R as a row (1 × r), so `R = [1.0; FreeParam(:θ1); …]` fails with a `_to_matrix(::Vector{Any})` MethodError; the docs use `;;`. Accepting a column vector for an r-state, 1-shock `R` (or a clearer error) would help.
 - Several template docstrings document `diffuse = true` as "Approximate diffuse (P1 = 1e7)". With small observation variances this P1 makes the innovation covariance badly conditioned (see CHUNK-042); consider whether 1e7 is the right default.
 - `docs/build/` is listed in `.gitignore` but 23 generated files under it are tracked, so every docs build dirties the tree. `git rm -r --cached docs/build` would untrack them.
+- The exact diffuse kernels in `filter_ad.jl` (post-diffuse `Fstar`, `Finf`) and the in-place `_apply_Finv!` paths were not audited for the explicit-inverse problem fixed in CHUNK-042. `_rts_step` and the `Ptt === nothing` branch of `_kalman_smoother` also use `inv(F_t)`.
+- EM cannot estimate T entries in noise-free rows (CHUNK-043), which rules out `arma(p, 0)` for p > 1. The template's companion layout `T = [φ1 1; φ2 0]` puts φ2… in shock-free rows. The lagged-observation layout `T = [φ1 φ2 …; I 0]` (state = (yₜ, yₜ₋₁, …)) puts every φ in row 1, which has the shock, so EM could estimate pure AR models if `arma(p, 0)` used it.

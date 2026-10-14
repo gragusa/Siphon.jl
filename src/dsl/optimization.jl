@@ -119,13 +119,24 @@ function _mle(spec, y, method, θ0, ad_backend, static, prob_kwargs; warn::Bool 
     θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0, y))
 
     negloglik(θ_u, _) = -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, static)
+    # From a non-finite start the optimizer cannot move and returns θ0 with a
+    # success code.
+    ll0 = -negloglik(θ0_u, nothing)
+    isfinite(ll0) ||
+        throw(ArgumentError("the log-likelihood at the starting values is $ll0 (the " *
+                            "filter failed, e.g. an innovation covariance that is not " *
+                            "positive definite), so maximum likelihood cannot start. " *
+                            "Starting values: $(TransformVariables.transform(t, θ0_u)). " *
+                            "Pass other starting values with θ0."))
     optf = OptimizationFunction(negloglik, ad_backend)
     prob = OptimizationProblem(optf, θ0_u; prob_kwargs...)
     result = Optimization.solve(prob, method; kwargs...)
-    converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success
+    converged = result.retcode == Optimization.SciMLBase.ReturnCode.Success &&
+                isfinite(result.objective)
     if warn && !converged
         @warn "Maximum likelihood optimisation did not converge (return code " *
-              "$(result.retcode)). Try other starting values (θ0) or a larger `maxiters`. " *
+              "$(result.retcode), log-likelihood $(-result.objective)). Try other " *
+              "starting values (θ0) or a larger `maxiters`. " *
               "Pass `warn = false` to silence this warning."
     end
 

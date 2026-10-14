@@ -151,7 +151,6 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     r_smooth::Vector{T}   # m: smoother recursion vector
     N_smooth::Matrix{T}   # m × m: smoother recursion matrix
     L_smooth::Matrix{T}   # m × m: T - K*Z
-    J_smooth::Matrix{T}   # m × m: for cross-cov computation
 
     # Scalars
     loglik::T
@@ -247,7 +246,6 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         zeros(T, m),         # r_smooth
         zeros(T, m, m),      # N_smooth
         zeros(T, m, m),      # L_smooth
-        zeros(T, m, m),      # J_smooth
 
         # Scalars
         zero(T),                     # loglik
@@ -1310,78 +1308,17 @@ function _kalman_smoother_cov!(ws::KalmanWorkspace{T}, crosscov::Bool,
             end
         end
 
-        # Cross-lag covariance: Cov[α_{t}, α_{t-1} | y_{1:n}]
-        # Computed during backward pass for t > 1
-        # P_{t,t-1|n} = (I - P_t * N_{t-1}) * L_{t-1} * P_{t-1}
-        # where L_{t-1} = T - K_{t-1} * Z
-        #
-        # Alternative formula (Shumway & Stoffer):
-        # P_{t,t-1|n} = V_t * J_{t-1}'
-        # where J_{t-1} = P_{t-1|t-1} * T' * inv(P_{t|t-1})
-        #
-        # We use: P_{t,t-1|n} = P_t * L_{t-1}' * (I - N_{t-1} * P_{t-1}) for t > 1
-        # Actually easier: compute after main loop using stored V, P, T, K
-
-        # For efficiency, compute cross-cov here using the formula:
-        # Cov[α_{t+1}, α_t | y] for t = 1..n-1
-        # We're at time t going backward, so we compute Cov[α_t, α_{t-1}]
-        # which corresponds to Pcross[:,:,t-1]
-
+        # Cross-lag covariance Cov[α_t, α_{t-1} | y_{1:n}] (Durbin & Koopman 2012,
+        # Section 4.7): (I - P_t N_{t-1}) L_{t-1} P_{t-1}, with
+        # L_{t-1} P_{t-1} = T P_{t-1|t-1}. N_smooth holds N_{t-1} here. No matrix
+        # is inverted, so a singular P_t (H = 0, ARMA and companion states) is fine.
         if crosscov && t > 1
-            # Need: Cov[α_t, α_{t-1} | y_{1:n}] = P_{t,t-1|n}
-            # Using formula: P_{t,t-1|n} = V_t * J_{t-1}'
-            # where J_{t-1} = P_{t-1|t-1} * T' * inv(P_{t|t-1})
-            #             = Ptt[:,:,t-1] * T' * inv(Pt[:,:,t])
-
-            V_t = view(ws.Vs, :, :, t)
-            Ptt_tm1 = view(ws.Ptt, :, :, (t - 1))      # P_{t-1|t-1}
-            Pt_t = view(ws.Pt, :, :, t)            # P_{t|t-1}
-
-            # J_{t-1} = Ptt_{t-1} * T' * inv(Pt_t)
-            # tmp_mm1 = Ptt_{t-1} * T'
-            mul!(ws.tmp_mm1, Ptt_tm1, ws.Tmat')
-
-            # tmp_mm2 = inv(Pt_t) - use Cholesky with regularization for numerical stability
-            copyto!(ws.tmp_mm2, Pt_t)
-            # Symmetrize and add small regularization
-            eps_reg = T(1e-10) * max(one(T), tr(ws.tmp_mm2) / m)
-            for j in 1:m
-                for i in 1:(j - 1)
-                    avg = (ws.tmp_mm2[i, j] + ws.tmp_mm2[j, i]) / 2
-                    ws.tmp_mm2[i, j] = avg
-                    ws.tmp_mm2[j, i] = avg
-                end
-                ws.tmp_mm2[j, j] += eps_reg  # regularization on diagonal
-            end
-            chol_P = cholesky!(Symmetric(ws.tmp_mm2, :L))
-
-            # J = tmp_mm1 * inv(Pt_t)
-            # Solve Pt_t * J' = tmp_mm1' for J'
-            # i.e., for each column j of tmp_mm1', solve Pt_t * x = tmp_mm1'[:,j]
-            # tmp_mm1' is m × m, so we solve m systems
-
-            # Actually: J = tmp_mm1 * inv(Pt_t)
-            # J' = inv(Pt_t)' * tmp_mm1' = inv(Pt_t) * tmp_mm1' (symmetric)
-            # Solve Pt_t * J' = tmp_mm1'
-
-            # Copy tmp_mm1' into J_smooth (which is m × m)
-            for j in 1:m, i in 1:m
-
-                ws.J_smooth[i, j] = ws.tmp_mm1[j, i]  # transpose
-            end
-
-            # Solve L * L' * J' = tmp_mm1' column by column
-            L_P = LowerTriangular(chol_P.L)
-            for j in 1:m
-                col = view(ws.J_smooth, :, j)
-                ldiv!(L_P, col)
-                ldiv!(L_P', col)
-            end
-            # Now J_smooth = J' = (Ptt_{t-1} * T' * inv(Pt_t))'
-
-            # P_{t,t-1|n} = V_t * J_{t-1}' = V_t * J_smooth
+            Ptt_tm1 = view(ws.Ptt, :, :, (t - 1))
+            mul!(ws.tmp_mm1, ws.Tmat, Ptt_tm1)          # T P_{t-1|t-1}
+            mul!(ws.tmp_mm2, ws.N_smooth, ws.tmp_mm1)   # N_{t-1} T P_{t-1|t-1}
             Pcross_t = view(ws.Pcross, :, :, (t - 1))
-            mul!(Pcross_t, V_t, ws.J_smooth)
+            copyto!(Pcross_t, ws.tmp_mm1)
+            mul!(Pcross_t, P_t, ws.tmp_mm2, -one(T), one(T))
         end
     end
 

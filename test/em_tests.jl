@@ -365,6 +365,8 @@ end
     # block_diag. The model has an AR(2) block and an independent AR(1)
     # block. Running EM with the same data, starting values, and iteration
     # count should produce identical parameter estimates and log-likelihood.
+    # Every state has its own shock: EM cannot move a T entry in a row whose
+    # state has none.
 
     # ---- DSL spec via block_diag ----
     T_dsl = block_diag(
@@ -377,6 +379,7 @@ end
     )
     Q_dsl = block_diag(
         FreeParam(:q1; init = 1.0, lower = 0.0),
+        FreeParam(:q_lag; init = 1.0, lower = 0.0),
         FreeParam(:q2; init = 1.0, lower = 0.0)
     )
 
@@ -389,15 +392,14 @@ end
                    0.0 0.0 FreeParam(:ρ, init = 0.5, lower = -0.99, upper = 0.99)]
     H_manual = Any[FreeParam(:h1, init = 1.0, lower = 0.0) 0.0;
                    0.0 FreeParam(:h2, init = 1.0, lower = 0.0)]
-    Q_manual = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0;
-                   0.0 FreeParam(:q2, init = 1.0, lower = 0.0)]
+    Q_manual = Any[FreeParam(:q1, init = 1.0, lower = 0.0) 0.0 0.0;
+                   0.0 FreeParam(:q_lag, init = 1.0, lower = 0.0) 0.0;
+                   0.0 0.0 FreeParam(:q2, init = 1.0, lower = 0.0)]
 
     # Observation, selection, initial state are identical and fixed.
     Z = [1.0 0.0 0.0;
          0.0 0.0 1.0]            # obs 1 ← state 1, obs 2 ← state 3
-    R = [1.0 0.0;
-         0.0 0.0;
-         0.0 1.0]                # shock 1 → state 1, shock 2 → state 3
+    R = Matrix(1.0I, 3, 3)       # one shock per state
     a1 = [0.0, 0.0, 0.0]
     P1 = Matrix(1e6I, 3, 3)
 
@@ -419,13 +421,13 @@ end
     # Truth: AR(2) with φ = (0.6, -0.2), AR(1) with ρ = 0.7
     φ_true = (0.6, -0.2)
     ρ_true = 0.7
-    σ_q1, σ_q2 = sqrt(0.5), sqrt(0.3)
+    σ_q1, σ_q2, σ_lag = sqrt(0.5), sqrt(0.3), sqrt(0.1)
     σ_h1, σ_h2 = sqrt(0.4), sqrt(0.2)
 
     α = zeros(3, n)
     for t in 2:n
         α[1, t] = φ_true[1] * α[1, t - 1] + φ_true[2] * α[2, t - 1] + σ_q1 * randn()
-        α[2, t] = α[1, t - 1]
+        α[2, t] = α[1, t - 1] + σ_lag * randn()
         α[3, t] = ρ_true * α[3, t - 1] + σ_q2 * randn()
     end
     y = Matrix{Float64}(undef, 2, n)
@@ -438,25 +440,17 @@ end
     model_dsl = StateSpaceModel(spec_dsl, n)
     model_manual = StateSpaceModel(spec_manual, n)
 
-    fit!(EM(), model_dsl, y; maxiter = 60, verbose = false)
-    fit!(EM(), model_manual, y; maxiter = 60, verbose = false)
+    fit!(EM(), model_dsl, y; maxiter = 60, verbose = false, warn = false)
+    fit!(EM(), model_manual, y; maxiter = 60, verbose = false, warn = false)
 
     # ---- Compare ----
     # EM is deterministic given the same starting values; equivalent specs
     # should match to machine precision.
     @test loglikelihood(model_dsl) ≈ loglikelihood(model_manual) atol = 1e-10
     @test model_dsl.theta_values ≈ model_manual.theta_values atol = 1e-10
-    # The estimates should also be roughly close to the truth (loose check —
-    # this is a small-sample EM with n=120, not a consistency proof).
-    # Note: with the corrected H M-step (Apr 2026, see update_H! docstring) EM
-    # finds a higher-likelihood optimum that is slightly farther from the
-    # truth in this finite sample. The point estimate φ_1 ≈ 0.86 sits inside
-    # the data's likelihood basin, not the population truth's. This is the
-    # right behaviour for ML — the test is loose by design.
-    names = param_names(spec_dsl)
-    θ = model_dsl.theta_values
-    @test isapprox(θ[findfirst(==(:φ_1), names)], φ_true[1], atol = 0.30)
-    @test isapprox(θ[findfirst(==(:ρ), names)], ρ_true, atol = 0.30)
+    # Loose check against the truth for the AR(1) block, which is well
+    # identified; the AR(2) block with a shock on its lag state is not at n = 120.
+    @test isapprox(parameters(model_dsl).ρ, ρ_true, atol = 0.30)
 end
 
 # ============================================
@@ -705,4 +699,57 @@ end
     # Free cell estimated (positive, finite)
     @test kf_ws.P1[1, 1] > 0
     @test isfinite(kf_ws.P1[1, 1])
+end
+
+@testset "Cross-lag covariances with a singular predicted covariance" begin
+    # AR(2) in companion form with H = 0: the first state is observed exactly, so
+    # P_{t|t-1} is singular from the second period on.
+    Z = [1.0 0.0]
+    H = [0.0;;]
+    Tm = [0.6 1.0; -0.15 0.0]
+    R = [1.0; 0.0;;]
+    Q = [1.0;;]
+    a1 = zeros(2)
+    P1 = [1.6 -0.1; -0.1 0.03]
+    rng = MersenneTwister(7)
+    n = 80
+    y = zeros(1, n)
+    for t in 3:n
+        y[1, t] = 0.6 * y[1, t - 1] - 0.15 * y[1, t - 2] + randn(rng)
+    end
+
+    ws = KalmanWorkspace(Z, H, Tm, R, Q, a1, P1, n)
+    kalman_filter!(ws, y)
+    kalman_smoother!(ws; crosscov = true)
+    Pc_ws = crosslag_covs(ws)
+    @test all(isfinite, Pc_ws)
+
+    sm = kalman_smoother(kalman_filter(KFParms(Z, H, Tm, R, Q), y, a1, P1);
+        crosscov = true)
+    @test crosslag_covs(sm) ≈ Pc_ws atol = 1e-10
+
+    # The first state equals y exactly, so its cross-lag covariance with any
+    # state is zero.
+    @test all(abs.(Pc_ws[1, :, :]) .< 1e-10)
+    @test all(abs.(Pc_ws[:, 1, :]) .< 1e-10)
+end
+
+@testset "fit!(EM) on autoregressive templates" begin
+    rng = MersenneTwister(1)
+    n = 300
+    y = zeros(1, n)
+    for t in 3:n
+        y[1, t] = 0.6 * y[1, t - 1] - 0.15 * y[1, t - 2] + randn(rng)
+    end
+
+    # φ2 sits in a row of T whose state has no shock; EM would leave it at its
+    # starting value.
+    @test_throws "cannot estimate φ2 (it enters row 2 of T, whose state has no shock" fit!(
+        EM(), StateSpaceModel(arma(2, 0), n), y)
+
+    m_em = fit!(EM(), StateSpaceModel(arma(1, 0), n), y; maxiter = 2000)
+    m_mle = fit!(MLE(), StateSpaceModel(arma(1, 0), n), y)
+    @test isconverged(m_em)
+    @test parameters(m_em).φ1 ≈ parameters(m_mle).φ1 rtol = 1e-6
+    @test loglikelihood(m_em) ≈ loglikelihood(m_mle) rtol = 1e-8
 end

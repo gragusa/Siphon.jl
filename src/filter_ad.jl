@@ -389,46 +389,40 @@ function kalman_loglik(
         # Innovation covariance (static)
         F = Z * P_state * transpose(Z) + H
 
-        # Compute inverse and log-determinant
+        ZP = Z * P_state
         if P == 1
-            # Scalar observation: direct computation
             F_val = F[1, 1]
             if F_val <= zero(ET)
                 return ET(-Inf)
             end
-            Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
             logdetF = log(F_val)
             quad_form = v[1]^2 / F_val
+            # M = P Z' F⁻¹
+            M_gain = transpose(ZP) / F_val
         else
-            # Multivariate: use Cholesky
             F_sym = Symmetric(SMatrix{P, P, ET}((F + transpose(F)) / 2))
             chol_result = cholesky(F_sym; check = false)
             if !issuccess(chol_result)
                 return ET(-Inf)
             end
-            # For static matrices, inv is efficient
-            Finv = SMatrix{P, P, ET}(inv(chol_result))
-            # logdet from Cholesky: 2 * sum(log(diag(U)))
             logdetF = 2 * sum(log.(diag(chol_result.U)))
-            quad_form = dot(v, Finv * v)
+            # Cholesky solves, not an explicit F⁻¹: under a large approximate
+            # diffuse P1, F is ill-conditioned and inv(F) loses the accuracy
+            # that keeps the next F positive definite.
+            quad_form = dot(v, chol_result \ v)
+            M_gain = transpose(chol_result \ ZP)
         end
 
-        # Log-likelihood contribution
         loglik += -ET(0.5) * (logdetF + quad_form)
 
         if !isfinite(loglik)
             return ET(-Inf)
         end
 
-        # Kalman gain (static)
-        K = T_mat * P_state * transpose(Z) * Finv
-
-        # State update
-        a = T_mat * a + K * v
-
-        # Covariance update (Joseph form for stability)
-        L = T_mat - K * Z
-        P_state = L * P_state * transpose(T_mat) + RQR
+        a = T_mat * (a + M_gain * v)
+        P_filt = P_state - M_gain * ZP
+        P_filt = (P_filt + transpose(P_filt)) / 2
+        P_state = T_mat * P_filt * transpose(T_mat) + RQR
     end
 
     # Constant term
@@ -621,9 +615,10 @@ function kalman_filter(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
                         vt_store, Ft_store, Kt_store, missing_mask, observed_mask, t)
                 end
-                Finv = fill(one(ET) / F_val, 1, 1)
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
+                # M = P Z' F⁻¹
+                M_gain = (P_pred * Zr') / F_val
             else
                 F_sym = Symmetric((F + F') / 2)
                 chol_result = cholesky(F_sym; check = false)
@@ -632,15 +627,17 @@ function kalman_filter(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
                         vt_store, Ft_store, Kt_store, missing_mask, observed_mask, t)
                 end
-                Finv = inv(chol_result)
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
-                quad_form = dot(v, Finv * v)
+                # Cholesky solves, not an explicit F⁻¹: under a large approximate
+                # diffuse P1, F is ill-conditioned and inv(F) loses the accuracy
+                # that keeps the next F positive definite.
+                quad_form = dot(v, chol_result \ v)
+                M_gain = transpose(chol_result \ (Zr * P_pred))
             end
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            PZt = P_pred * Zr'
-            K = p.T * PZt * Finv
+            K = p.T * M_gain
 
             # Reduced-system quantities occupy the leading rows and columns; the
             # rest of the slice marks rows that were not observed.
@@ -651,8 +648,9 @@ function kalman_filter(
             Kt_store[:, :, t] .= zero(ET)
             Kt_store[:, 1:pt, t] = K
 
-            a_filt = a_pred + PZt * Finv * v
-            P_filt = P_pred - PZt * Finv * Zr * P_pred
+            a_filt = a_pred + M_gain * v
+            P_filt = P_pred - M_gain * (Zr * P_pred)
+            P_filt = (P_filt + P_filt') / 2
             att_store[:, t] = a_filt
             Ptt_store[:, :, t] = P_filt
 
@@ -752,7 +750,8 @@ function kalman_filter(
             n_obs += 1
 
             v = y_t - Z * a_pred
-            F = Z * P_pred * transpose(Z) + H
+            ZP = Z * P_pred
+            F = ZP * transpose(Z) + H
 
             if P == 1
                 F_val = F[1, 1]
@@ -761,9 +760,10 @@ function kalman_filter(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
                         vt_store, Ft_store, Kt_store, missing_mask; failed_at = t)
                 end
-                Finv = SMatrix{1, 1, ET}((one(ET) / F_val,))
                 logdetF = log(F_val)
                 quad_form = v[1]^2 / F_val
+                # M = P Z' F⁻¹
+                M_gain = transpose(ZP) / F_val
             else
                 F_sym = Symmetric(SMatrix{P, P, ET}((F + transpose(F)) / 2))
                 chol_result = cholesky(F_sym; check = false)
@@ -772,20 +772,22 @@ function kalman_filter(
                         p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
                         vt_store, Ft_store, Kt_store, missing_mask; failed_at = t)
                 end
-                Finv = SMatrix{P, P, ET}(inv(chol_result))
                 logdetF = 2 * sum(log.(diag(chol_result.U)))
-                quad_form = dot(v, Finv * v)
+                # Cholesky solves, not an explicit F⁻¹ (see the static kalman_loglik).
+                quad_form = dot(v, chol_result \ v)
+                M_gain = transpose(chol_result \ ZP)
             end
 
             loglik += -ET(0.5) * (logdetF + quad_form)
 
-            K = T_mat * P_pred * transpose(Z) * Finv
+            K = T_mat * M_gain
             vt_store[:, t] .= v
             Ft_store[:, :, t] .= F
             Kt_store[:, :, t] .= K
 
-            a_filt = a_pred + P_pred * transpose(Z) * Finv * v
-            P_filt = P_pred - P_pred * transpose(Z) * Finv * Z * P_pred
+            a_filt = a_pred + M_gain * v
+            P_filt = P_pred - M_gain * ZP
+            P_filt = (P_filt + transpose(P_filt)) / 2
             att_store[:, t] .= a_filt
             Ptt_store[:, :, t] .= P_filt
 

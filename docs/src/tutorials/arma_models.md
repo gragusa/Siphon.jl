@@ -266,9 +266,11 @@ end
 ## Why MLE and not EM
 
 ARMA models are estimated with `fit!(MLE(), …)`. The MA coefficients θ₁, θ₂
-enter the selection matrix `R`, and the EM M-step does not update `R`, so
-`fit!(EM(), model, y)` on an `arma(p, q)` spec with `q > 0` throws an
-`ArgumentError` naming the parameters it cannot estimate.
+enter the selection matrix `R`, which the EM M-step does not update. The AR
+coefficients φ₂, φ₃, … enter rows of `T` whose states have no shock, where the
+M-step reproduces the current values. So `fit!(EM(), model, y)` on an
+`arma(p, q)` spec with `q > 0` or `p > 1` throws an `ArgumentError` naming the
+parameters it cannot estimate; `arma(1, 0)` works with either method.
 
 ## Complete Working Example
 

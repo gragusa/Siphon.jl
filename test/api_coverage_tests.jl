@@ -286,3 +286,36 @@ end
         @test Base.Docs.hasdoc(Siphon, name)
     end
 end
+
+@testset "Static and dynamic kernels agree under an ill-conditioned F" begin
+    # Eight Nelson-Siegel yields driven by three factors, small measurement
+    # variances and P1 = 1e7: F has rank-3 structure plus H, with a condition
+    # number near 1e11 in the first period.
+    rng = MersenneTwister(42)
+    maturities = [3, 6, 12, 24, 36, 60, 84, 120]
+    p, n = length(maturities), 200
+    spec = dns_model(maturities; λ = FreeParam(init = 0.06), T = FreeParam(init = 0.9),
+        Q = FreeParam(init = 0.01), H = FreeParam(init = 0.001))
+    θ = NamedTuple{Tuple(param_names(spec))}(initial_values(spec))
+    Z = Siphon.build_kfparms(spec, θ).Z
+    f = zeros(3, n)
+    y = zeros(p, n)
+    for t in 1:n
+        t > 1 && (f[:, t] = [0.99, 0.95, 0.90] .* f[:, t - 1] .+ 0.1 .* randn(rng, 3))
+        y[:, t] = Z * f[:, t] .+ 0.01 .* randn(rng, p)
+    end
+
+    ll_off = ssm_loglik(spec, θ, y; static = :off)
+    ll_on = ssm_loglik(spec, θ, y; static = :on)
+    @test isfinite(ll_off)
+    @test ll_on ≈ ll_off rtol = 1e-8
+
+    ss_on = build_linear_state_space(spec, θ, y; static = :on)
+    ss_off = build_linear_state_space(spec, θ, y; static = :off)
+    r_on = kalman_filter(ss_on.p, y, ss_on.a1, ss_on.P1)
+    r_off = kalman_filter(ss_off.p, y, ss_off.a1, ss_off.P1)
+    @test loglikelihood(r_on) ≈ ll_off rtol = 1e-8
+    @test loglikelihood(r_off) ≈ ll_off rtol = 1e-8
+    @test filtered_states(r_on) ≈ filtered_states(r_off) rtol = 1e-6
+    @test isfinite(kalman_loglik(StateSpaceModel(spec, θ, n), y))
+end

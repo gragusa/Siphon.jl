@@ -79,6 +79,24 @@ function _em_layout(spec::SSMSpec)
         end
     end
 
+    # A state whose row of R is zero has no shock, so it is an exact function of
+    # the other states and the M-step reproduces the current row of T: a
+    # parameter there would never move.
+    if !haskey(spec.matrix_exprs, :R)
+        _fixed_zero(elem) = elem isa FixedValue && iszero(elem.value)
+        noise_free(i) = all(j -> _fixed_zero(get(spec.R.elements, (i, j), spec.R.default)),
+            1:spec.R.dims[2])
+        for (name, (mat, cs)) in cells
+            mat == :T || continue
+            i = findfirst(I -> noise_free(I[1]), cs)
+            i === nothing && continue
+            row = cs[i][1]
+            block!(name,
+                "it enters row $row of T, whose state has no shock " *
+                "(row $row of R is zero), so EM cannot update it")
+        end
+    end
+
     # A parameter shared by several cells needs an M-step that keeps the cells
     # equal. Symmetric pairs (i, j)/(j, i) of a covariance are one cell.
     for (name, (mat, cs)) in cells
