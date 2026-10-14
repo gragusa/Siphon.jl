@@ -5,7 +5,7 @@
 - **Kind**: `design`
 - **Package**: Siphon
 - **Source review date**: 2026-10-08
-- **Current version**: 0.1.0
+- **Current version**: 0.2.0 (was 0.1.0 at review time)
 - **Issue**: n/a
 
 ## Stated values
@@ -1047,19 +1047,26 @@ Other author answers, verbatim:
   - make it complete, with every removed or renamed name and every changed return shape or keyword, as an old → new table plus short before/after code snippets for the common workflows (template → fit → smooth → forecast; functional filter; in-place workspace; EM; EKF);
   - order it by workflow, not by chunk;
   - link it from `index.md` and the README.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-032
 - **Cluster**: release
 - **Notes**:
+  - Sections reordered by workflow (setup → specification → estimation → filtering → accessors → smoothing → forecasting → workspaces → DFM → removals). A new "Common workflows" section has before/after snippets for template/fit/smooth/forecast, the functional filter, the in-place workspace, EM and the EKF. The "Now" snippets were run on HEAD; the "0.1" snippets come from the guide's old → new tables, not from a 0.1 run.
+  - A completeness audit of 3ebfaae..HEAD (exports, public names, keywords) found no missing names. It did find result-changing bug fixes that the guide did not mention, now listed in a new "Results that change" section: the MLE objective, bounds, data-scaled starts, `diffuse = :exact` actually used, `P1_inf` in `build_linear_state_space`, parameterized `P1`, and `optimize_ssm_with_stderr` with the delta method plus `vcov`. Also added: the MLE non-finite start error, the EM shock-free-row rejection, and the StatsAPI/LogDensityProblems generics.
+  - Fixed stale entries: `optimize_ekf` in the convergence table; `KalmanFilterResultScalar` listed as an `AbstractFilterResult` subtype.
+  - The README now links the guide (`index.md` and `make.jl` already did). The strict docs build passes. No source changes, so the test suite and ambiguity count were not rerun.
 
 ### CHUNK-034: version-bump
 - **Kind**: `version-bump`
 - **Description**: Bump `Project.toml` from 0.1.0 to 0.2.0, the breaking minor release for 0.x. Run the full test suite, Aqua and `detect_ambiguities`, and compare the results with the CHUNK-001 baseline.
-- **Status**: `not-started`
+- **Status**: `complete`
 - **Breaking**: yes
 - **Depends on**: CHUNK-012, CHUNK-013, CHUNK-014, CHUNK-015, CHUNK-016, CHUNK-017, CHUNK-018, CHUNK-019, CHUNK-020, CHUNK-021, CHUNK-022, CHUNK-023, CHUNK-026, CHUNK-030, CHUNK-033, CHUNK-037, CHUNK-038, CHUNK-039, CHUNK-042, CHUNK-043
 - **Cluster**: release
 - **Notes**:
+  - `Project.toml` version 0.1.0 → 0.2.0. There is no CHANGELOG; the conversion guide documents the 0.1 → 0.2 changes.
+  - All 20 dependencies were complete. Full `Pkg.test()` on Julia 1.13 passes in 275 s, Aqua passes 10 of 10, and `detect_ambiguities(Siphon)` = 0 (baseline 0).
+  - Ran with the conversion-guide changes uncommitted, at the author's request.
 
 ## Session ledger
 <!-- The implementer appends one line after each session: `- YYYY-MM-DD CHUNK-XXX (name) → next: CHUNK-YYY` -->
@@ -1099,6 +1106,8 @@ Other author answers, verbatim:
 - 2026-10-14 CHUNK-031 (annotate-public-api) → next: CHUNK-032
 - 2026-10-14 CHUNK-032 (sync-docs; added CHUNK-042, CHUNK-043) → next: CHUNK-042
 - 2026-10-14 CHUNK-042 (fix-static-kernel-numerics), CHUNK-043 (fix-em-arma-smoother-posdef) → next: CHUNK-033
+- 2026-10-14 CHUNK-033 (finalize-conversion-guide) → next: CHUNK-034
+- 2026-10-14 CHUNK-034 (version-bump) → next: none (plan complete)
 
 ## Open Questions
 - Each `decide` chunk (002–005) carries a reviewer recommendation. The implementer should present it and record the author's answer verbatim in **Decisions** before any dependent chunk starts.

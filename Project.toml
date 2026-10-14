@@ -1,6 +1,6 @@
 name = "Siphon"
 uuid = "4bbcb006-69a8-46c4-bd0b-6b150ee03dfc"
-version = "0.1.0"
+version = "0.2.0"
 author = "Giuseppe Ragusa <giuseppe.ragusa@gmail.com>"
 
 [deps]

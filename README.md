@@ -49,7 +49,7 @@ forecast(model, 12)        # forecasts of periods 101–112
 
 See `docs/` for the manual (build with `julia --project=docs docs/make.jl`) and
 `examples/` for worked examples. Users of Siphon 0.1 should read
-`docs/src/conversion_guide.md`.
+[the conversion guide](docs/src/conversion_guide.md).
 
 ## License
 
