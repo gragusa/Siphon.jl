@@ -79,13 +79,12 @@ end
     SimulationSmootherWorkspace{T}
 
 Working storage for `simulation_smoother!`. Holds the factors of `P1`, `Q` and
-`H`, the simulated path and its synthetic observations, and a copy of the
-smoothed states of the real data.
+`H`, the simulated path and its synthetic observations, and a copy of
+caller-supplied smoothed states of the real data.
 
 The factors depend only on `(P1, Q, H)`, so they are computed when the workspace
 is built and refreshed by `refresh_factors!` when those matrices change. A draw
-therefore costs two filter/smoother passes over storage that is already allocated,
-or one when the smoothed states of the data are supplied.
+therefore costs one filter/smoother pass over storage that is already allocated.
 """
 mutable struct SimulationSmootherWorkspace{T <: Real}
     state_dim::Int
@@ -157,25 +156,29 @@ end
 # ============================================
 
 """
-    _simulate_path!(sws, ws, rng, observed_mask)
+    _simulate_path!(sws, ws, rng, observed_mask; centered = false)
 
 Fill `sws.α_plus` with a draw from the model's unconditional state distribution
 and `sws.y_plus` with the matching observations, set to `NaN` wherever
-`observed_mask` says the real data is missing.
+`observed_mask` says the real data is missing. With `centered = true` the path is
+drawn around zero: the initial mean `a1` and the transition intercept `c` are
+dropped, while `P1`, `Q`, `H` and the period scales are kept.
 
-Censoring `y⁺` to the real pattern is what makes the draw correct: both smoothing
-passes must condition on the same set of positions, or they run on different
-information and the difference is not a draw from the posterior.
+Censoring `y⁺` to the real pattern is what makes the draw correct: the smoother
+applied to `y⁺` must condition on the same set of positions as the smoother of
+`y`, or the two run on different information and the result is not a draw from
+the posterior.
 """
 function _simulate_path!(
         sws::SimulationSmootherWorkspace{T}, ws::KalmanWorkspace{T},
-        rng::Random.AbstractRNG, observed_mask::AbstractMatrix{Bool}) where {T}
+        rng::Random.AbstractRNG, observed_mask::AbstractMatrix{Bool};
+        centered::Bool = false) where {T}
     m, p, n = sws.state_dim, sws.obs_dim, sws.n_times
 
-    # α⁺₁ ~ N(a₁, P₁)
+    # α⁺₁ ~ N(a₁, P₁), or N(0, P₁) when centered
     psd_rand!(sws.scratch_m, sws.P1_factor, rng, sws.noise_m)
     for i in 1:m
-        sws.α_plus[i, 1] = ws.a1[i] + sws.scratch_m[i]
+        sws.α_plus[i, 1] = centered ? sws.scratch_m[i] : ws.a1[i] + sws.scratch_m[i]
     end
 
     for t in 1:n
@@ -189,11 +192,15 @@ function _simulate_path!(
             y_t[i] = observed_mask[i, t] ? y_t[i] + sws.scratch_p[i] : T(NaN)
         end
 
-        # α⁺ₜ₊₁ = c + T α⁺ₜ + R η⁺ₜ, η⁺ₜ ~ N(0, sₜ² Q)
+        # α⁺ₜ₊₁ = c + T α⁺ₜ + R η⁺ₜ, η⁺ₜ ~ N(0, sₜ² Q), without c when centered
         if t < n
             α_next = view(sws.α_plus, :, t + 1)
-            copyto!(α_next, ws.c)
-            mul!(α_next, ws.Tmat, α_t, one(T), one(T))
+            if centered
+                mul!(α_next, ws.Tmat, α_t)
+            else
+                copyto!(α_next, ws.c)
+                mul!(α_next, ws.Tmat, α_t, one(T), one(T))
+            end
             psd_rand!(sws.scratch_r, sws.Q_factor, rng, sws.noise_r)
             mul!(sws.scratch_m, ws.R, sws.scratch_r, ws.period_scales[t], zero(T))
             for i in 1:m
@@ -214,18 +221,19 @@ end
 
 Overwrite `out` (`m × n`) with one draw from `p(α₁:ₙ | y₁:ₙ)` and return it.
 
-Implements the mean-correction form of Durbin & Koopman (2002): simulate a state
-path `α⁺` and matching observations `y⁺` from the model, smooth both `y` and
-`y⁺`, and form
+Implements the mean-correction form of Durbin & Koopman (2002). The smoothed mean
+`α̂(y)` is affine in the data, so with a state path `α⁺` and observations `y⁺`
+simulated from the model around zero mean (no `a1`, no intercept),
 
-    α̃ = α̂ − α̂⁺ + α⁺
+    α̃ = α⁺ + α̂(y − y⁺)
 
-which has the mean of `α̂` and the covariance of the conditional distribution.
+has the mean `α̂(y)` and the covariance of the conditional distribution. A draw
+costs one filter/smoother pass.
 
 `ws` must already carry the model parameters and initial conditions. It is left
-holding the filter and smoother results for `y⁺`, not for `y`, so a caller that
-needs the smoothed mean of the real data should keep the `smoothed` copy this
-function makes rather than reading `ws` afterwards. Only the means are computed, so
+holding the filter and smoother results for synthetic data, not for `y`, so a
+caller that needs the smoothed mean of the real data should compute it before
+drawing rather than reading `ws` afterwards. Only the means are computed, so
 `smoothed_states_cov(ws)` throws afterwards.
 
 # Arguments
@@ -234,9 +242,10 @@ function makes rather than reading `ws` afterwards. Only the means are computed,
 - `ws`: Kalman workspace with parameters set
 - `y`: observations, `p × n`, missing entries `NaN`
 - `rng`: random source; pass an explicit seeded generator for reproducibility
-- `smoothed`: `m × n` smoothed states of `y` from an earlier call. Supplying this
-  skips the first of the two smoothing passes, which halves the cost of every
-  draw after the first for a fixed model and dataset.
+- `smoothed`: `m × n` smoothed states of `y` from an earlier call. With it, the
+  path `α⁺` is simulated around the model's mean and the draw is formed as
+  `α̂ − α̂⁺ + α⁺`, with `α̂⁺` the smoothed states of `y⁺`. The draw has the same
+  distribution and the same cost of one pass.
 
 # Notes
 Requires the in-place filter, which is the only path that handles periods where
@@ -257,13 +266,11 @@ function simulation_smoother!(
     size(out) == (m, n) || throw(DimensionMismatch(
         "output is $(size(out)) but the state path is ($m, $n)"))
 
-    # α̂: smoothed states of the real data.
-    if smoothed === nothing
-        kalman_filter_and_smooth!(ws, y; covariances = false)
-        copyto!(sws.α_hat, smoothed_states(ws))
-    else
+    if smoothed !== nothing
         size(smoothed) == (m, n) || throw(DimensionMismatch(
             "smoothed states are $(size(smoothed)) but the state path is ($m, $n)"))
+        # Copied: `smoothed` may alias the workspace's own smoothed states, which
+        # the pass below overwrites.
         copyto!(sws.α_hat, smoothed)
     end
 
@@ -274,15 +281,27 @@ function simulation_smoother!(
 
         sws.obs_pattern[i, t] = !isnan(y[i, t])
     end
-    _simulate_path!(sws, ws, rng, sws.obs_pattern)
+    _simulate_path!(sws, ws, rng, sws.obs_pattern; centered = smoothed === nothing)
 
-    # α̂⁺: smoothed states of the synthetic data.
-    kalman_filter_and_smooth!(ws, sws.y_plus; covariances = false)
-    α_hat_plus = smoothed_states(ws)
+    if smoothed === nothing
+        # y − y⁺ in place of y⁺; NaN wherever y is missing.
+        for t in 1:n, i in 1:p
 
-    for t in 1:n, i in 1:m
+            sws.y_plus[i, t] = y[i, t] - sws.y_plus[i, t]
+        end
+        kalman_filter_and_smooth!(ws, sws.y_plus; covariances = false)
+        α_hat_diff = smoothed_states(ws)
+        for t in 1:n, i in 1:m
 
-        out[i, t] = sws.α_hat[i, t] - α_hat_plus[i, t] + sws.α_plus[i, t]
+            out[i, t] = α_hat_diff[i, t] + sws.α_plus[i, t]
+        end
+    else
+        kalman_filter_and_smooth!(ws, sws.y_plus; covariances = false)
+        α_hat_plus = smoothed_states(ws)
+        for t in 1:n, i in 1:m
+
+            out[i, t] = sws.α_hat[i, t] - α_hat_plus[i, t] + sws.α_plus[i, t]
+        end
     end
 
     return out
@@ -293,8 +312,8 @@ end
     simulation_smoother(ws::KalmanWorkspace, y, n_draws::Integer; rng=Random.default_rng()) -> Array{T,3}
 
 Draw from `p(α₁:ₙ | y₁:ₙ)`. Without `n_draws`, return one draw as an `m × n`
-matrix; with it, return `n_draws` draws as an `m × n × n_draws` array, sharing
-the smoothing pass over `y` across draws.
+matrix; with it, return `n_draws` draws as an `m × n × n_draws` array. Each draw
+costs one filter/smoother pass.
 
 `ws` must already carry the model parameters and initial conditions, and is left
 holding filter and smoother results for the last synthetic dataset.
@@ -323,13 +342,10 @@ function simulation_smoother(
     m, n = ws.state_dim, ws.n_times
     sws = SimulationSmootherWorkspace(ws)
 
-    kalman_filter_and_smooth!(ws, y; covariances = false)
-    α_hat = copy(smoothed_states(ws))
-
     draws = Array{T, 3}(undef, m, n, n_draws)
     out = Matrix{T}(undef, m, n)
     for d in 1:n_draws
-        simulation_smoother!(out, sws, ws, y; rng, smoothed = α_hat)
+        simulation_smoother!(out, sws, ws, y; rng)
         copyto!(view(draws, :, :, d), out)
     end
     return draws

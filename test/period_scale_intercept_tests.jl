@@ -215,6 +215,27 @@ end
     @test maximum(abs, cov(draws, dims = 2) - ref1.cov) < 0.05 * scale1
 end
 
+@testset "period scales and intercept — one-pass and two-pass draws agree" begin
+    # Without `smoothed` the draw is α⁺ + α̂(y − y⁺) with α⁺ simulated around
+    # zero; with it, α̂ − α̂⁺ + α⁺ with α⁺ simulated around the model's mean. Both
+    # consume the same random numbers and the smoothed mean is affine in the
+    # data, so they are the same draw up to rounding. With H = 0 the observed Fₜ
+    # are singular (row 3 depends on a lag observed exactly a period earlier).
+    for H in ([0.3 0.05 0.0; 0.05 0.2 0.0; 0.0 0.0 0.1], zeros(3, 3))
+        d = _ps_setup(; H)
+        ws = _ps_workspace(d; block = 2)
+        set_rank_revealing!(ws, iszero(H))
+        sws = Siphon.SimulationSmootherWorkspace(ws)
+        kalman_filter_and_smooth!(ws, d.y; covariances = false)
+        α̂ = copy(smoothed_states(ws))
+        one_pass = simulation_smoother!(zeros(4, d.n), sws, ws, d.y; rng = Xoshiro(5))
+        two_pass = simulation_smoother!(zeros(4, d.n), sws, ws, d.y; rng = Xoshiro(5),
+            smoothed = α̂)
+        @test one_pass ≈ two_pass atol = 1e-10
+        @test one_pass != α̂
+    end
+end
+
 @testset "period scales — ecbindex smoother fixture" begin
     # Reference values from the Python ecbindex package (H = 0, a quarterly flow
     # row, a ragged edge). Its scales[t] scales the disturbance entering period t,
