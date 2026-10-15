@@ -13,8 +13,11 @@ with two changes per step:
      computed with `ForwardDiff.jacobian` on the pure measurement map
      (`ADJacobian()`).
 
-Missing observations behave as in the linear filter: the measurement update is
-skipped and the state is propagated using only the transition equation.
+Missing observations behave as in the linear filter. NaN marks a missing value, one
+element at a time: in a partially observed period the measurement update runs on the
+rows that are present, with `h` and `Z_t` evaluated in full and then restricted to those
+rows. In a period with no observed row the update is skipped and the state is propagated
+using only the transition equation.
 """
 
 using LinearAlgebra
@@ -82,8 +85,9 @@ via the Extended Kalman Filter prediction-error decomposition.
 - This is the AD-compatible path: when `p.jacobian_mode === ADJacobian()` the
   measurement Jacobian is computed by `ForwardDiff.jacobian` on the pure
   `measurement(model, a, t)` map.
-- Missing observations skip the measurement update and propagate the state
-  via the transition equation, matching `kalman_loglik`.
+- NaN marks a missing value, one element at a time, as in `kalman_loglik` for a
+  `KFParms`. A partially observed period updates on the observed rows of `h(a_t, t)`
+  and `Z_t`; a period with no observed row skips the update.
 """
 function kalman_loglik(
         p::EKFParms,
@@ -92,9 +96,7 @@ function kalman_loglik(
         P1::AbstractMatrix
 )
     y = _nan_obs(y)
-    _require_no_partial_periods(y, "kalman_loglik")
     n = size(y, 2)
-    obs_dim = size(y, 1)
     ET = _ekf_filter_eltype(p, a1, P1)
 
     a = Vector{ET}(a1)
@@ -102,26 +104,29 @@ function kalman_loglik(
     RQR = p.R * p.Q * transpose(p.R)
     Tt = transpose(p.T)
     loglik = zero(ET)
-    n_obs = 0
+    n_obs_rows = 0
 
     for t in 1:n
         y_t = view(y, :, t)
 
-        if _has_missing(y_t)
+        if _all_missing(y_t)
             a = p.T * a
             P = p.T * P * Tt + RQR
             continue
         end
 
-        n_obs += 1
-
-        # Nonlinear measurement and Jacobian at the predicted state
+        # Nonlinear measurement and Jacobian at the predicted state, restricted to
+        # the observed rows. When every row is present the restriction selects all
+        # of them and this is the full-system update.
+        rows = _observed_row_indices(y_t)
+        obs_dim = length(rows)
+        n_obs_rows += obs_dim
         ŷ = measurement(p.measurement, a, t)
-        Zt = _ekf_jacobian(p.jacobian_mode, p.measurement, a, t)
+        Zt = _select_rows(_ekf_jacobian(p.jacobian_mode, p.measurement, a, t), rows)
         Ztp = transpose(Zt)
 
-        v = y_t - ŷ
-        F = Zt * P * Ztp + p.H
+        v = y_t[rows] - ŷ[rows]
+        F = Zt * P * Ztp + _select_rows_cols(p.H, rows)
 
         if obs_dim == 1
             F_val = F[1, 1]
@@ -167,7 +172,8 @@ function kalman_loglik(
         end
     end
 
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar across the sample.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
     return loglik + const_term
 end
 
@@ -183,6 +189,11 @@ moments, innovations, gains, and stored measurement linearisations.
 
 Field semantics match `KalmanFilterResult`; see `EKFFilterResult` for the two
 EKF-specific fields `yt` (predicted measurement) and `Zt` (per-step Jacobian).
+
+NaN marks a missing value, one element at a time. In a partially observed period the
+update runs on the observed rows of `h(a_t, t)` and `Z_t`, and `vt`, `Ft` and `Kt` carry
+pₜ-sized blocks in their leading rows and columns. `yt` and `Zt` are stored for every
+row. In a period with no observed row the update is skipped.
 """
 function kalman_filter(
         p::EKFParms,
@@ -191,7 +202,6 @@ function kalman_filter(
         P1::AbstractMatrix
 )
     y = _nan_obs(y)
-    _require_no_partial_periods(y, "kalman_filter")
     n = size(y, 2)
     obs_dim = size(y, 1)
     state_dim = length(a1)
@@ -207,16 +217,20 @@ function kalman_filter(
     Ft_store = fill(ET(NaN), obs_dim, obs_dim, n)
     Kt_store = fill(ET(NaN), state_dim, obs_dim, n)
     missing_mask = falses(n)
+    observed_mask = falses(obs_dim, n)
 
     a_pred = Vector{ET}(a1)
     P_pred = Matrix{ET}(P1)
     Tt = transpose(p.T)
     RQR = p.R * p.Q * transpose(p.R)
     loglik = zero(ET)
-    n_obs = 0
+    n_obs_rows = 0
 
-    @inbounds for t in 1:n
+    for t in 1:n
         y_t = y[:, t]
+        for i in 1:obs_dim
+            observed_mask[i, t] = !isnan(y_t[i])
+        end
 
         at_store[:, t] = a_pred
         Pt_store[:, :, t] = P_pred
@@ -226,7 +240,7 @@ function kalman_filter(
         yt_store[:, t] = ŷ
         Zt_store[:, :, t] = Zt_local
 
-        if _has_missing(y_t)
+        if _all_missing(y_t)
             missing_mask[t] = true
             vt_store[:, t] .= ET(NaN)
             Ft_store[:, :, t] = Zt_local * P_pred * transpose(Zt_local) + p.H
@@ -239,18 +253,24 @@ function kalman_filter(
         end
 
         missing_mask[t] = false
-        n_obs += 1
 
-        Ztp = transpose(Zt_local)
-        v = y_t - ŷ
-        F = Zt_local * P_pred * Ztp + p.H
+        # Restrict to the observed rows; in a fully observed period this selects
+        # all of them and gives the full-system update.
+        rows = _observed_row_indices(y_t)
+        pt = length(rows)
+        n_obs_rows += pt
+        Zr = _select_rows(Zt_local, rows)
+        Ztp = transpose(Zr)
+        v = y_t[rows] - ŷ[rows]
+        F = Zr * P_pred * Ztp + _select_rows_cols(p.H, rows)
 
-        if obs_dim == 1
+        if pt == 1
             F_val = F[1, 1]
             if F_val <= zero(ET)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask,
+                    observed_mask, t)
             end
             Finv = fill(one(ET) / F_val, 1, 1)
             logdetF = log(F_val)
@@ -261,7 +281,8 @@ function kalman_filter(
             if !issuccess(chol_result)
                 return EKFFilterResult(
                     p, ET(-Inf), at_store, Pt_store, att_store, Ptt_store,
-                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, t)
+                    yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask,
+                    observed_mask, t)
             end
             Finv = inv(chol_result)
             logdetF = 2 * sum(log.(diag(chol_result.U)))
@@ -271,12 +292,15 @@ function kalman_filter(
         loglik += -ET(0.5) * (logdetF + quad_form)
 
         K = p.T * P_pred * Ztp * Finv
-        vt_store[:, t] = v
-        Ft_store[:, :, t] = F
-        Kt_store[:, :, t] = K
+        # Reduced-system quantities occupy the leading rows and columns; the rest of
+        # `vt` and `Ft` keeps the NaN the stores were allocated with.
+        vt_store[1:pt, t] = v
+        Ft_store[1:pt, 1:pt, t] = F
+        Kt_store[:, :, t] .= zero(ET)
+        Kt_store[:, 1:pt, t] = K
 
         a_filt = a_pred + P_pred * Ztp * Finv * v
-        P_filt = P_pred - P_pred * Ztp * Finv * Zt_local * P_pred
+        P_filt = P_pred - P_pred * Ztp * Finv * Zr * P_pred
         att_store[:, t] = a_filt
         Ptt_store[:, :, t] = P_filt
 
@@ -284,10 +308,11 @@ function kalman_filter(
         P_pred = p.T * P_filt * Tt + RQR
     end
 
-    const_term = -obs_dim * n_obs * log(ET(2π)) / 2
+    # The Gaussian constant counts every observed scalar across the sample.
+    const_term = -n_obs_rows * log(ET(2π)) / 2
     return EKFFilterResult(
         p, loglik + const_term, at_store, Pt_store, att_store, Ptt_store,
-        yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask
+        yt_store, Zt_store, vt_store, Ft_store, Kt_store, missing_mask, observed_mask
     )
 end
 
@@ -326,6 +351,7 @@ function kalman_smoother(result::EKFFilterResult; crosscov::Bool = false)
         result.Ft;
         crosscov = crosscov,
         missing_mask = result.missing_mask,
+        observed_mask = result.observed_mask,
         Ptt = result.Ptt
     )
 end

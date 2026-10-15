@@ -186,6 +186,63 @@ end
     @test ws.att[:, 17] ≈ ws.at[:, 17]
 end
 
+@testset "EKF — a row missing in every period is the model without it" begin
+    # Under a nonlinear measurement, a row that is never observed must leave the
+    # same filter as the measurement restricted to the other rows. Scattered NaNs
+    # in the remaining rows make some periods partial in both models.
+    Random.seed!(19)
+    λ = 0.069
+    maturities = [3.0, 12.0, 36.0, 60.0, 120.0]
+    Λ = hcat(ones(length(maturities)),
+        (1 .- exp.(-λ .* maturities)) ./ (λ .* maturities),
+        (1 .- exp.(-λ .* maturities)) ./ (λ .* maturities) .- exp.(-λ .* maturities))
+    m, p, n = 3, length(maturities), 60
+    Tmat = Matrix(Diagonal([0.97, 0.95, 0.90]))
+    H = (0.05^2) .* Matrix(I, p, p)
+    H[3, 4] = H[4, 3] = 0.0005
+    R = Matrix(I, m, m)
+    Q = (0.10^2) .* Matrix(I, m, m)
+    a1 = zeros(m)
+    P1 = 0.5 .* Matrix(I, m, m)
+    y = 0.5 .+ 0.3 .* randn(p, n)
+    y[2, :] .= NaN
+    y[4, 10:14] .= NaN
+    y[[1, 3], 30] .= NaN
+    y[:, 40] .= NaN
+
+    keep = [1, 3, 4, 5]
+    yr = y[keep, :]
+    full = EKFTestSoftplusMeasurement(Λ, 0.0)
+    reduced = EKFTestSoftplusMeasurement(Λ[keep, :], 0.0)
+
+    for mode in (AnalyticJacobian(), ADJacobian())
+        pf = EKFParms(full, mode, H, Tmat, R, Q)
+        pr = EKFParms(reduced, mode, H[keep, keep], Tmat, R, Q)
+
+        ll = kalman_loglik(pr, yr, a1, P1)
+        @test kalman_loglik(pf, y, a1, P1) ≈ ll rtol = 1e-12
+
+        ff, fr = kalman_filter(pf, y, a1, P1), kalman_filter(pr, yr, a1, P1)
+        @test loglikelihood(ff) ≈ ll rtol = 1e-12
+        @test filtered_states(ff) ≈ filtered_states(fr) rtol = 1e-10
+        sf, sr = kalman_smoother(ff; crosscov = true), kalman_smoother(fr; crosscov = true)
+        @test smoothed_states(sf) ≈ smoothed_states(sr) rtol = 1e-10
+        @test smoothed_states_cov(sf) ≈ smoothed_states_cov(sr) rtol = 1e-10
+        @test sf.Pcross ≈ sr.Pcross rtol = 1e-10
+
+        wf = EKFWorkspace(pf, a1, P1, n)
+        wr = EKFWorkspace(pr, a1, P1, n)
+        @test kalman_filter!(wf, y) ≈ ll rtol = 1e-12
+        kalman_filter!(wr, yr)
+        kalman_smoother!(wf; crosscov = true)
+        kalman_smoother!(wr; crosscov = true)
+        @test wf.αs ≈ wr.αs rtol = 1e-10
+        @test wf.Vs ≈ wr.Vs rtol = 1e-10
+        @test wf.Pcross ≈ wr.Pcross rtol = 1e-10
+        @test wf.αs ≈ smoothed_states(sf) rtol = 1e-10
+    end
+end
+
 @testset "EKF — AD vs analytic Jacobian on smooth nonlinear measurement" begin
     Random.seed!(7)
     λ = 0.069
@@ -270,6 +327,13 @@ end
     kalman_filter!(ws_an, y)  # warm-up
     allocs_an = @allocated kalman_filter!(ws_an, y)
     @test allocs_an < 256
+
+    # Partially observed periods run in the leading blocks of the same buffers.
+    y_partial = copy(y)
+    y_partial[2, 1:2:n] .= NaN
+    y_partial[[1, 5], 10:20] .= NaN
+    kalman_filter!(ws_an, y_partial)  # warm-up
+    @test @allocated(kalman_filter!(ws_an, y_partial)) < 256
 
     ws_ad = EKFWorkspace(soft, ADJacobian(), H, Tmat, R, Q, β0, P0, n)
     kalman_filter!(ws_ad, y)  # warm-up
@@ -598,6 +662,7 @@ end
     n = size(s.y, 2)
     y = copy(s.y)
     y[:, 10:12] .= NaN
+    y[1, 20:25] .= NaN
 
     θ = (σh_1 = 0.1, σh_2 = 0.12, ψ_1 = 0.7, ψ_2 = 0.65, ψ_3 = 0.72,
         σq_1 = 0.05, σq_2 = 0.04, σq_3 = 0.06)
@@ -812,4 +877,17 @@ end
 
     @test isfinite(g_ad)
     @test g_ad ≈ g_fd rtol = 1e-6
+
+    # With partially observed periods the derivative matches the linear filter's.
+    y = copy(s.y)
+    y[1, 5:8] .= NaN
+    y[2, 20] = NaN
+    function neg_ll_partial(σ, linear)
+        H_local = σ^2 .* Matrix(I, s.p, s.p)
+        parms = linear ? KFParms(s.Z, H_local, s.Tmat, s.R, s.Q) :
+                EKFParms(LinearMeasurement(s.Z), ADJacobian(), H_local, s.Tmat, s.R, s.Q)
+        return -kalman_loglik(parms, y, s.a1, s.P1)
+    end
+    @test ForwardDiff.derivative(σ -> neg_ll_partial(σ, false), σ0) ≈
+          ForwardDiff.derivative(σ -> neg_ll_partial(σ, true), σ0) rtol = 1e-10
 end

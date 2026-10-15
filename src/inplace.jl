@@ -3890,15 +3890,10 @@ function _ssm_store_filter_results!(model::StateSpaceModel, filt)
     copyto!(model.Ft, filt.Ft)
     copyto!(model.Kt, filt.Kt)
     copyto!(model.missing_mask, filt.missing_mask)
-    _store_observed_mask!(model.observed_mask, filt)
+    copyto!(model.observed_mask, filt.observed_mask)
     model.filter_status = filt.failed_at
     return nothing
 end
-
-function _store_observed_mask!(mask, filt::Union{KalmanFilterResult, DiffuseFilterResult})
-    copyto!(mask, filt.observed_mask)
-end
-_store_observed_mask!(mask, filt::EKFFilterResult) = copyto!(mask, _observed_mask(filt))
 
 # Spec-dependent pieces of the model methods: the system container, the filter run
 # and the maximum likelihood fit.

@@ -84,6 +84,12 @@ In-place workspace for Extended Kalman Filter operations. Mirrors
     measurement and Jacobian.
   - For `ADJacobian()`, holds an `EKFADCache` used by `ForwardDiff.jacobian!`.
 
+Missing values are handled one element at a time, with the same storage layout as
+`KalmanWorkspace`: `observed_mask`, `n_observed` and `obs_rows` record which rows each
+period observed, and `vt`, `Ft`, `Ft_L` and `Kt` hold the pₜ-sized blocks of a
+partially observed period in their leading rows and columns. `yt` and `Zt` cover every
+row.
+
 Construct via `EKFWorkspace(p::EKFParms, a1, P1, n)` or by passing the system
 matrices and measurement object directly.
 """
@@ -121,7 +127,10 @@ mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <
     Ft::Array{T, 3}        # p × p × n
     Ft_L::Array{T, 3}      # p × p × n  Cholesky factors (lower)
     Kt::Array{T, 3}        # m × p × n
-    missing_mask::BitVector
+    missing_mask::BitVector   # n: true where no row of the period was observed
+    observed_mask::BitMatrix  # p × n: true where y[i,t] is observed
+    n_observed::Vector{Int}   # n: number of observed rows per period
+    obs_rows::Matrix{Int}     # p × n: observed row indices, first n_observed[t] entries valid
 
     # Smoother storage, filled by kalman_smoother!
     αs::Matrix{T}
@@ -155,6 +164,7 @@ mutable struct EKFWorkspace{T <: Real, M, J <: AbstractEKFJacobianMode, Cache} <
     # Scalars
     loglik::T
     n_obs_valid::Int
+    n_obs_rows::Int
 
     # Run status, as in KalmanWorkspace
     status::Int
@@ -230,6 +240,9 @@ function EKFWorkspace{T}(
         zeros(T, p, p, n),# Ft_L
         zeros(T, m, p, n),# Kt
         falses(n),        # missing_mask
+        falses(p, n),     # observed_mask
+        zeros(Int, n),    # n_observed
+        zeros(Int, p, n), # obs_rows
         zeros(T, m, n),     # αs
         zeros(T, m, m, n),# Vs
         zeros(T, m, m, max(n - 1, 1)),# Pcross
@@ -253,6 +266,7 @@ function EKFWorkspace{T}(
         zeros(T, m, m),     # L_smooth
         zero(T),                    # loglik
         0,                          # n_obs_valid
+        0,                          # n_obs_rows
         _NOT_RUN,                   # status
         false,                      # smoothed
         false                       # crosscov
@@ -460,15 +474,19 @@ Behaves as `kalman_filter!` (in-place linear filter) with `Z` replaced by a
 per-step Jacobian `tmp_Zt` and the measurement linearisation stored in
 `ws.Zt[:, :, t]`. Returns `-Inf` when an innovation covariance is not positive
 definite; the workspace accessors then throw.
+
+NaN marks a missing value, one element at a time. In a partially observed period the
+update runs on the observed rows of `h(a_t, t)` and `Z_t`; in a period with no
+observed row it is skipped.
 """
 function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
     y = _nan_obs(y)
     p, m, n = ws.obs_dim, ws.state_dim, ws.n_times
     _check_obs(ws, "kalman_filter!", y)
-    _require_no_partial_periods(y, "kalman_filter!")
 
     ws.loglik = zero(T)
     ws.n_obs_valid = 0
+    ws.n_obs_rows = 0
     ws.smoothed = false
     ws.crosscov = false
 
@@ -485,17 +503,21 @@ function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
         copyto!(view(ws.Pt, :, :, t), P_curr)
 
         y_t = view(y, :, t)
+        obs_rows_t = view(ws.obs_rows, :, t)
+        pt = _observed_rows!(obs_rows_t, y_t)
+        ws.n_observed[t] = pt
+        for i in 1:p
+            ws.observed_mask[i, t] = !isnan(y_t[i])
+        end
 
-        # Always evaluate ŷ and Z at the predicted state — even for missing,
-        # so that yt and Zt are populated for diagnostics. (Skip if user wants
-        # to save compute? The plan suggests `store_jacobians = false` as a
-        # later optimisation; for now, store unconditionally.)
+        # ŷ and Z are evaluated in full at the predicted state in every period,
+        # including missing ones, so that yt and Zt cover every row.
         measurement!(ws.tmp_yhat, ws.measurement, a_curr, t)
         _ekf_jacobian!(ws, ws.jacobian_mode, a_curr, t)
         copyto!(view(ws.yt, :, t), ws.tmp_yhat)
         copyto!(view(ws.Zt, :, :, t), ws.tmp_Zt)
 
-        if _has_missing(y_t)
+        if pt == 0
             ws.missing_mask[t] = true
             fill!(view(ws.vt, :, t), T(NaN))
             fill!(view(ws.Ft, :, :, t), T(NaN))
@@ -516,26 +538,42 @@ function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
 
         ws.missing_mask[t] = false
         ws.n_obs_valid += 1
+        ws.n_obs_rows += pt
+        rows = view(obs_rows_t, 1:pt)
 
-        # Innovation: v = y - ŷ
-        v_t = view(ws.vt, :, t)
-        @inbounds for i in 1:p
-            v_t[i] = y_t[i] - ws.tmp_yhat[i]
+        # The update runs on the reduced system formed by the observed rows, and
+        # every p-shaped buffer is used at its leading pt rows and columns. When
+        # pt == p this is the fully observed recursion. Z_t is gathered into the
+        # leading rows of tmp_Zt, which is free once Zt[:, :, t] is stored; `rows`
+        # is increasing, so no row is overwritten before it is read.
+        Zr = view(ws.tmp_Zt, 1:pt, :)
+        for j in 1:m, (k, i) in pairs(rows)
+
+            Zr[k, j] = ws.tmp_Zt[i, j]
         end
 
-        # F = Z * P * Z' + H
-        # tmp_pm = Z * P (p × m)
-        mul!(ws.tmp_pm, ws.tmp_Zt, P_curr)
-        # tmp_pp1 = (Z * P) * Z' (p × p)
-        Ztp = transpose(ws.tmp_Zt)
-        mul!(ws.tmp_pp1, ws.tmp_pm, Ztp)
+        # Innovation: v = y_t - ŷ_t on the observed rows
+        v_full = view(ws.vt, :, t)
+        fill!(v_full, T(NaN))
+        v_t = view(v_full, 1:pt)
+        for (k, i) in pairs(rows)
+            v_t[k] = y_t[i] - ws.tmp_yhat[i]
+        end
+
+        # F = Z_t * P * Z_t' + H_t
+        ZrP = view(ws.tmp_pm, 1:pt, :)          # Z_t * P (pt × m)
+        mul!(ZrP, Zr, P_curr)
+        Fr = view(ws.tmp_pp1, 1:pt, 1:pt)
+        mul!(Fr, ZrP, transpose(Zr))
         Ft_view = view(ws.Ft, :, :, t)
-        @inbounds for idx in eachindex(ws.tmp_pp1)
-            ws.tmp_pp1[idx] += ws.H[idx]
-            Ft_view[idx] = ws.tmp_pp1[idx]
+        fill!(Ft_view, T(NaN))
+        for (l, j) in pairs(rows), (k, i) in pairs(rows)
+
+            Fr[k, l] += ws.H[i, j]
+            Ft_view[k, l] = Fr[k, l]
         end
 
-        cholF = cholesky!(Symmetric(ws.tmp_pp1, :L); check = false)
+        cholF = cholesky!(Symmetric(Fr, :L); check = false)
         if !issuccess(cholF)
             ws.status = t
             ws.loglik = T(-Inf)
@@ -543,56 +581,55 @@ function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
         end
         L_lower = LowerTriangular(cholF.factors)
 
-        # Store Cholesky lower triangle (zero upper for clean reuse)
+        # Store Cholesky lower triangle (zero the rest for clean reuse)
         FtL_view = view(ws.Ft_L, :, :, t)
-        @inbounds for j in 1:p
-            for i in 1:(j - 1)
-                FtL_view[i, j] = zero(T)
-            end
-            for i in j:p
-                FtL_view[i, j] = L_lower[i, j]
-            end
+        fill!(FtL_view, zero(T))
+        for j in 1:pt, i in j:pt
+
+            FtL_view[i, j] = L_lower[i, j]
         end
 
         # log|F| = 2 Σ log L[i,i]
         logdetF = zero(T)
-        @inbounds for i in 1:p
+        for i in 1:pt
             logdetF += log(L_lower[i, i])
         end
         logdetF += logdetF
 
         # quad form via L⁻¹ v
-        copyto!(ws.tmp_p2, v_t)
-        ldiv!(L_lower, ws.tmp_p2)
+        tmp_p2r = view(ws.tmp_p2, 1:pt)
+        copyto!(tmp_p2r, v_t)
+        ldiv!(L_lower, tmp_p2r)
         quad_form = zero(T)
-        @inbounds for i in 1:p
-            quad_form += ws.tmp_p2[i]^2
+        for i in 1:pt
+            quad_form += tmp_p2r[i]^2
         end
         ws.loglik += -T(0.5) * (logdetF + quad_form)
 
-        # M = P * Z' * F⁻¹  via two solves on Z*P, transposed.
-        # tmp_pm currently holds Z * P.
-        ldiv!(L_lower, ws.tmp_pm)
-        ldiv!(transpose(L_lower), ws.tmp_pm)
-        # M = (F⁻¹ Z P)' transposed into tmp_mp (m × p)
-        transpose!(ws.tmp_mp, ws.tmp_pm)
+        # M = P * Z_t' * F⁻¹ via two solves on Z_t P, transposed into the leading
+        # pt columns of tmp_mp (m × pt).
+        ldiv!(L_lower, ZrP)
+        ldiv!(transpose(L_lower), ZrP)
+        Mr = view(ws.tmp_mp, :, 1:pt)
+        transpose!(Mr, ZrP)
 
-        # K_t = T * M
-        K_t = view(ws.Kt, :, :, t)
-        mul!(K_t, ws.Tmat, ws.tmp_mp)
+        # K_t = T * M, stored in the leading pt columns
+        K_view = view(ws.Kt, :, :, t)
+        fill!(K_view, zero(T))
+        mul!(view(K_view, :, 1:pt), ws.Tmat, Mr)
 
         # a_filt = a + M * v
-        mul!(ws.tmp_m2, ws.tmp_mp, v_t)
+        mul!(ws.tmp_m2, Mr, v_t)
         att_view = view(ws.att, :, t)
-        @inbounds for i in 1:m
+        for i in 1:m
             att_view[i] = a_curr[i] + ws.tmp_m2[i]
         end
 
-        # P_filt = P - M * (Z * P). Recompute Z*P (we trashed tmp_pm above).
-        mul!(ws.tmp_pm, ws.tmp_Zt, P_curr)
-        mul!(ws.tmp_mm2, ws.tmp_mp, ws.tmp_pm)
+        # P_filt = P - M * (Z_t * P). The solves above overwrote ZrP.
+        mul!(ZrP, Zr, P_curr)
+        mul!(ws.tmp_mm2, Mr, ZrP)
         Ptt_view = view(ws.Ptt, :, :, t)
-        @inbounds for idx in eachindex(P_curr)
+        for idx in eachindex(P_curr)
             Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
         end
 
@@ -600,12 +637,13 @@ function kalman_filter!(ws::EKFWorkspace{T}, y::AbstractMatrix) where {T}
         mul!(a_curr, ws.Tmat, att_view)
         mul!(ws.tmp_mm2, ws.Tmat, Ptt_view)
         mul!(P_curr, ws.tmp_mm2, Tt)
-        @inbounds for idx in eachindex(P_curr)
+        for idx in eachindex(P_curr)
             P_curr[idx] += ws.RQR[idx]
         end
     end
 
-    ws.loglik += -p * ws.n_obs_valid * log2pi / 2
+    # The Gaussian constant counts every observed scalar across the sample.
+    ws.loglik += -ws.n_obs_rows * log2pi / 2
     ws.status = 0
     return ws.loglik
 end
@@ -639,7 +677,6 @@ generated by the forward EKF.
 function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
     _require_output(ws, :kalman_smoother!)
     m, n = ws.state_dim, ws.n_times
-    p = ws.obs_dim
 
     fill!(ws.r_smooth, zero(T))
     fill!(ws.N_smooth, zero(T))
@@ -647,7 +684,6 @@ function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
     @inbounds for t in n:-1:1
         a_t = view(ws.at, :, t)
         P_t = view(ws.Pt, :, :, t)
-        Z_t = view(ws.Zt, :, :, t)
 
         if ws.missing_mask[t]
             # Missing: r_{t-1} = T' r_t,  N_{t-1} = T' N_t T
@@ -671,9 +707,20 @@ function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
                 ws.Vs[i, j, t] = P_t[i, j] - ws.tmp_mm2[i, j]
             end
         else
-            v_t = view(ws.vt, :, t)
-            K_t = view(ws.Kt, :, :, t)
-            L_lower = LowerTriangular(view(ws.Ft_L, :, :, t))
+            # The filter stored pt-sized blocks for this period, so the recursion
+            # runs on the same reduced system: Z_t is the observed rows of the
+            # stored Jacobian, gathered into tmp_Zt, and K_t is the leading pt
+            # columns of Kt.
+            pt = ws.n_observed[t]
+            rows = view(ws.obs_rows, 1:pt, t)
+            v_t = view(ws.vt, 1:pt, t)
+            K_t = view(ws.Kt, :, 1:pt, t)
+            L_lower = LowerTriangular(view(ws.Ft_L, 1:pt, 1:pt, t))
+            Z_t = view(ws.tmp_Zt, 1:pt, :)
+            for j in 1:m, (k, i) in pairs(rows)
+
+                Z_t[k, j] = ws.Zt[i, j, t]
+            end
 
             # L_t = T - K_t Z_t  (uses time-varying Z_t)
             mul!(ws.L_smooth, K_t, Z_t)
@@ -683,24 +730,26 @@ function kalman_smoother!(ws::EKFWorkspace{T}; crosscov::Bool = false) where {T}
             end
 
             # F^{-1} v
-            copyto!(ws.tmp_p1, v_t)
-            ldiv!(L_lower, ws.tmp_p1)
-            ldiv!(L_lower', ws.tmp_p1)
+            Finv_v = view(ws.tmp_p1, 1:pt)
+            copyto!(Finv_v, v_t)
+            ldiv!(L_lower, Finv_v)
+            ldiv!(L_lower', Finv_v)
 
             # F^{-1} Z_t
-            copyto!(ws.tmp_pm, Z_t)
-            ldiv!(L_lower, ws.tmp_pm)
-            ldiv!(L_lower', ws.tmp_pm)
+            Finv_Z = view(ws.tmp_pm, 1:pt, :)
+            copyto!(Finv_Z, Z_t)
+            ldiv!(L_lower, Finv_Z)
+            ldiv!(L_lower', Finv_Z)
 
             # r_{t-1} = Z_t' F^{-1} v + L_t' r_t
-            mul!(ws.tmp_m1, Z_t', ws.tmp_p1)
+            mul!(ws.tmp_m1, Z_t', Finv_v)
             mul!(ws.tmp_m2, ws.L_smooth', ws.r_smooth)
             for i in 1:m
                 ws.r_smooth[i] = ws.tmp_m1[i] + ws.tmp_m2[i]
             end
 
             # N_{t-1} = Z_t' F^{-1} Z_t + L_t' N L_t
-            mul!(ws.tmp_mm1, Z_t', ws.tmp_pm)
+            mul!(ws.tmp_mm1, Z_t', Finv_Z)
             mul!(ws.tmp_mm2, ws.L_smooth', ws.N_smooth)
             mul!(ws.tmp_mm3, ws.tmp_mm2, ws.L_smooth)
             for j in 1:m, i in 1:m
@@ -747,8 +796,31 @@ end
 # The shared accessors are in accessors.jl.
 predicted_observations(ws::EKFWorkspace) = _require_output(ws, :predicted_observations).yt
 measurement_jacobians(ws::EKFWorkspace) = _require_output(ws, :measurement_jacobians).Zt
-_observed_mask(ws::EKFWorkspace) = repeat(.!transpose(ws.missing_mask), ws.obs_dim)
-observed_mask(ws::EKFWorkspace) = _observed_mask(_require_output(ws, :observed_mask))
+observed_mask(ws::EKFWorkspace) = _require_output(ws, :observed_mask).observed_mask
+
+"""
+    observed_rows(ws::EKFWorkspace, t::Integer) -> SubArray{Int}
+
+Return the indices of the rows observed in period `t`, in increasing order. Position
+`k` of the leading blocks of `vt`, `Ft`, `Ft_L` and `Kt` corresponds to row
+`observed_rows(ws, t)[k]` of the full observation vector.
+"""
+function observed_rows(ws::EKFWorkspace, t::Integer)
+    _require_output(ws, :observed_rows)
+    1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
+    return view(ws.obs_rows, 1:ws.n_observed[t], t)
+end
+
+"""
+    n_observed(ws::EKFWorkspace, t::Integer) -> Int
+
+Return the number of rows observed in period `t`.
+"""
+function n_observed(ws::EKFWorkspace, t::Integer)
+    _require_output(ws, :n_observed)
+    1 ≤ t ≤ ws.n_times || throw(BoundsError(ws.n_observed, t))
+    return ws.n_observed[t]
+end
 
 function system_matrices(ws::EKFWorkspace)
     EKFParms(ws.measurement, ws.jacobian_mode, ws.H, ws.Tmat, ws.R, ws.Q)

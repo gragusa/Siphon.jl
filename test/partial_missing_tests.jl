@@ -481,44 +481,65 @@ end
     end
 end
 
-# A linear measurement makes the EKF reduce to the Kalman filter, so these tests
-# exercise the guard rather than any nonlinear behavior.
-struct PartialMissingEKFMeasurement{ZT <: AbstractMatrix} <: Siphon.AbstractEKFMeasurement
-    Z::ZT
-end
-
-Siphon.measurement(m::PartialMissingEKFMeasurement, a, t) = m.Z * a
-Siphon.measurement!(out, m::PartialMissingEKFMeasurement, a, t) = (mul!(out, m.Z, a); out)
-Siphon.measurement_jacobian(m::PartialMissingEKFMeasurement, a, t) = m.Z
-function Siphon.measurement_jacobian!(Z, m::PartialMissingEKFMeasurement, a, t)
-    copyto!(Z, m.Z)
-    return Z
-end
-
-@testset "partial missing — the EKF paths reject a partial period" begin
-    s = _partial_missing_setup(; p = 3, m = 2, n = 10)
-    meas = PartialMissingEKFMeasurement(s.Z)
-    parms = EKFParms(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q)
-
+@testset "partial missing — the EKF matches the reduced-system reference" begin
+    # A linear measurement reduces the EKF to the Kalman filter, so the reference
+    # above checks every EKF path against the observed rows of each period.
+    s = _partial_missing_setup()
     y = copy(s.y)
     y[2, 4] = NaN
+    y[[1, 3], 9] .= NaN
+    y[:, 15] .= NaN
+    y[3, 20:22] .= NaN
+    ref = _reference_filter_smoother(s.Z, s.H, s.T, s.R, s.Q, s.a1, s.P1, y)
 
-    # The EKF updates one period at a time, so a partially observed period would
-    # otherwise discard the rows that are present.
-    @test_throws "in period 4 only rows [1, 3] of 3 are observed" kalman_loglik(parms, y, s.a1, s.P1)
-    @test_throws "kalman_filter does not support partially observed periods" kalman_filter(
-        parms, y, s.a1, s.P1)
+    for mode in (AnalyticJacobian(), ADJacobian())
+        parms = EKFParms(LinearMeasurement(s.Z), mode, s.H, s.T, s.R, s.Q)
+        @test kalman_loglik(parms, y, s.a1, s.P1) ≈ ref.loglik rtol = 1e-10
 
-    ws = EKFWorkspace(meas, AnalyticJacobian(), s.H, s.T, s.R, s.Q, s.a1, s.P1, s.n)
-    @test_throws "in period 4 only rows [1, 3] of 3 are observed" kalman_filter!(ws, y)
-    @test_throws "kalman_filter!" kalman_filter_and_smooth!(ws, y)
+        filt = kalman_filter(parms, y, s.a1, s.P1)
+        @test loglikelihood(filt) ≈ ref.loglik rtol = 1e-10
+        @test filtered_states(filt) ≈ ref.a_filt rtol = 1e-8
+        sm = kalman_smoother(filt)
+        @test smoothed_states(sm) ≈ ref.α rtol = 1e-8
+        @test smoothed_states_cov(sm) ≈ ref.V rtol = 1e-8
 
-    # Fully observed and entirely missing periods remain valid on these paths.
-    y_whole = copy(s.y)
-    y_whole[:, 4] .= NaN
-    @test kalman_loglik(parms, y_whole, s.a1, s.P1) isa Real
-    @test kalman_filter!(ws, y_whole) isa Real
-    @test kalman_loglik(parms, s.y, s.a1, s.P1) isa Real
+        ws = EKFWorkspace(parms, s.a1, s.P1, s.n)
+        @test kalman_filter!(ws, y) ≈ ref.loglik rtol = 1e-10
+        @test filtered_states(ws) ≈ ref.a_filt rtol = 1e-8
+        kalman_smoother!(ws)
+        @test smoothed_states(ws) ≈ ref.α rtol = 1e-8
+        @test smoothed_states_cov(ws) ≈ ref.V rtol = 1e-8
+    end
+end
+
+@testset "partial missing — EKF results carry the per-element mask" begin
+    s = _partial_missing_setup(; p = 3, m = 2, n = 8)
+    y = copy(s.y)
+    y[2, 3] = NaN
+    y[:, 6] .= NaN
+
+    lin = kalman_filter(KFParms(s.Z, s.H, s.T, s.R, s.Q), y, s.a1, s.P1)
+    parms = EKFParms(LinearMeasurement(s.Z), s.H, s.T, s.R, s.Q)
+    filt = kalman_filter(parms, y, s.a1, s.P1)
+    ws = EKFWorkspace(parms, s.a1, s.P1, s.n)
+    kalman_filter!(ws, y)
+
+    for r in (filt, ws)
+        @test Siphon.observed_mask(r) == Siphon.observed_mask(lin)
+        @test Siphon.missing_mask(r) == Siphon.missing_mask(lin)
+        @test collect(Siphon.observed_rows(r, 3)) == [1, 3]
+        @test isempty(Siphon.observed_rows(r, 6))
+        @test isequal(isnan.(prediction_errors(r)), isnan.(prediction_errors(lin)))
+        @test isapprox(prediction_errors(r), prediction_errors(lin); nans = true)
+        @test isapprox(kalman_gains(r), kalman_gains(lin); nans = true, atol = 1e-12)
+    end
+    @test Siphon.n_observed(ws, 3) == 2
+
+    # The measurement and its Jacobian are recorded for every row.
+    @test !any(isnan, predicted_observations(filt))
+    @test !any(isnan, measurement_jacobians(filt))
+    @test !any(isnan, predicted_observations(ws))
+    @test !any(isnan, measurement_jacobians(ws))
 end
 
 @testset "partial missing — the static path returns on a singular innovation covariance" begin

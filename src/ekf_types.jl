@@ -184,11 +184,15 @@ EKFParms(measurement, H, T, R, Q) = EKFParms(measurement, ADJacobian(), H, T, R,
     EKFFilterResult{T<:Real, P<:EKFParms}
 
 Result of an EKF forward pass. Field names mirror `KalmanFilterResult`
-(`at`, `Pt`, `att`, `Ptt`, `vt`, `Ft`, `Kt`, `missing_mask`) plus two
+(`at`, `Pt`, `att`, `Ptt`, `vt`, `Ft`, `Kt`, `missing_mask`, `observed_mask`) plus two
 EKF-specific fields:
 
 - `yt` — predicted measurement `h(a_t, t)` (p × n)
 - `Zt` — measurement Jacobian `∂h/∂α` evaluated at `a_t` (p × m × n)
+
+`yt` and `Zt` cover every row in every period. As in `KalmanFilterResult`, `vt`, `Ft`
+and `Kt` hold the pₜ-sized blocks of a partially observed period in their leading rows
+and columns; `observed_rows(r, t)` gives the rows those blocks belong to.
 """
 struct EKFFilterResult{T <: Real, P <: EKFParms} <: AbstractFilterResult
     p::P
@@ -202,18 +206,30 @@ struct EKFFilterResult{T <: Real, P <: EKFParms} <: AbstractFilterResult
     vt::Matrix{T}           # p × n
     Ft::Array{T, 3}         # p × p × n
     Kt::Array{T, 3}         # m × p × n
-    missing_mask::BitVector
-    failed_at::Int          # 0, or the period in which the filter stopped
+    missing_mask::BitVector    # n: true where no row of the period was observed
+    observed_mask::BitMatrix   # p × n: true where an individual value is present
+    failed_at::Int             # 0, or the period in which the filter stopped
 end
 
 function EKFFilterResult(p::EKFParms, loglik::Real, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt,
-        missing_mask::BitVector)
-    return EKFFilterResult(p, loglik, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt, missing_mask, 0)
+        missing_mask::BitVector, observed_mask::BitMatrix)
+    return EKFFilterResult(
+        p, loglik, at, Pt, att, Ptt, yt, Zt, vt, Ft, Kt, missing_mask, observed_mask, 0)
 end
 
-# The EKF rejects partially observed periods, so a period is observed in full or not at all.
-_observed_mask(r::EKFFilterResult) = repeat(.!transpose(r.missing_mask), size(r.vt, 1))
-observed_mask(r::EKFFilterResult) = _observed_mask(_require_output(r, :observed_mask))
+"""
+    observed_mask(r::EKFFilterResult) -> BitMatrix
+
+Return the `p × n` mask that is true where an individual observation was present.
+"""
+observed_mask(r::EKFFilterResult) = _require_output(r, :observed_mask).observed_mask
+
+"""
+    observed_rows(r::EKFFilterResult, t::Integer) -> Vector{Int}
+
+Return the indices of the rows observed in period `t`, in increasing order.
+"""
+observed_rows(r::EKFFilterResult, t::Integer) = findall(view(observed_mask(r), :, t))
 
 # The shared accessors are in accessors.jl. The measurement is nonlinear, so there is no
 # single observation matrix.
