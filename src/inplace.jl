@@ -119,6 +119,7 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
 
     # Precomputed
     RQR::Matrix{T}    # m × m: R * Q * R'
+    RQR_support::UnitRange{Int}  # RQR is zero outside rows and columns RQR_support
 
     # Transition intercept c and per-period shock scales sₜ: αₜ₊₁ = c + T αₜ + R ηₜ
     # with Var(ηₜ) = sₜ² Q. Set by `set_transition_intercept!` and
@@ -218,8 +219,8 @@ on a full workspace. `predicted_states_cov`, `filtered_states_cov`,
 """
 function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int;
         covariances::Bool = true) where {T <: Real}
-    # Without covariance storage, Pt and Ptt keep one slice: the filter writes the
-    # current period's filtered covariance into Ptt[:, :, 1].
+    # Without covariance storage, Pt and Ptt keep one slice, which the filter does
+    # not write: it holds the current covariance in scratch space.
     n_cov = covariances ? n : 1
     KalmanWorkspace{T}(
         # Dimensions
@@ -239,6 +240,7 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int;
 
         # Precomputed
         zeros(T, m, m),      # RQR
+        1:0,                 # RQR_support
         zeros(T, m),         # c
         ones(T, n),          # period_scales
 
@@ -708,7 +710,21 @@ function _update_RQR!(ws::KalmanWorkspace{T}) where {T}
     mul!(ws.tmp_mr, ws.R, ws.Q)
     # Step 2: RQR = tmp_mr * R'
     mul!(ws.RQR, ws.tmp_mr, ws.R')
+    ws.RQR_support = _nonzero_span(ws.RQR)
     return nothing
+end
+
+# The smallest range `s` such that `A[i, j]` is zero unless both `i` and `j` are in
+# `s`; `1:0` when `A` is zero.
+function _nonzero_span(A::AbstractMatrix)
+    lo, hi = typemax(Int), 0
+    for j in axes(A, 2), i in axes(A, 1)
+
+        iszero(A[i, j]) && continue
+        lo = min(lo, i, j)
+        hi = max(hi, i, j)
+    end
+    return hi == 0 ? (1:0) : (lo:hi)
 end
 
 """
@@ -920,10 +936,13 @@ transition is block-companion,
 
     T = [ A₁ … A_lags ;  I 0 … 0 ],
 
-so `T P` has the dense rows `A P` on top and rows `1 : m - b` of `P` beneath,
-and the same shift applies on the right. The two `m³` products collapse to
-`2 b m²`, a factor of `m / 2b` fewer multiplications — at a 17-variable VAR with
-17 lags, `289 / 34`.
+so with `W = A P` (the top `b` rows of `T P`) and `k = m - b`,
+
+    T P T' = [ W A'          W[:, 1:k]  ;
+               W[:, 1:k]'    P[1:k, 1:k] ],
+
+which costs `b m² + b² m` multiplications instead of `2 m³`. `R Q R'` is added
+only on `ws.RQR_support`, outside which it is zero.
 
 `dest` and `P` must not alias.
 """
@@ -938,17 +957,81 @@ function _propagate_cov!(
     else
         k = m - block
         A = view(ws.Tmat, 1:block, :)
-        W = ws.tmp_mm2                      # W = T P
-        mul!(view(W, 1:block, :), A, P)
-        copyto!(view(W, (block + 1):m, :), view(P, 1:k, :))
-        mul!(view(dest, :, 1:block), W, transpose(A))
-        copyto!(view(dest, :, (block + 1):m), view(W, :, 1:k))
+        W = view(ws.tmp_mm2, 1:block, :)
+        mul!(W, A, P)
+        mul!(view(dest, 1:block, 1:block), W, transpose(A))
+        @inbounds for j in 1:k
+            for i in 1:block
+                dest[i, block + j] = W[i, j]
+            end
+            for i in 1:k
+                dest[block + i, block + j] = P[i, j]
+            end
+        end
+        @inbounds for j in 1:block, i in 1:k
+
+            dest[block + i, j] = W[j, i]
+        end
     end
 
-    @inbounds for idx in eachindex(dest)
-        dest[idx] += s2 * ws.RQR[idx]
+    s = ws.RQR_support
+    @inbounds for j in s, i in s
+
+        dest[i, j] += s2 * ws.RQR[i, j]
     end
     return dest
+end
+
+# y = α T x + β y. With a block-companion transition (`block > 0`) the rows below
+# the first `block` are a shift, `(T x)[block + i] = x[i]`. `y` and `x` must not
+# alias; `y` may hold anything when `β == 0`.
+function _transition_mul!(y::AbstractVecOrMat, ws::KalmanWorkspace, x::AbstractVecOrMat,
+        block::Int, α, β)
+    block == 0 && return mul!(y, ws.Tmat, x, α, β)
+    k = ws.state_dim - block
+    mul!(_leading_rows(y, block), view(ws.Tmat, 1:block, :), x, α, β)
+    @inbounds for j in axes(x, 2), i in 1:k
+
+        y[block + i, j] = iszero(β) ? α * x[i, j] : α * x[i, j] + β * y[block + i, j]
+    end
+    return y
+end
+
+_leading_rows(y::AbstractVector, n::Int) = view(y, 1:n)
+_leading_rows(y::AbstractMatrix, n::Int) = view(y, 1:n, :)
+
+# Upper triangle of C - U'U, written into C.
+function _sub_gram!(C::StridedMatrix{T}, U::StridedMatrix{T}) where {T <: BLAS.BlasReal}
+    BLAS.syrk!('U', 'T', -one(T), U, one(T), C)
+end
+function _sub_gram!(C::AbstractMatrix, U::AbstractMatrix)
+    mul!(C, transpose(U), U, -one(eltype(C)), one(eltype(C)))
+end
+
+# y = T' x. With a block-companion transition, `T' x = A' x[1:block] + [x[block+1:m]; 0]`.
+function _transition_tmul!(y::AbstractVector, ws::KalmanWorkspace, x::AbstractVector,
+        block::Int)
+    block == 0 && return mul!(y, transpose(ws.Tmat), x)
+    k = ws.state_dim - block
+    mul!(y, transpose(view(ws.Tmat, 1:block, :)), view(x, 1:block))
+    @inbounds for i in 1:k
+        y[i] += x[block + i]
+    end
+    return y
+end
+
+# Copy the upper triangle of the square `A` into its lower triangle, by tiles so
+# that the transposed reads stay in cache.
+function _copy_upper_to_lower!(A::AbstractMatrix, tile::Int = 64)
+    n = size(A, 1)
+    @inbounds for jb in 1:tile:n, ib in jb:tile:n
+
+        for j in jb:min(jb + tile - 1, n), i in max(ib, j + 1):min(ib + tile - 1, n)
+
+            A[i, j] = A[j, i]
+        end
+    end
+    return A
 end
 
 """
@@ -973,10 +1056,11 @@ Uses BLAS Level 3 operations where possible for performance.
 Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 
 When `set_companion_structure!` has declared a block-companion transition, the
-covariance propagation uses the structured form; see `_propagate_cov!`.
+products with `T` (covariance propagation, gain, state prediction) use the
+structured form; see `_propagate_cov!`.
 
 On a workspace built with `covariances = false`, `Pt` and `Ptt` are not stored per
-period; only the current filtered covariance is kept.
+period; only the current covariance is kept, in scratch space.
 
 The prediction step is `aₜ₊₁ = c + T aₜ|ₜ` and `Pₜ₊₁ = T Pₜ|ₜ T' + sₜ² R Q R'`, with
 the intercept `c` from `set_transition_intercept!` and the scales `sₜ` from
@@ -1006,9 +1090,11 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     ws.smoothed_cov = false
     ws.crosscov = false
 
-    # Working state/covariance held in scratch space (tmp_m1 / tmp_mm1).
+    # Working state and covariance held in scratch space. The propagation writes
+    # P_next, and the two covariance buffers (tmp_mm1, tmp_mm3) then swap roles.
     a_curr = ws.tmp_m1
     P_curr = ws.tmp_mm1
+    P_next = ws.tmp_mm3
     copyto!(a_curr, ws.a1)
     copyto!(P_curr, ws.P1)
 
@@ -1046,11 +1132,11 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
 
             # Propagate: a = c + T * a, P = T * P * T' + s² RQR
             copyto!(ws.tmp_m2, ws.c)
-            mul!(ws.tmp_m2, ws.Tmat, a_curr, one(T), one(T))
+            _transition_mul!(ws.tmp_m2, ws, a_curr, block, one(T), one(T))
             copyto!(a_curr, ws.tmp_m2)
 
-            _propagate_cov!(ws.tmp_mm3, ws, P_curr, block, s2)
-            copyto!(P_curr, ws.tmp_mm3)
+            _propagate_cov!(P_next, ws, P_curr, block, s2)
+            P_curr, P_next = P_next, P_curr
         else
             ws.missing_mask[t] = false
             ws.n_obs_valid += 1
@@ -1157,10 +1243,10 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 end
                 ws.loglik += -T(0.5) * (logdetF + quad_form)
 
-                # M = P Z_t' F⁺ = (G (G' (Z_t P)))'
-                GZrP = view(ws.tmp_pm3, 1:rk, :)
-                mul!(GZrP, transpose(G), ZrP)
-                mul!(ZrP, G, GZrP)                    # ZrP := F⁺ (Z_t P)
+                # M = P Z_t' F⁺ = (G U)' with U = G' (Z_t P), so M (Z_t P) = U'U.
+                U = view(ws.tmp_pm3, 1:rk, :)
+                mul!(U, transpose(G), ZrP)
+                mul!(ZrP, G, U)                       # ZrP := F⁺ (Z_t P)
                 transpose!(Mr, ZrP)
             else
                 ws.n_obs_rows += pt
@@ -1200,9 +1286,11 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 end
                 ws.loglik += -T(0.5) * (logdetF + quad_form)
 
-                # Core quantity: M = P * Z_t' * F^{-1} (m×pt). Reused for K, att, Ptt.
-                # Compute as (F^{-1} * Z_t * P)' via two ldiv! on Z_t*P, then transpose.
+                # Core quantity: M = P * Z_t' * F^{-1} (m×pt), reused for K and att,
+                # as (L^{-T} U)' with U = L^{-1} (Z_t P), so M (Z_t P) = U'U.
+                U = view(ws.tmp_pm3, 1:pt, :)
                 ldiv!(L_lower, ZrP)                       # L^{-1} (Z_t*P)
+                copyto!(U, ZrP)
                 ldiv!(transpose(L_lower), ZrP)            # F^{-1} (Z_t*P)
                 transpose!(Mr, ZrP)                       # Mr = M
             end
@@ -1210,7 +1298,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             # K_t = T * M, stored in the leading pt columns.
             K_view = view(ws.Kt, :, :, t)
             fill!(K_view, zero(T))
-            mul!(view(K_view, :, 1:pt), ws.Tmat, Mr)
+            _transition_mul!(view(K_view, :, 1:pt), ws, Mr, block, one(T), zero(T))
 
             # a_filt = a + M * v
             mul!(ws.tmp_m2, Mr, v_t)
@@ -1219,33 +1307,23 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
                 att_view[i] = a_curr[i] + ws.tmp_m2[i]
             end
 
-            # P_filt = P - M * (Z_t * P). The measurement update overwrote ZrP
-            # with F⁻¹ (Z_t P), so recompute it once.
-            mul!(ZrP, Zr, P_curr)
-            mul!(ws.tmp_mm2, Mr, ZrP)                 # M * (Z_t*P) (m×m)
-            Ptt_view = view(ws.Ptt, :, :, stores_cov ? t : 1)
-            @inbounds for idx in eachindex(P_curr)
-                Ptt_view[idx] = P_curr[idx] - ws.tmp_mm2[idx]
-            end
-
-            # P_filt must stay symmetric. The subtraction above is symmetric
-            # only up to rounding, and the asymmetric part is propagated by
-            # P = T P_filt T' + RQR, so a transition with spectral radius above
-            # one amplifies it by ρ(T)² each period. Left alone it reaches the
-            # scale of F = Z P Z', whose Cholesky reads the lower triangle only,
-            # and the factorization then fails on a matrix that is positive
-            # definite in exact arithmetic.
-            for j in 1:m, i in 1:(j - 1)
-
-                avg = (Ptt_view[i, j] + Ptt_view[j, i]) / 2
-                Ptt_view[i, j] = avg
-                Ptt_view[j, i] = avg
-            end
+            # P_filt = P - M (Z_t P) = P - U'U, formed on the upper triangle and
+            # copied to the lower one, in place of P, which is not read again.
+            # P_filt must be exactly symmetric: an asymmetric part is propagated
+            # by P = T P_filt T' + RQR, so a transition with spectral radius
+            # above one amplifies it by ρ(T)² each period. Left alone it reaches
+            # the scale of F = Z P Z', whose Cholesky reads the lower triangle
+            # only, and the factorization then fails on a matrix that is
+            # positive definite in exact arithmetic.
+            _sub_gram!(P_curr, U)
+            _copy_upper_to_lower!(P_curr)
+            stores_cov && copyto!(view(ws.Ptt, :, :, t), P_curr)
 
             # Predict next: a = c + T * a_filt, P = T * P_filt * T' + s² RQR
             copyto!(a_curr, ws.c)
-            mul!(a_curr, ws.Tmat, att_view, one(T), one(T))
-            _propagate_cov!(P_curr, ws, Ptt_view, block, s2)
+            _transition_mul!(a_curr, ws, att_view, block, one(T), one(T))
+            _propagate_cov!(P_next, ws, P_curr, block, s2)
+            P_curr, P_next = P_next, P_curr
         end
     end
 
@@ -1566,12 +1644,14 @@ covariance storage.
 function _kalman_smoother_fast_mean!(ws::KalmanWorkspace{T}) where {T}
     m, n = ws.state_dim, ws.n_times
     αs = ws.αs
+    block = _check_companion(ws)
+    s = ws.RQR_support
 
     fill!(ws.r_smooth, zero(T))
 
     @inbounds for t in n:-1:1
         # r_{t-1} = L_t' r_t (+ the observation term below, when there is one).
-        mul!(ws.tmp_m1, transpose(ws.Tmat), ws.r_smooth)
+        _transition_tmul!(ws.tmp_m1, ws, ws.r_smooth, block)
 
         if !ws.missing_mask[t]
             pt = ws.n_observed[t]
@@ -1611,8 +1691,9 @@ function _kalman_smoother_fast_mean!(ws::KalmanWorkspace{T}) where {T}
         copyto!(ws.tmp_m1, view(αs, :, t + 1))
         α_next = view(αs, :, t + 1)
         copyto!(α_next, ws.c)
-        mul!(α_next, ws.Tmat, view(αs, :, t), one(T), one(T))
-        mul!(α_next, ws.RQR, ws.tmp_m1, ws.period_scales[t]^2, one(T))
+        _transition_mul!(α_next, ws, view(αs, :, t), block, one(T), one(T))
+        mul!(view(α_next, s), view(ws.RQR, s, s), view(ws.tmp_m1, s),
+            ws.period_scales[t]^2, one(T))
     end
 
     return nothing

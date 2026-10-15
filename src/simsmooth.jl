@@ -36,13 +36,19 @@ Eigenvalues below `tol` are treated as zero; the default scales with the largest
 eigenvalue and the size of `S`. An eigenvalue below `-tol` means `S` is not
 positive semi-definite and raises an `ArgumentError` rather than being clamped,
 since a negative variance is a modeling error and not a rounding artifact.
+
+Only the principal block of `S` spanning its nonzero rows and columns is
+decomposed; `L` is zero outside that block, and its columns for the block come
+last.
 """
 function psd_factor(S::AbstractMatrix{<:Real}; tol::Union{Nothing, Real} = nothing)
     k = LinearAlgebra.checksquare(S)
     T = float(eltype(S))
     k == 0 && return PSDFactor(Matrix{T}(undef, 0, 0))
 
-    E = eigen(Symmetric(Matrix{T}(S)))
+    span = _nonzero_span(S)
+    isempty(span) && return PSDFactor(zeros(T, k, k))
+    E = eigen(Symmetric(Matrix{T}(view(S, span, span))))
     λ = E.values
     τ = tol === nothing ? k * eps(T) * max(one(T), maximum(abs, λ)) : T(tol)
 
@@ -53,7 +59,9 @@ function psd_factor(S::AbstractMatrix{<:Real}; tol::Union{Nothing, Real} = nothi
             "is below the tolerance -$τ"))
     end
 
-    L = E.vectors * Diagonal(sqrt.(ifelse.(λ .> τ, λ, zero(T))))
+    L = zeros(T, k, k)
+    L[span, (k - length(span) + 1):k] .= E.vectors *
+                                         Diagonal(sqrt.(ifelse.(λ .> τ, λ, zero(T))))
     return PSDFactor(L)
 end
 
@@ -174,6 +182,7 @@ function _simulate_path!(
         rng::Random.AbstractRNG, observed_mask::AbstractMatrix{Bool};
         centered::Bool = false) where {T}
     m, p, n = sws.state_dim, sws.obs_dim, sws.n_times
+    block = _check_companion(ws)
 
     # α⁺₁ ~ N(a₁, P₁), or N(0, P₁) when centered
     psd_rand!(sws.scratch_m, sws.P1_factor, rng, sws.noise_m)
@@ -196,10 +205,10 @@ function _simulate_path!(
         if t < n
             α_next = view(sws.α_plus, :, t + 1)
             if centered
-                mul!(α_next, ws.Tmat, α_t)
+                _transition_mul!(α_next, ws, α_t, block, one(T), zero(T))
             else
                 copyto!(α_next, ws.c)
-                mul!(α_next, ws.Tmat, α_t, one(T), one(T))
+                _transition_mul!(α_next, ws, α_t, block, one(T), one(T))
             end
             psd_rand!(sws.scratch_r, sws.Q_factor, rng, sws.noise_r)
             mul!(sws.scratch_m, ws.R, sws.scratch_r, ws.period_scales[t], zero(T))
