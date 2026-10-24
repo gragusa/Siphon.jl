@@ -1,6 +1,6 @@
 # Structured fast paths: a declared block-companion transition and a
 # smoothed-mean-only backward pass. Both are reorganizations of the general
-# recursions, so the general path is the reference and agreement is exact.
+# recursions. BLAS kernel selection and summation order can change the rounding.
 
 using Test
 using Siphon
@@ -133,7 +133,7 @@ end
     @test companion_block(ws) == s.nser
 end
 
-@testset "companion structure — filter results match the general path exactly" begin
+@testset "companion structure — filter results agree with the general path" begin
     s = _companion_setup()
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
@@ -141,16 +141,15 @@ end
     llg = kalman_filter!(wg, s.y)
     llc = kalman_filter!(wc, s.y)
 
-    # The structured form skips multiplications by the exact zeros and ones of
-    # the shift block; what remains is the same arithmetic in the same order.
-    @test llc == llg
-    @test wc.at == wg.at
-    @test wc.Pt == wg.Pt
-    @test wc.att == wg.att
-    @test wc.Ptt == wg.Ptt
+    # Different matrix shapes can select BLAS kernels with different summation orders.
+    @test llc≈llg rtol=1e-12 atol=1e-14
+    @test wc.at≈wg.at rtol=1e-12 atol=1e-14
+    @test wc.Pt≈wg.Pt rtol=1e-12 atol=1e-14
+    @test wc.att≈wg.att rtol=1e-12 atol=1e-14
+    @test wc.Ptt≈wg.Ptt rtol=1e-12 atol=1e-14
 end
 
-@testset "companion structure — smoother results match the general path exactly" begin
+@testset "companion structure — smoother results agree with the general path" begin
     s = _companion_setup()
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
@@ -158,9 +157,9 @@ end
     kalman_filter_and_smooth!(wg, s.y; crosscov = true)
     kalman_filter_and_smooth!(wc, s.y; crosscov = true)
 
-    @test wc.αs == wg.αs
-    @test wc.Vs == wg.Vs
-    @test wc.Pcross == wg.Pcross
+    @test wc.αs≈wg.αs rtol=1e-12 atol=1e-14
+    @test wc.Vs≈wg.Vs rtol=1e-12 atol=1e-14
+    @test wc.Pcross≈wg.Pcross rtol=1e-12 atol=1e-14
 end
 
 @testset "companion structure — a single-lag model is the general path" begin
@@ -170,8 +169,8 @@ end
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
 
-    @test kalman_filter!(wc, s.y) == kalman_filter!(wg, s.y)
-    @test wc.Pt == wg.Pt
+    @test kalman_filter!(wc, s.y)≈kalman_filter!(wg, s.y) rtol=1e-12 atol=1e-14
+    @test wc.Pt≈wg.Pt rtol=1e-12 atol=1e-14
 end
 
 @testset "mean-only smoother — reproduces the smoothed means" begin
@@ -203,12 +202,8 @@ end
     @test maximum(abs, wm.αs - wg.αs) < 1e-11 * scale
 end
 
-@testset "mean-only smoother — matches a reference built from the primitives" begin
-    # The two implementations share the filter, so agreeing with each other is
-    # weaker evidence than agreeing with the posterior mean computed from the
-    # model primitives alone. On a model this small the whole path can be
-    # conditioned in one dense Gaussian update.
-    s = _companion_setup(; nser = 2, nlag = 2, n = 12)
+# Dense Gaussian conditioning of the stacked state path, independent of the filter.
+function _companion_posterior(s)
     m, n, p = s.m, s.n, s.nser
 
     Tpow = [Matrix{Float64}(I, m, m)]
@@ -236,13 +231,36 @@ end
         Zb[k, ((t - 1) * m + 1):(t * m)] = s.Z[i, :]
         yv[k] = s.y[i, t]
     end
-    # H = 0, so the conditioning is exact and the update needs a pseudo-inverse.
-    post = mu + Sig * Zb' * (pinv(Zb * Sig * Zb') * (yv - Zb * mu))
+    # The observation covariance is positive definite even though H = 0 and the
+    # stacked state covariance is singular: each current series has its own shock.
+    chol = cholesky(Symmetric(Zb * Sig * Zb'))
+    C = Sig * Zb'
+    mean = mu + C * (chol \ (yv - Zb * mu))
+    covariance = Sig - C * (chol \ C')
+    return (; mean, covariance)
+end
 
-    ws = _companion_workspace(s; block = p)
-    kalman_filter_and_smooth!(ws, s.y; crosscov = false, covariances = false)
+@testset "companion smoothers — match dense Gaussian conditioning" begin
+    for nlag in (2, 4)
+        s = _companion_setup(; nser = 2, nlag, n = 12)
+        ref = _companion_posterior(s)
+        for block in (0, s.nser), covariances in (false, true)
 
-    @test maximum(abs, vec(ws.αs) - post) < 1e-6 * max(1, maximum(abs, post))
+            ws = _companion_workspace(s; block)
+            kalman_filter_and_smooth!(ws, s.y; crosscov = covariances, covariances)
+            @test vec(ws.αs)≈ref.mean rtol=1e-11 atol=1e-12
+            if covariances
+                for t in 1:s.n
+                    idx = ((t - 1) * s.m + 1):(t * s.m)
+                    @test ws.Vs[:, :, t]≈ref.covariance[idx, idx] rtol=1e-11 atol=1e-12
+                    if t < s.n
+                        next = (t * s.m + 1):((t + 1) * s.m)
+                        @test ws.Pcross[:, :, t]≈ref.covariance[next, idx] rtol=1e-11 atol=1e-12
+                    end
+                end
+            end
+        end
+    end
 end
 
 @testset "mean-only smoother — crosscov requires the covariances" begin
@@ -283,9 +301,8 @@ end
     end
 end
 
-@testset "simulation smoother — the structured path draws the same numbers" begin
-    # Same seed, same censoring: the draw must be the one the general path would
-    # have produced, not merely one with the same distribution.
+@testset "simulation smoother — paths agree for the same RNG stream" begin
+    # Same seed and censoring give paths that agree up to floating-point roundoff.
     s = _companion_setup()
     wg = _companion_workspace(s)
     wc = _companion_workspace(s; block = s.nser)
