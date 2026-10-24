@@ -2511,6 +2511,7 @@ mutable struct EMWorkspace{T <: Real}
     tmp_rr::Matrix{T}   # r × r
     tmp_mr::Matrix{T}   # m × r
     tmp_rm::Matrix{T}   # r × m
+    free_cols::Vector{Int}  # free columns of a restricted transition row
 
     # For dynamic factor models: masks for constrained estimation
     # These indicate which parameters are free vs fixed
@@ -2569,6 +2570,7 @@ function EMWorkspace{T}(p::Int, m::Int, r::Int, n::Int) where {T <: Real}
         zeros(T, r, r),
         zeros(T, m, r),
         zeros(T, r, m),
+        zeros(Int, m),
         # Default: all parameters free
         trues(p, m),     # Z_free
         trues(p, p),     # H_free
@@ -2916,16 +2918,13 @@ off-diagonal updates),
 function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
 
-    # tmp_pp1 = Z * S_yα'                              (p × p)
-    mul!(em_ws.tmp_pp1, kf_ws.Z, em_ws.S_yα')
-
     # tmp_pm = Z * S_αα                                (p × m)
     mul!(em_ws.tmp_pm, kf_ws.Z, em_ws.S_αα)
 
     scale = one(T) / n_valid
 
     if em_ws.H_diag_only
-        # Diagonal entries only: avoid the full p × p matmul for Z S_αα Z'.
+        # Only the diagonal of Z S_yα' and Z S_αα Z' enters the update.
         @inbounds for i in 1:p
             em_ws.H_free[i, i] || continue
             if em_ws.H_zero[i]
@@ -2934,14 +2933,17 @@ function update_H!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::In
             end
             # (Z S_αα Z')[i, i] = Σ_k tmp_pm[i, k] · Z[i, k]
             zsz_ii = zero(T)
+            zsy_ii = zero(T)
             @simd for k in 1:m
                 zsz_ii += em_ws.tmp_pm[i, k] * kf_ws.Z[i, k]
+                zsy_ii += kf_ws.Z[i, k] * em_ws.S_yα[i, k]
             end
             # H[i,i] = (S_yy[i,i] - 2 (Z S_yα')[i,i] + (Z S_αα Z')[i,i]) / n
-            h_ii = (em_ws.S_yy[i, i] - T(2) * em_ws.tmp_pp1[i, i] + zsz_ii) * scale
+            h_ii = (em_ws.S_yy[i, i] - T(2) * zsy_ii + zsz_ii) * scale
             kf_ws.H[i, i] = max(h_ii, T(1e-10))
         end
     else
+        mul!(em_ws.tmp_pp1, kf_ws.Z, em_ws.S_yα')
         # Full p × p update. tmp_pp1 currently holds Z * S_yα'; we need
         # H_new = (S_yy - Z S_yα' - (Z S_yα')' + Z S_αα Z') / n.
         # Compute Z S_αα Z' on top of tmp_pp1 - the Z S_yα' contributions:
@@ -3019,13 +3021,16 @@ function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
 
     if common_pattern
         # Same J for every row → solve once for all rows.
-        J = Int[]
-        @inbounds for j in 1:m
-            em_ws.T_free[1, j] && push!(J, j)
+        J = em_ws.free_cols
+        k = 0
+        for j in 1:m
+            if em_ws.T_free[1, j]
+                k += 1
+                J[k] = j
+            end
         end
-        isempty(J) && return nothing
-        if length(J) == m
-            # Fast unrestricted path — bit-for-bit identical to the original code.
+        k == 0 && return nothing
+        if k == m
             copyto!(em_ws.tmp_mm1, em_ws.S_00)
             @inbounds for i in 1:m
                 em_ws.tmp_mm1[i, i] += T(1e-10)
@@ -3044,9 +3049,8 @@ function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
             return nothing
         end
         # Sub-block solve: build S_00[J, J] and S_10[:, J], one Cholesky for all rows.
-        k = length(J)
-        S00_sub = Matrix{T}(undef, k, k)
-        S10_sub = Matrix{T}(undef, m, k)
+        S00_sub = view(em_ws.tmp_mm1, 1:k, 1:k)
+        S10_sub = view(em_ws.tmp_mm2, :, 1:k)
         @inbounds for jj in 1:k, ii in 1:k
 
             S00_sub[ii, jj] = em_ws.S_00[J[ii], J[jj]]
@@ -3072,8 +3076,8 @@ function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
     end
 
     # General path: rows have different free patterns → restricted OLS per row.
-    Jbuf = Vector{Int}(undef, m)
-    @inbounds for i in 1:m
+    Jbuf = em_ws.free_cols
+    for i in 1:m
         nj = 0
         for j in 1:m
             if em_ws.T_free[i, j]
@@ -3082,8 +3086,8 @@ function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
             end
         end
         nj == 0 && continue
-        S00_i = Matrix{T}(undef, nj, nj)
-        rhs_i = Vector{T}(undef, nj)
+        S00_i = view(em_ws.tmp_mm1, 1:nj, 1:nj)
+        rhs_i = view(em_ws.tmp_mm2, 1:nj, 1)
         for jj in 1:nj
             for ii in 1:nj
                 S00_i[ii, jj] = em_ws.S_00[Jbuf[ii], Jbuf[jj]]
@@ -3091,9 +3095,10 @@ function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
             S00_i[jj, jj] += T(1e-10)
             rhs_i[jj] = em_ws.S_10[i, Jbuf[jj]]
         end
-        sol = Symmetric(S00_i, :L) \ rhs_i
+        chol = cholesky!(Symmetric(S00_i, :L))
+        ldiv!(chol, rhs_i)
         for jj in 1:nj
-            kf_ws.Tmat[i, Jbuf[jj]] = sol[jj]
+            kf_ws.Tmat[i, Jbuf[jj]] = rhs_i[jj]
         end
     end
 

@@ -753,3 +753,42 @@ end
     @test parameters(m_em).φ1 ≈ parameters(m_mle).φ1 rtol = 1e-6
     @test loglikelihood(m_em) ≈ loglikelihood(m_mle) rtol = 1e-8
 end
+
+@testset "Observation covariance update matches expected residual covariance" begin
+    rng = MersenneTwister(406)
+    p, m, n = 7, 3, 60
+    for T in (Float32, Float64)
+        Z = randn(rng, T, p, m)
+        states = randn(rng, T, m, n)
+        y = randn(rng, T, p, n)
+        V = T(0.2) * Matrix{T}(I, m, m)
+        residuals = y - Z * states
+        expected = residuals * residuals' / n + Z * V * Z'
+        eye = Matrix{T}(I, m, m)
+        kf = KalmanWorkspace(Z, Matrix{T}(I, p, p), eye, eye, eye, zeros(T, m), eye, n)
+        em = Siphon.EMWorkspace(kf)
+        em.S_yy .= y * y'
+        em.S_yα .= y * states'
+        em.S_αα .= states * states' + n * V
+        for diagonal in (true, false)
+            kf.H .= Matrix{T}(I, p, p)
+            em.H_diag_only = diagonal
+            em.H_free .= true
+            em.H_free[2, 2] = false
+            em.H_zero[3] = true
+            Siphon.update_H!(kf, em, n)
+            @test kf.H[2, 2] == one(T)
+            @test kf.H[3, 3] == zero(T)
+            for j in axes(kf.H, 2), i in axes(kf.H, 1)
+
+                i == j && i in (2, 3) && continue
+                if diagonal && i != j
+                    @test kf.H[i, j] == zero(T)
+                else
+                    @test kf.H[i, j] ≈ expected[i, j] rtol = 100eps(T)
+                end
+            end
+            @test (@allocated Siphon.update_H!(kf, em, n)) == 0
+        end
+    end
+end

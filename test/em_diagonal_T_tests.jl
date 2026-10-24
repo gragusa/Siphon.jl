@@ -179,3 +179,46 @@ end
     @test isapprox(em.T[2, 1], -0.05; atol = 0.10)
     @test isapprox(em.T[2, 2], 0.70; atol = 0.05)
 end
+
+@testset "Transition updates match regularized least squares" begin
+    rng = MersenneTwister(405)
+    m, n = 5, 80
+    common = falses(m, m)
+    common[:, [2, 4]] .= true
+    mixed = falses(m, m)
+    mixed[1, [1, 3, 5]] .= true
+    mixed[2, 2] = true
+    mixed[4, [2, 4]] .= true
+    mixed[5, :] .= true
+    masks = (trues(m, m), common, BitMatrix(I(m)), mixed, falses(m, m))
+
+    for T in (Float32, Float64)
+        eye = Matrix{T}(I, m, m)
+        kf = KalmanWorkspace(eye, eye, zeros(T, m, m), eye, eye, zeros(T, m), eye, n)
+        em = Siphon.EMWorkspace(kf)
+        for mask in masks
+            X, Y = randn(rng, T, n, m), randn(rng, T, n, m)
+            em.S_00 .= X' * X
+            em.S_10 .= Y' * X
+            em.T_free .= mask
+            fill!(kf.Tmat, zero(T))
+            expected = zeros(T, m, m)
+            for i in axes(mask, 1)
+                J = findall(view(mask, i, :))
+                if isempty(J)
+                    expected[i, i] = kf.Tmat[i, i] = T(0.75)
+                else
+                    # QR on augmented observations gives the ridge-regularized fit.
+                    design = [X[:, J]; sqrt(T(1e-10)) * Matrix{T}(I, length(J), length(J))]
+                    response = [Y[:, i]; zeros(T, length(J))]
+                    expected[i, J] = design \ response
+                end
+            end
+            Siphon.update_T!(kf, em)
+            @test kf.Tmat ≈ expected rtol = 20eps(T)
+            @test em.S_00 == X' * X
+            @test em.S_10 == Y' * X
+            @test (@allocated Siphon.update_T!(kf, em)) == 0
+        end
+    end
+end
