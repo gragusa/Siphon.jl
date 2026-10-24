@@ -120,6 +120,8 @@ mutable struct KalmanWorkspace{T <: Real} <: AbstractFilterWorkspace
     # Precomputed
     RQR::Matrix{T}    # m × m: R * Q * R'
     RQR_support::UnitRange{Int}  # RQR is zero outside rows and columns RQR_support
+    Z_cols::Matrix{Int}   # m × p: nonzero state indices of each measurement row
+    Z_nnz::Vector{Int}    # p: number of valid indices in each column of Z_cols
 
     # Transition intercept c and per-period shock scales sₜ: αₜ₊₁ = c + T αₜ + R ηₜ
     # with Var(ηₜ) = sₜ² Q. Set by `set_transition_intercept!` and
@@ -241,6 +243,8 @@ function KalmanWorkspace{T}(p::Int, m::Int, r::Int, n::Int;
         # Precomputed
         zeros(T, m, m),      # RQR
         1:0,                 # RQR_support
+        zeros(Int, m, p),     # Z_cols
+        zeros(Int, p),        # Z_nnz
         zeros(T, m),         # c
         ones(T, n),          # period_scales
 
@@ -925,6 +929,50 @@ end
 # In-place Kalman filter
 # ============================================
 
+# Rebuild at pass entry: setters, EM updates, and direct writes to Z may all change
+# its exact support. Dense loadings retain BLAS rather than using indexed sums.
+function _refresh_measurement_support!(ws::KalmanWorkspace)
+    fill!(ws.Z_nnz, 0)
+    nnz = 0
+    for j in axes(ws.Z, 2), i in axes(ws.Z, 1)
+
+        if !iszero(ws.Z[i, j])
+            k = ws.Z_nnz[i] + 1
+            ws.Z_cols[k, i] = j
+            ws.Z_nnz[i] = k
+            nnz += 1
+        end
+    end
+    return nnz <= length(ws.Z) ÷ 4
+end
+
+# dest = Z[rows, :] * P, summing each row's exact nonzeros in state-index order.
+function _measurement_cov_mul!(dest, ws::KalmanWorkspace, P, rows)
+    for j in axes(dest, 2), k in axes(dest, 1)
+
+        i = rows[k]
+        v = zero(eltype(dest))
+        for h in 1:ws.Z_nnz[i]
+            l = ws.Z_cols[h, i]
+            v += ws.Z[i, l] * P[l, j]
+        end
+        dest[k, j] = v
+    end
+    return dest
+end
+
+# dest += Z[rows, :]' * u, preserving the measurement-row accumulation order.
+function _measurement_tmul_add!(dest, ws::KalmanWorkspace, rows, u)
+    for k in eachindex(rows, u)
+        i = rows[k]
+        for h in 1:ws.Z_nnz[i]
+            j = ws.Z_cols[h, i]
+            dest[j] += ws.Z[i, j] * u[k]
+        end
+    end
+    return dest
+end
+
 """
     _propagate_cov!(dest, ws, P, block, s2) -> dest
 
@@ -1055,6 +1103,9 @@ Access via: `predicted_states(ws)`, `filtered_states(ws)`, etc.
 Uses BLAS Level 3 operations where possible for performance.
 Cholesky factors of Ft are stored for potential reuse (e.g., EM algorithm).
 
+Sparse measurement matrices use their exact nonzero loadings for `Zₜ Pₜ`. The
+support is rebuilt at each filter pass, including after direct changes to `Z`.
+
 When `set_companion_structure!` has declared a block-companion transition, the
 products with `T` (covariance propagation, gain, state prediction) use the
 structured form; see `_propagate_cov!`.
@@ -1079,6 +1130,7 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
     _check_obs(ws, "kalman_filter!", y)
 
     block = _check_companion(ws)
+    sparse_Z = _refresh_measurement_support!(ws)
 
     # Reset scalars. The status stays _NOT_RUN until the run completes, so an exception
     # thrown part way through leaves no output that the accessors would return.
@@ -1167,7 +1219,11 @@ function kalman_filter!(ws::KalmanWorkspace{T}, y::AbstractMatrix) where {T}
             # F = Z_t * P * Z_t' + H_t, assembled into the leading block of
             # tmp_pp1 and stored in the leading block of Ft.
             ZrP = view(ws.tmp_pm2, 1:pt, :)           # Z_t * P (pt×m)
-            mul!(ZrP, Zr, P_curr)
+            if sparse_Z
+                _measurement_cov_mul!(ZrP, ws, P_curr, rows)
+            else
+                mul!(ZrP, Zr, P_curr)
+            end
             Fr = view(ws.tmp_pp1, 1:pt, 1:pt)
             mul!(Fr, ZrP, transpose(Zr))
             Ft_view = view(ws.Ft, :, :, t)
@@ -1403,7 +1459,8 @@ two `m × m` products forming `Vₜ` are therefore skipped, and `Lₜ' rₜ` is
 evaluated as `T' rₜ - Zₜ'(Kₜ' rₜ)` so that the `m × m` matrix `Lₜ` is never
 formed. What remains is `O(m²)` per period instead of `O(m³)`. On a workspace
 without covariance storage the means come from the fast state smoother, which
-reads no stored covariance; see `KalmanWorkspace(p, m, r, n; covariances)`.
+reads no stored covariance and uses the exact support of sparse measurement
+matrices, rebuilt at each pass; see `KalmanWorkspace(p, m, r, n; covariances)`.
 """
 function kalman_smoother!(
         ws::KalmanWorkspace{T}; crosscov::Bool = false,
@@ -1646,6 +1703,7 @@ function _kalman_smoother_fast_mean!(ws::KalmanWorkspace{T}) where {T}
     αs = ws.αs
     block = _check_companion(ws)
     s = ws.RQR_support
+    sparse_Z = _refresh_measurement_support!(ws)
 
     fill!(ws.r_smooth, zero(T))
 
@@ -1669,9 +1727,13 @@ function _kalman_smoother_fast_mean!(ws::KalmanWorkspace{T}) where {T}
                 tmp_p2r[k] = tmp_p1r[k] - tmp_p2r[k]
             end
 
-            for (k, i) in pairs(rows), j in 1:m
+            if sparse_Z
+                _measurement_tmul_add!(ws.tmp_m1, ws, rows, tmp_p2r)
+            else
+                for (k, i) in pairs(rows), j in 1:m
 
-                ws.tmp_m1[j] += ws.Z[i, j] * tmp_p2r[k]
+                    ws.tmp_m1[j] += ws.Z[i, j] * tmp_p2r[k]
+                end
             end
         end
 

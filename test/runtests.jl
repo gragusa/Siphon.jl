@@ -378,6 +378,9 @@ include("period_scale_intercept_tests.jl")
 # Workspace without per-period covariance storage
 include("lean_workspace_tests.jl")
 
+# Exact support of sparse measurement matrices in the filter and lean smoother
+include("measurement_support_tests.jl")
+
 # Filtering across a transition whose spectral radius exceeds one
 include("explosive_transition_tests.jl")
 
