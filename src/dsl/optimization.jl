@@ -116,7 +116,9 @@ end
 function _mle(spec, y, method, θ0, ad_backend, static, prob_kwargs; warn::Bool = true,
         kwargs...)
     t = build_transformation(spec)
-    θ0_u = transform_to_unconstrained(spec, _initial_constrained(spec, θ0, y))
+    θ0_c = _initial_constrained(spec, θ0, y)
+    _check_interior(spec, θ0_c)
+    θ0_u = transform_to_unconstrained(spec, θ0_c)
 
     negloglik(θ_u, _) = -_spec_loglik(spec, TransformVariables.transform(t, θ_u), y, static)
     # From a non-finite start the optimizer cannot move and returns θ0 with a
@@ -146,6 +148,18 @@ function _mle(spec, y, method, θ0, ad_backend, static, prob_kwargs; warn::Bool 
         result = result,
         converged = converged
     )
+end
+
+# A starting value on a finite bound maps to ±Inf in unconstrained space, where
+# the optimizer cannot move it.
+function _check_interior(spec, θ)
+    for (p, v) in zip(spec.params, θ)
+        isfinite(v) && p.lower < v < p.upper || throw(ArgumentError(
+            "maximum likelihood needs starting values strictly inside the bounds, " *
+            "but $(repr(p.name)) starts at $v with bounds ($(p.lower), $(p.upper)). " *
+            "Pass other starting values with θ0."))
+    end
+    return nothing
 end
 
 # Starting values in constrained space, in `param_names(spec)` order. A

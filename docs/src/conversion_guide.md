@@ -197,8 +197,10 @@ likelihood, as in the other templates.
 ## Free parameters and matrix helpers
 
 `FreeParam` takes its arguments in the same order as `SSMParameter`, and every
-field is optional. A parameter's starting value must lie strictly inside its
-bounds. A name used in several cells must have the same settings each time.
+field is optional. A parameter's starting value must lie within its bounds,
+and strictly inside them for maximum likelihood; EM with `allow_degen = true`
+holds a diagonal variance of `H` or `Q` that starts at its lower bound 0 at 0.
+A name used in several cells must have the same settings each time.
 
 | Siphon 0.1 | Now |
 |:-----------|:----|

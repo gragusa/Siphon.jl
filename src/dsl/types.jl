@@ -14,9 +14,12 @@ Represents a single estimable parameter in a state-space model.
 - `name::Symbol`: Parameter name for identification
 - `lower::T`: Lower bound for optimization (use -Inf for unbounded)
 - `upper::T`: Upper bound for optimization (use Inf for unbounded)
-- `init::T`: Initial value for optimization, strictly inside the bounds. The
-  keyword constructor picks one when `init` is omitted: the midpoint of two
-  finite bounds, one unit inside a single finite bound, or `0.0`.
+- `init::T`: Initial value for optimization, finite and within the bounds.
+  Maximum likelihood needs it strictly inside them (see [`optimize_ssm`](@ref));
+  EM accepts a diagonal variance of `H` or `Q` starting at its lower bound 0
+  under `allow_degen` (see `fit!(EM(), ...)`). The keyword constructor picks one
+  when `init` is omitted: the midpoint of two finite bounds, one unit inside a
+  single finite bound, or `0.0`.
 - `default_init::Bool`: `true` when `init` is a default rather than a
   value the user gave. Maximum likelihood then rescales a default variance to the
   data before optimising (see [`optimize_ssm`](@ref)).
@@ -43,11 +46,13 @@ function SSMParameter(name::Symbol, lower::Real, upper::Real, init::Real,
         name, lower, upper, init, default_init)
 end
 
-# A starting value on a finite bound maps to ±Inf in unconstrained space.
+# A starting value may sit on a finite bound: EM can start a variance at 0.
+# Maximum likelihood rejects such a start in `_check_interior`, since a bound
+# maps to ±Inf in unconstrained space.
 function _check_init(name, lower, upper, init)
-    isfinite(init) && lower < init < upper || throw(ArgumentError(
-        "initial value $init for $(repr(name)) must be finite and strictly inside " *
-        "the bounds ($lower, $upper)"))
+    isfinite(init) && lower <= init <= upper || throw(ArgumentError(
+        "initial value $init for $(repr(name)) must be finite and within " *
+        "the bounds [$lower, $upper]"))
     return nothing
 end
 

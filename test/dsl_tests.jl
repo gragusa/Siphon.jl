@@ -256,8 +256,12 @@ end
     @test SSMParameter(FreeParam(:x)).init == 0.0
     @test !SSMParameter(FreeParam(:v; lower = 0.0, init = 3.0)).default_init
 
-    @test_throws "strictly inside the bounds" FreeParam(:v; lower = 0.0, init = 0.0)
-    @test_throws "strictly inside the bounds" SSMParameter(:v; lower = 0.0, init = 0.0)
+    # A start on a bound is accepted here; maximum likelihood rejects it
+    @test FreeParam(:v; lower = 0.0, init = 0.0).init == 0.0
+    @test SSMParameter(:v; lower = 0.0, init = 0.0).init == 0.0
+    @test_throws "within the bounds" FreeParam(:v; lower = 0.0, init = -1.0)
+    @test_throws "within the bounds" SSMParameter(:ρ; lower = -1, upper = 1, init = 1.5)
+    @test_throws "within the bounds" FreeParam(:v; init = Inf)
     @test_throws "must be below upper bound" FreeParam(:v; lower = 1.0, upper = 1.0)
 
     base = (H = [1.0], T = [1.0], R = [1.0], Q = [1.0], a1 = [0.0], P1 = [1.0])

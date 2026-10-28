@@ -211,10 +211,34 @@ function _em_theta(spec::SSMSpec, layout::_EMLayout, kf_ws::KalmanWorkspace{T},
     return NamedTuple{keys(θ0)}(Tuple(vals))
 end
 
+# Hold at 0 every diagonal variance of H or Q that starts at its lower bound 0.
+# The EM update of a variance at 0 is 0, so such a start is a boundary estimate
+# (as left by an earlier `allow_degen` fit) and freezing it continues that fit.
+# Without `allow_degen` the M-step would floor the cell instead, so the start
+# is rejected.
+function _freeze_zero_starts!(em_ws::EMWorkspace, spec::SSMSpec, layout::_EMLayout,
+        θ0::NamedTuple, allow_degen::Bool, caller::AbstractString)
+    for prm in spec.params
+        haskey(layout.cells, prm.name) || continue
+        mat, cs = layout.cells[prm.name]
+        mat in (:H, :Q) && all(I -> I[1] == I[2], cs) || continue
+        prm.lower == 0 && iszero(θ0[prm.name]) || continue
+        allow_degen || throw(ArgumentError(
+            "$caller: the variance $(repr(prm.name)) starts at its lower bound 0. " *
+            "Pass allow_degen = true to hold it at 0, or start it above 0."))
+        frozen = mat == :H ? em_ws.H_zero : em_ws.Q_zero
+        for I in cs
+            frozen[I[1]] = true
+        end
+    end
+    return em_ws
+end
+
 # Run EM on `spec` from θ0 in the workspaces `ws`. Parameters in `held` keep
 # their θ0 values; any other parameter that EM cannot update throws.
 function _em_fit_spec!(ws::StateSpaceModelWorkspaces{T}, spec::SSMSpec, θ0::NamedTuple,
-        y::AbstractMatrix; held = (), caller::AbstractString, kwargs...) where {T}
+        y::AbstractMatrix; held = (), caller::AbstractString, allow_degen::Bool = false,
+        kwargs...) where {T}
     layout = _em_layout(spec)
     unestimable = sort!([name for name in keys(layout.blocked) if !(name in held)])
     if !isempty(unestimable)
@@ -236,8 +260,9 @@ function _em_fit_spec!(ws::StateSpaceModelWorkspaces{T}, spec::SSMSpec, θ0::Nam
     copyto!(kf_ws.P1, P1)
     _update_RQR!(kf_ws)
     _set_em_masks!(em_ws, layout)
+    _freeze_zero_starts!(em_ws, spec, layout, θ0, allow_degen, caller)
 
-    result = em_estimate!(kf_ws, em_ws, y; kwargs...)
+    result = em_estimate!(kf_ws, em_ws, y; allow_degen, kwargs...)
     return _em_theta(spec, layout, kf_ws, θ0), result
 end
 
@@ -291,7 +316,9 @@ EM runs on the model's in-place `KalmanWorkspace` for every model size.
 - `allow_degen::Bool=false`, `degen_lim::Real=1e-4`, `min_degen_iter::Int=50`:
   fix diagonal variances of `H` or `Q` at zero once they fall below `degen_lim`
   after `min_degen_iter` iterations, when that does not lower the
-  log-likelihood
+  log-likelihood. A diagonal variance whose starting value is its lower bound 0
+  (for example, warm-starting from such a fit) is held at 0 from the first
+  iteration; without `allow_degen` that start throws an `ArgumentError`.
 
 # Returns
 The fitted `model` (same object, mutated)

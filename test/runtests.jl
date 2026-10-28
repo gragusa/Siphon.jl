@@ -327,6 +327,9 @@ include("em_generalized_tests.jl")
 # General EM tests (MARSS validation - full Z and T estimation)
 include("em_general_tests.jl")
 
+# EM started from a variance at its lower bound 0
+include("em_zero_start_tests.jl")
+
 # EM with restricted transition matrices
 include("em_diagonal_T_tests.jl")
 
