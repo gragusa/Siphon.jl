@@ -333,6 +333,9 @@ include("em_zero_start_tests.jl")
 # EM with restricted transition matrices
 include("em_diagonal_T_tests.jl")
 
+# Restricted M-steps with a singular noise covariance
+include("em_singular_weight_tests.jl")
+
 # FKF validation tests (R FKF package comparison)
 include("fkf_validation_tests.jl")
 

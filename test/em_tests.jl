@@ -289,11 +289,14 @@ end
     @test all(diff(diagT.loglik_history) .>= -1e-8)
     @test diagT.loglik >= tied.loglik - 1e-8
 
-    # A tied T needs a nonsingular R Q Rᵀ.
-    @test_throws "EM cannot update the tied cells of T" em_matrices(
+    # No shock reaches the second state, so α₂ evolves as φ α₂ exactly and pins
+    # the tied value φ: EM keeps it.
+    pinned = em_matrices(
         I2, 0.5 * I2, [1.0 0.0; 0.0 0.0], 0.2 * I2, I2, y, zeros(2), 10 * I2;
         Z_free = falses(2, 2), T_free = diagmask, Q_free = falses(2, 2),
-        T_ties = [[CartesianIndex(1, 1), CartesianIndex(2, 2)]], maxiter = 3)
+        T_ties = [[CartesianIndex(1, 1), CartesianIndex(2, 2)]], maxiter = 20)
+    @test pinned.T == 0.5 * I2
+    @test all(diff(pinned.loglik_history) .>= -1e-8)
 end
 
 @testset "fit!(EM()) with tied parameters" begin

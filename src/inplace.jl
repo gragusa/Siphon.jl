@@ -2774,14 +2774,16 @@ fixed columns of row `i`,
 This is exact when `H` is diagonal or all rows share the same free columns.
 When cells are tied (`em_ws.Z_ties`), or `H` is not diagonal and the rows have
 different free columns, the update is the generalized least-squares solution
-with weight `H⁻¹` (see `_update_gls!`).
+with weight `pinv(H)`, and Z cells in a row with zero measurement variance keep
+their values (see `_update_gls!`).
 """
 function update_Z!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}, n_valid::Int) where {T}
     p, m = em_ws.obs_dim, em_ws.state_dim
 
     if _needs_gls(em_ws.Z_free, em_ws.Z_ties, kf_ws.H)
-        _update_gls!(kf_ws.Z, em_ws.Z_free, em_ws.Z_ties, kf_ws.H,
-            em_ws.S_αα, em_ws.S_yα, "Z", "H") && return nothing
+        _update_gls!(kf_ws.Z, em_ws.Z_free, em_ws.Z_ties, Matrix{T}(LinearAlgebra.I, p, p),
+            kf_ws.H, em_ws.S_αα, em_ws.S_yα, "Z", "H")
+        return nothing
     end
     all(em_ws.Z_free) || return _update_Z_restricted!(kf_ws, em_ws)
 
@@ -2874,32 +2876,53 @@ function _needs_gls(free::AbstractMatrix{Bool}, ties, W::AbstractMatrix)
     return !common && !isdiag(W)
 end
 
-# Restricted M-step for a coefficient matrix `X` (`Z` or `T`). It minimizes
+# Restricted M-step for a coefficient matrix `X` (`Z` or `T`) in an equation
+# `x_t = X w_t + R ε_t`, ε_t ~ N(0, V). For `Z`: R = I, V = H, S = S_αα,
+# C = S_yα. For `T`: R = R, V = Q, S = S_00, C = S_10.
 #
-#     tr(W⁻¹ (X S Xᵀ - C Xᵀ - X Cᵀ))
+# Let `s` be the noise components that enter the equation (V[k, k] ≠ 0 and a
+# nonzero column of R), R₊ and V₊ their columns of R and block of V, and
+# G = R₊ (R₊ᵀ R₊)⁻¹. The noise then
+# lies in range(R₊), so the expected complete-data log-likelihood is finite
+# only when Pᶜ X stays at its current value, with Pᶜ = I - G R₊ᵀ the projector
+# onto the complement of range(R₊). On that set X maximizes it by minimizing
+#
+#     tr(W⁺ (X S Xᵀ - C Xᵀ - X Cᵀ)),   W⁺ = G V₊⁻¹ Gᵀ = pinv(R V Rᵀ),
 #
 # over the free cells of `X`, with the cells in each tie group sharing one value
-# and every other cell held at its current value. For `Z`: W = H, S = S_αα,
-# C = S_yα. For `T`: W = R Q Rᵀ, S = S_00, C = S_10. Setting the derivative with
+# and every other cell held at its current value. Setting the derivative with
 # respect to each group value βₖ (cells Gₖ) to zero gives the linear system
 #
-#     Σₗ A[k, l] βₗ = Σ_{(i,j)∈Gₖ} [W⁻¹ (C - F S)][i, j],
-#     A[k, l] = Σ_{(i,j)∈Gₖ} Σ_{(a,b)∈Gₗ} W⁻¹[i, a] S[b, j],
+#     Σₗ A[k, l] βₗ = Σ_{(i,j)∈Gₖ} [W⁺ (C - F S)][i, j],
+#     A[k, l] = Σ_{(i,j)∈Gₖ} Σ_{(a,b)∈Gₗ} W⁺[i, a] S[b, j],
 #
-# where F is X with its free cells set to zero. Returns false, leaving X
-# unchanged, when W is singular and no cells are tied; a singular W with tied
-# cells throws, because no exact update exists.
+# where F is X with its free cells set to zero. When some groups move Pᶜ X, β
+# is restricted to β₀ + N γ, with β₀ the current values and N a basis of the
+# group moves that leave Pᶜ X unchanged. A cell in a row that no noise reaches
+# therefore keeps its value: the state equation pins it.
 function _update_gls!(X::AbstractMatrix{T}, free::AbstractMatrix{Bool}, ties,
-        W::AbstractMatrix, S::AbstractMatrix, C::AbstractMatrix,
-        xname::AbstractString, wname::AbstractString) where {T}
-    Wchol = cholesky(Symmetric(W), check = false)
-    if !issuccess(Wchol)
-        isempty(ties) && return false
-        throw(ArgumentError(
-            "EM cannot update the tied cells of $xname: $wname is singular. " *
-            "Use fit!(MLE(), ...)."))
+        R::AbstractMatrix, V::AbstractMatrix, S::AbstractMatrix, C::AbstractMatrix,
+        xname::AbstractString, vname::AbstractString) where {T}
+    s = findall(k -> !iszero(V[k, k]) && any(!iszero, view(R, :, k)), axes(V, 1))
+    for k in axes(V, 1)
+        k in s && continue
+        any(l -> l != k && !iszero(V[k, l]) && any(!iszero, view(R, :, l)), axes(V, 2)) &&
+            throw(ArgumentError(
+                "EM cannot update $xname: $vname has a zero variance with a nonzero " *
+                "covariance."))
     end
-    Winv = inv(Wchol)
+    Rs = R[:, s]
+    Vchol = cholesky(Symmetric(V[s, s]), check = false)
+    RtRchol = cholesky(Symmetric(Rs' * Rs), check = false)
+    if !(issuccess(Vchol) && issuccess(RtRchol))
+        throw(ArgumentError(
+            "EM cannot update $xname: $vname restricted to its nonzero variances " *
+            "is singular, or the corresponding columns of R are linearly " *
+            "dependent. Use fit!(MLE(), ...)."))
+    end
+    Gs = Rs / RtRchol
+    Winv = Gs * (Vchol \ Gs')
+    Pc = Matrix{T}(LinearAlgebra.I, size(X, 1), size(X, 1)) - Gs * Rs'
 
     tied = Set{CartesianIndex{2}}()
     groups = Vector{Vector{CartesianIndex{2}}}()
@@ -2911,7 +2934,7 @@ function _update_gls!(X::AbstractMatrix{T}, free::AbstractMatrix{Bool}, ties,
         free[I] && !(I in tied) && push!(groups, [I])
     end
     K = length(groups)
-    K == 0 && return true
+    K == 0 && return nothing
 
     F = copy(X)
     for g in groups, I in g
@@ -2935,15 +2958,36 @@ function _update_gls!(X::AbstractMatrix{T}, free::AbstractMatrix{Bool}, ties,
             A[k, l] = a
             A[l, k] = a
         end
-        A[k, k] += T(1e-10)
     end
-    β = cholesky!(Symmetric(A)) \ b
+
+    # Column k: the change in vec(Pᶜ X) per unit change of group k.
+    LI = LinearIndices(X)
+    M = zeros(T, length(X), K)
+    for k in 1:K, I in groups[k], a in axes(X, 1)
+        M[LI[a, I[2]], k] += Pc[a, I[1]]
+    end
+    if all(x -> abs(x) <= sqrt(eps(T)), M)
+        for k in 1:K
+            A[k, k] += T(1e-10)
+        end
+        β = cholesky!(Symmetric(A)) \ b
+    else
+        β = T[X[first(g)] for g in groups]
+        N = nullspace(M; atol = sqrt(eps(T)))
+        if size(N, 2) > 0
+            AN = Symmetric(N' * A * N)
+            for d in axes(AN, 1)
+                AN.data[d, d] += T(1e-10)
+            end
+            β += N * (cholesky!(AN) \ (N' * (b - A * β)))
+        end
+    end
 
     for k in 1:K, I in groups[k]
 
         X[I] = β[k]
     end
-    return true
+    return nothing
 end
 
 # Set every cell of each tie group to the group mean. For a diagonal covariance
@@ -3059,15 +3103,20 @@ for each row `i`, with `J_i = {j : T_free[i, j]}`,
 If row `i` has no free cells it is left untouched. The row-wise update is exact
 when `R Q Rᵀ` is diagonal or every row has the same free columns. When cells are
 tied (`em_ws.T_ties`), or `R Q Rᵀ` couples rows with different free columns,
-the update is the generalized least-squares solution with weight `(R Q Rᵀ)⁻¹`
-(see `_update_gls!`); a singular `R Q Rᵀ` keeps the row-wise update.
+the update is the generalized least-squares solution with weight
+`pinv(R Q Rᵀ)`. A singular `R Q Rᵀ` (fewer shocks than states, a constant
+state, a shock variance frozen at 0) restricts the update to the moves of `T`
+that keep the transition noise in the range of the shocks with nonzero
+variance; cells pinned by a deterministic state equation keep their values (see
+`_update_gls!`).
 """
 function update_T!(kf_ws::KalmanWorkspace{T}, em_ws::EMWorkspace{T}) where {T}
     m = em_ws.state_dim
 
     if _needs_gls(em_ws.T_free, em_ws.T_ties, kf_ws.RQR)
-        _update_gls!(kf_ws.Tmat, em_ws.T_free, em_ws.T_ties, kf_ws.RQR,
-            em_ws.S_00, em_ws.S_10, "T", "R Q Rᵀ") && return nothing
+        _update_gls!(kf_ws.Tmat, em_ws.T_free, em_ws.T_ties, kf_ws.R, kf_ws.Q,
+            em_ws.S_00, em_ws.S_10, "T", "Q")
+        return nothing
     end
 
     # Detect whether all rows share the same free-column pattern. Common cases:
