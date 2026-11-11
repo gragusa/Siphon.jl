@@ -365,8 +365,11 @@ Changed behavior:
   full `Q`, the `dns_model` default, now gives the exact M-step.
 - The `Z` and `H` updates sum over the observed periods only, which removes a bias when
   whole periods are missing.
-- `em_estimate!` throws an `ArgumentError` for periods with some but not all series
-  missing, as `fit!(EM(), …)` already did.
+- `fit!(EM(), …)`, `em_estimate!` and `profile_em_ssm` accept periods with some but
+  not all series missing. The E-step uses the conditional moments of the missing
+  elements given the data, so EM converges to the maximum likelihood estimate.
+  `fit!(EM(), …)` for a `DynamicFactorModel` with `error_lags > 0` still requires
+  every period to be fully observed or fully missing.
 
 ## Priors
 

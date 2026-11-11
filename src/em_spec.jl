@@ -279,8 +279,8 @@ EM runs on the model's in-place `KalmanWorkspace` for every model size.
 # Arguments
 - `EM()`: Estimation method selector
 - `model`: StateSpaceModel to fit (mutated in-place)
-- `y`: Observations (p × n matrix), missing values as NaN or `missing`. Periods
-  with some but not all observations missing are not supported.
+- `y`: Observations (p × n matrix), missing values as NaN or `missing`, one
+  element at a time.
 
 # Keyword Arguments
 - `maxiter::Int=500`: Maximum EM iterations
@@ -317,8 +317,6 @@ function fit!(
 ) where {T}
     y = _nan_obs(y)
     _check_model_obs(model, "fit!(EM(), ...)", y)
-    _require_no_partial_periods(y, "fit!(EM(), ...)",
-        "Use fit!(MLE(), ...), which handles them.")
     _require_em_spec(model.spec, "fit!(EM(), ...)")
 
     ws = model.workspaces::StateSpaceModelWorkspaces{T}
@@ -416,8 +414,6 @@ function profile_em_ssm(
     y = _nan_obs(y)
     size(y, 1) == spec.n_obs || throw(DimensionMismatch(
         "profile_em_ssm: y has $(size(y, 1)) rows but the spec has $(spec.n_obs) observables"))
-    _require_no_partial_periods(y, "profile_em_ssm",
-        "Use optimize_ssm, which handles them.")
     _require_em_spec(spec, "profile_em_ssm")
 
     names = Tuple(prm.name for prm in spec.params)

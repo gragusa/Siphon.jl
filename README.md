@@ -19,7 +19,9 @@ Requires Julia 1.13 or later.
   with automatic differentiation, plus in-place workspaces for large models
 - Approximate and exact diffuse initialization
 - Disturbance smoother, auxiliary residuals and simulation smoother
-- Missing observations (`missing` or `NaN`), including partially observed periods
+- Missing observations (`missing` or `NaN`), including partially observed periods,
+  in filtering, smoothing and estimation by MLE or EM (EM for a
+  `DynamicFactorModel` with AR errors needs whole periods)
 - Model specification with `custom_ssm` and `FreeParam`, and templates for the
   local level, local linear trend, AR(1), ARMA(p, q), dynamic factor and
   dynamic Nelson-Siegel models

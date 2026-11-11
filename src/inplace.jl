@@ -2530,10 +2530,13 @@ The EM algorithm computes sufficient statistics from smoothed states:
     S_11 = Σ_{t=2}^{n} E[α_t α_t' | Y]
     S_10 = Σ_{t=2}^{n} E[α_t α_{t-1}' | Y]
 
-For the observation equation, summed over the observed periods only:
-    S_yy = Σ_t y_t y_t'
-    S_yα = Σ_t y_t E[α_t' | Y]
+For the observation equation, summed over the periods with at least one
+observed row:
+    S_yy = Σ_t E[y_t y_t' | Y]
+    S_yα = Σ_t E[y_t α_t' | Y]
     S_αα = Σ_t E[α_t α_t' | Y]
+The expectations reduce to `y_t y_t'` and `y_t E[α_t' | Y]` in a fully observed
+period; see `compute_sufficient_stats!` for a partially observed one.
 
 # Free-cell masks
 The masks select which cells the M-step updates; every other cell keeps its
@@ -2561,8 +2564,8 @@ mutable struct EMWorkspace{T <: Real}
     S_10::Matrix{T}   # Σ E[α_t α_{t-1}' | Y] for t = 2:n
 
     # Sufficient statistics for observation equation
-    S_yy::Matrix{T}   # Σ y_t y_t' over observed t (p × p)
-    S_yα::Matrix{T}   # Σ y_t α_t' over observed t (p × m)
+    S_yy::Matrix{T}   # Σ E[y_t y_t' | Y] over observed t (p × p)
+    S_yα::Matrix{T}   # Σ E[y_t α_t' | Y] over observed t (p × m)
     S_αα::Matrix{T}   # Σ E[α_t α_t' | Y] over observed t (m × m)
 
     # Scratch space for M-step computations
@@ -2683,9 +2686,13 @@ end
     compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix) -> n_valid
 
 Compute the sufficient statistics of the M-step from the smoother output and
-return the number of observed periods. The observation-equation sums `S_yy`,
-`S_yα` and `S_αα` run over the observed periods only, so the `Z` and `H` updates
-stay unbiased when whole periods are missing. Requires
+return the number of periods with at least one observed row. The
+observation-equation sums `S_yy`, `S_yα` and `S_αα` run over those periods only:
+a period with no observed row drops out of the likelihood. In a partially
+observed period the missing rows of `yₜ` enter through their conditional
+moments `E[yₜ yₜ' | Y]` and `E[yₜ αₜ' | Y]` at the current `Z` and `H`
+(Shumway and Stoffer, 2006, §6.4), so the `Z` and `H` updates are the exact
+M-step with the missing elements treated as latent. Requires
 `kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
 output, and throws an `ArgumentError` otherwise.
 """
@@ -2741,18 +2748,75 @@ function compute_sufficient_stats!(
         if observed
             n_valid += 1
             y_t = view(y, :, t)
-            for j in 1:p, i in 1:p
+            if kf_ws.n_observed[t] < p
+                _add_partial_obs_moments!(em_ws, kf_ws, y_t, α_t, V_t,
+                    view(kf_ws.observed_mask, :, t))
+            else
+                for j in 1:p, i in 1:p
 
-                em_ws.S_yy[i, j] += y_t[i] * y_t[j]
-            end
-            for j in 1:m, i in 1:p
+                    em_ws.S_yy[i, j] += y_t[i] * y_t[j]
+                end
+                for j in 1:m, i in 1:p
 
-                em_ws.S_yα[i, j] += y_t[i] * α_t[j]
+                    em_ws.S_yα[i, j] += y_t[i] * α_t[j]
+                end
             end
         end
     end
 
     return n_valid
+end
+
+# Add E[yₜ yₜ' | Y] to S_yy and E[yₜ αₜ' | Y] to S_yα for a partially observed
+# period, at the current Z and H. With o the observed and u the missing rows,
+# B = H[u, o] H[o, o]⁻¹ and A = Z[u, :] - B Z[o, :], the missing rows are
+#
+#     y_u = A αₜ + B y_o + w,   w ~ N(0, H[u, u] - B H[o, u]),
+#
+# with w independent of αₜ and of the data. Hence, with ŷ = E[yₜ | Y]
+# (y_o on the observed rows, A α̂ₜ + B y_o on the missing ones),
+#
+#     E[yₜ yₜ' | Y] = ŷ ŷ' + [0 0; 0 A Vₜ A' + H[u, u] - B H[o, u]],
+#     E[yₜ αₜ' | Y] = ŷ α̂ₜ' + [0; A Vₜ].
+#
+# These make the Z and H updates the exact M-step of the complete-data
+# likelihood in which y_u is latent. B = 0 when H[u, o] = 0, as for diagonal H.
+function _add_partial_obs_moments!(em_ws::EMWorkspace{T}, kf_ws::KalmanWorkspace{T},
+        y_t::AbstractVector, α_t::AbstractVector, V_t::AbstractMatrix,
+        obs::AbstractVector{Bool}) where {T}
+    Z, H = kf_ws.Z, kf_ws.H
+    o = findall(obs)
+    u = findall(!, obs)
+
+    A = Z[u, :]
+    Σw = H[u, u]
+    ŷ = Vector{T}(undef, em_ws.obs_dim)
+    ŷ[o] .= view(y_t, o)
+    ŷ[u] .= A * α_t
+    H_uo = H[u, o]
+    if any(!iszero, H_uo)
+        # H[o, o] is singular when an observed row has zero variance; the
+        # pseudo-inverse then gives the conditional mean and variance of y_u.
+        H_oo = Symmetric(H[o, o])
+        chol = cholesky(H_oo; check = false)
+        B = issuccess(chol) ? H_uo / chol : H_uo * pinv(H_oo)
+        e_o = view(y_t, o) - Z[o, :] * α_t
+        ŷ[u] .+= B * e_o
+        A .-= B * Z[o, :]
+        Σw .-= B * H_uo'
+    end
+
+    AV = A * V_t
+    S_yy, S_yα = em_ws.S_yy, em_ws.S_yα
+    @inbounds for j in axes(S_yy, 2), i in axes(S_yy, 1)
+        S_yy[i, j] += ŷ[i] * ŷ[j]
+    end
+    @inbounds for j in axes(S_yα, 2), i in axes(S_yα, 1)
+        S_yα[i, j] += ŷ[i] * α_t[j]
+    end
+    view(S_yy, u, u) .+= AV * A' .+ Σw
+    view(S_yα, u, :) .+= AV
+    return nothing
 end
 
 # ============================================
@@ -3414,7 +3478,6 @@ function em_estimate!(
         warn::Bool = true
 ) where {T}
     y = _nan_obs(y)
-    _require_no_partial_periods(y, "em_estimate!", "Use fit!(MLE(), ...), which handles them.")
     _require_plain_transition(kf_ws, "em_estimate!")
     _require_cov_storage(kf_ws, "em_estimate!")
     loglik_history = Vector{T}(undef, maxiter)
@@ -5374,7 +5437,8 @@ Fit a dynamic factor model using the EM algorithm.
 # Arguments
 - `EM()`: Estimation method selector
 - `model`: DynamicFactorModel to fit (mutated in-place)
-- `y`: Observations (N × n matrix), missing values as NaN
+- `y`: Observations (N × n matrix), missing values as NaN. With `error_lags > 0`
+  every period must be either fully observed or fully missing.
 
 # Keyword Arguments
 - `maxiter`: Maximum EM iterations (default: 500)
@@ -5419,7 +5483,11 @@ function fit!(
         "Data has $n time periods but model workspace allocated for $(model.kf_ws.n_times)",
     ),
     )
-    _require_no_partial_periods(y, "fit!(EM(), ::DynamicFactorModel, ...)")
+    # The quasi-difference of AR errors drops every period in which some row of
+    # Xₜ, …, Xₜ₋ᵣ is missing, which would discard the observed rows of a
+    # partially observed period.
+    spec.error_lags > 0 && _require_no_partial_periods(y,
+        "fit!(EM(), ::DynamicFactorModel, ...) with error_lags > 0")
 
     verbose &&
         @info "Fitting DynamicFactorModel via EM" n_obs=spec.n_obs n_factors=spec.n_factors loading_lags=spec.loading_lags factor_lags=spec.factor_lags error_lags=spec.error_lags state_dim=model.dfm_ws.state_dim

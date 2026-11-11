@@ -495,6 +495,22 @@ end
     @test occursin("ProfileEMResult(λ_optimal = 0.06", sprint(show, res))
 end
 
+@testset "profile_em_ssm with partially observed periods" begin
+    df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
+    y = Matrix(Matrix(df)')
+    y[5, 20:40] .= NaN
+    y[1:2, 60:65] .= NaN
+    maturities = [3, 12, 24, 60, 120]
+    for Hs in (:diagonal, :scalar)
+        spec = dns_model(maturities; T_structure = :diagonal, H_structure = Hs,
+            Q_structure = :full, λ = FreeParam(init = 0.06), diffuse = false)
+        res = profile_em_ssm(spec, y; λ_grid = 0.05:0.01:0.07, maxiter = 300,
+            warn = false)
+        @test ssm_loglik(spec, res.θ, y) ≈ res.loglik rtol = 1e-6
+        @test all(diff(res.em_result.loglik_history) .>= -1e-6)
+    end
+end
+
 @testset "profile_em_ssm with other matrix-expression parameters" begin
     df = CSV.read(joinpath(@__DIR__, "marss_dns_data.csv"), DataFrame)
     y = Matrix(Matrix(df)')
