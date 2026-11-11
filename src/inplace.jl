@@ -4638,7 +4638,6 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
 
     # Idiosyncratic innovation variances (diagonal)
     σ²_v::Vector{T}  # N × 1
-
 end
 
 """
@@ -4857,7 +4856,6 @@ function sync_params_to_ssm!(
         P1_e = view(kf_ws.P1, (m_f + 1):(m_f + N * r), (m_f + 1):(m_f + N * r))
         fill!(P1_e, zero(T))
         for l2 in 1:r, l1 in 1:r, i in 1:N
-
             P1_e[(l1 - 1) * N + i, (l2 - 1) * N + i] = Γ[l1, l2] * dfm_ws.σ²_v[i]
         end
     end
@@ -5022,6 +5020,7 @@ function _update_dfm_ar!(
         a, V = view(αs, :, t), view(Vs, :, :, t)
         a₋, V₋, C = view(αs, :, t - 1), view(Vs, :, :, t - 1), view(Pc, :, :, t - 1)
         @inbounds for j in φ, u in φ
+
             S_φφ[u, j] += V[u, j] + a[u] * a[j]
         end
         @inbounds for i in 1:N

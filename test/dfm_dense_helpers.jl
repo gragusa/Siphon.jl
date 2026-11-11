@@ -43,7 +43,6 @@ function _dfm_dense(Λ, Φ, Ση, δ, σ², N, n; s, Pf = 10.0)
     Σe = zeros(Tt, N * n, N * n)
     γ = _ar_acf(δ, n)
     for t1 in 1:n, t2 in 1:n, i in 1:N
-
         Σe[(t1 - 1) * N + i, (t2 - 1) * N + i] = σ²[i] * γ[abs(t1 - t2) + 1]
     end
     return (; F, Σu, Mx, Σe, nu, k, p)

@@ -681,7 +681,8 @@ end
     model = fit!(EM(), DynamicFactorModel(N, 1, n), y; maxiter = 2000)
     @test isconverged(model)
     @test isfinite(loglikelihood(model))
-    model = fit!(EM(), DynamicFactorModel(N, 1, n; error_lags = 1, rng = Random.Xoshiro(3)),
+    model = fit!(
+        EM(), DynamicFactorModel(N, 1, n; error_lags = 1, rng = Random.Xoshiro(3)),
         y; maxiter = 2000)
     @test all(diff(model.loglik_history) .>= -1e-8 * abs(loglikelihood(model)))
     @test isfinite(loglikelihood(model))
