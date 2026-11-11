@@ -681,9 +681,10 @@ end
     model = fit!(EM(), DynamicFactorModel(N, 1, n), y; maxiter = 2000)
     @test isconverged(model)
     @test isfinite(loglikelihood(model))
-    # The quasi-difference of AR errors needs whole periods.
-    @test_throws "with error_lags > 0 does not support partially observed periods" fit!(
-        EM(), DynamicFactorModel(N, 1, n; error_lags = 1), y)
+    model = fit!(EM(), DynamicFactorModel(N, 1, n; error_lags = 1, rng = Random.Xoshiro(3)),
+        y; maxiter = 2000)
+    @test all(diff(model.loglik_history) .>= -1e-8 * abs(loglikelihood(model)))
+    @test isfinite(loglikelihood(model))
 end
 
 @testset "kalman_loglik and kalman_filter agree for a nearly asymmetric F" begin

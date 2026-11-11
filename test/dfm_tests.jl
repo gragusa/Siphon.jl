@@ -8,6 +8,9 @@ using Test
 using Siphon
 using LinearAlgebra
 using Random
+using ForwardDiff
+
+include("dfm_dense_helpers.jl")
 
 # One-factor DFM with AR(q) factor and AR(1) idiosyncratic errors (δ = 0 gives
 # white noise errors).
@@ -85,11 +88,16 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         @test all(abs.(idiosyncratic_variances(model) .- DFM_σ²) .<= 0.15 .* DFM_σ² .+ 0.03)
         @test _abscor(vec(factors(model)), f) > 0.95
 
-        # The observation equation is quasi-differenced: Z = Λ₀ (1 - δL) on the
-        # factor state [fₜ; fₜ₋₁], and H holds the innovation variances.
+        # The errors are states: Z = [Λ₀ 0 I] on [fₜ; fₜ₋₁; eₜ] with H = 0, the
+        # error block of T and Q holds δ and σ², and the errors start stationary.
         δ = ar_coefficients(model)[1]
-        @test model.kf_ws.Z ≈ [Λ -δ .* Λ]
-        @test diag(model.kf_ws.H) ≈ idiosyncratic_variances(model)
+        σ² = idiosyncratic_variances(model)
+        kf, N = model.kf_ws, length(Λ)
+        @test kf.Z ≈ [Λ zeros(N) Matrix(1.0I, N, N)]
+        @test iszero(kf.H)
+        @test kf.Tmat[3:end, 3:end] ≈ δ * I
+        @test kf.Q[2:end, 2:end] ≈ Diagonal(σ²)
+        @test kf.P1[3:end, 3:end] ≈ Diagonal(σ² ./ (1 - δ^2))
     end
 
     @testset "EM with AR(2) errors and dynamic loadings" begin
@@ -115,15 +123,48 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         @test vec(L[2]) ./ s ≈ λ1 ./ DFM_λ[1] atol = 0.1
     end
 
-    @testset "AR errors with a missing period" begin
+    @testset "AR errors with missing and partially observed periods" begin
         y, _ = _simulate_dfm(; λ = DFM_λ, σ² = DFM_σ², δ = 0.6, n = 400)
         y[:, 100:102] .= NaN
+        y[2, 150:180] .= NaN
+        y[5, 1:20] .= NaN
         model = DynamicFactorModel(
             size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
-        fit!(EM(), model, y; maxiter = 300)
+        fit!(EM(), model, y; maxiter = 300, warn = false)
         @test _monotone(model.loglik_history)
         @test isfinite(loglikelihood(model))
         @test abs(ar_coefficients(model)[1] - 0.6) < 0.1
+    end
+
+    @testset "AR errors: exact likelihood and M-step against dense conditioning" begin
+        rng = Xoshiro(21)
+        N, n = 4, 40
+        y = randn(rng, N, n) .+ cumsum(randn(rng, 1, n); dims = 2) .* [1.0, 0.5, -0.3, 0.8]
+        y[2, 5:9] .= NaN   # partially observed periods
+        y[4, 20] = NaN
+        y[:, 30] .= NaN    # a fully missing period
+        y[1, 1:2] .= NaN   # missing at the start
+        model = DynamicFactorModel(N, 2, n; error_lags = 2, loading_lags = 1,
+            factor_lags = 2, rng = Xoshiro(4))
+        fit!(EM(), model, y; maxiter = 4, warn = false)
+        @test _monotone(model.loglik_history)
+        d = model.dfm_ws
+        s = d.factor_dim ÷ 2
+        θ0 = (deepcopy(d.Λ), deepcopy(d.Φ), copy(d.Σ_η), d.δ[1:2], copy(d.σ²_v))
+        @test loglikelihood(model) ≈ dfm_loglik_dense(θ0..., y; s) rtol = 1e-12
+
+        # The M-step for the errors, from the smoother at θ0, maximises the
+        # expected complete-data log-likelihood block by block: each gradient,
+        # computed from the dense posterior at θ0, vanishes at its update.
+        post = dfm_posterior_dense(θ0, y; s)
+        d1 = deepcopy(d)
+        Siphon._update_dfm_ar!(d1, model.kf_ws)
+        Qe(Λ, δ, σ²) = dfm_Q_errors(Λ, δ, σ², post; N, n)
+        unvec(v) = [reshape(v[1:8], N, 2), reshape(v[9:16], N, 2)]
+        Λ1 = vcat(vec(d1.Λ[1]), vec(d1.Λ[2]))
+        @test norm(ForwardDiff.gradient(v -> Qe(unvec(v), θ0[4], θ0[5]), Λ1)) < 1e-8
+        @test norm(ForwardDiff.gradient(v -> Qe(d1.Λ, v, θ0[5]), d1.δ[1:2])) < 1e-6
+        @test norm(ForwardDiff.gradient(v -> Qe(d1.Λ, d1.δ[1:2], v), d1.σ²_v)) < 1e-8
     end
 
     @testset "forecast with AR errors" begin
@@ -131,27 +172,30 @@ const DFM_σ² = [0.1, 0.5, 1.0, 2.0, 3.0, 4.0]
         model = DynamicFactorModel(
             size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
         fit!(EM(), model, y; maxiter = 300)
-        kf, n = model.kf_ws, size(y, 2)
+        kf, (N, n) = model.kf_ws, size(y)
         δ = ar_coefficients(model)[1]
+        Λ = vec(loadings(model)[1])
         Z, Tm = kf.Z, kf.Tmat
         fc = forecast(model, 2)
 
-        # Xₙ₊₁ = δ Xₙ + Z αₙ₊₁ + vₙ₊₁ and Xₙ₊₂ = δ Xₙ₊₁ + Z αₙ₊₂ + vₙ₊₂.
+        # With H = 0 the filtered errors of an observed period are Xₙ - Λ fₙ|ₙ,
+        # and their forecast decays at rate δ.
         a1 = Tm * kf.att[:, n]
         P1 = Tm * kf.Ptt[:, :, n] * Tm' + kf.RQR
+        @test kf.att[3:end, n] ≈ y[:, n] .- Λ .* kf.att[1, n]
+        @test a1[3:end] ≈ δ .* kf.att[3:end, n]
         @test fc isa ForecastResult
         @test forecast_periods(fc) == (n + 1):(n + 2)
-        @test forecast_observations(fc)[:, 1] ≈ δ .* y[:, n] .+ Z * a1
-        @test forecast_observations_cov(fc)[:, :, 1] ≈ Z * P1 * Z' + kf.H
-        @test forecast_observations(fc)[:, 2] ≈
-              δ .* forecast_observations(fc)[:, 1] .+ Z * Tm * a1
+        @test forecast_observations(fc)[:, 1] ≈ Z * a1
+        @test forecast_observations_cov(fc)[:, :, 1] ≈ Z * P1 * Z'
+        @test forecast_observations(fc)[:, 2] ≈ Z * Tm * a1
         @test forecast_states(fc)[:, 1] ≈ a1
 
+        # A missing last period is forecast from the filtered errors.
         y[:, end] .= NaN
-        model = DynamicFactorModel(
-            size(y, 1), 1, size(y, 2); error_lags = 1, rng = Xoshiro(3))
-        fit!(EM(), model, y; maxiter = 5)
-        @test_throws ArgumentError forecast(model, 1)
+        model = DynamicFactorModel(N, 1, n; error_lags = 1, rng = Xoshiro(3))
+        fit!(EM(), model, y; maxiter = 5, warn = false)
+        @test all(isfinite, forecast_observations(forecast(model, 1)))
     end
 
     @testset "rng keyword" begin

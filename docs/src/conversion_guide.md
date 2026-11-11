@@ -368,8 +368,6 @@ Changed behavior:
 - `fit!(EM(), …)`, `em_estimate!` and `profile_em_ssm` accept periods with some but
   not all series missing. The E-step uses the conditional moments of the missing
   elements given the data, so EM converges to the maximum likelihood estimate.
-  `fit!(EM(), …)` for a `DynamicFactorModel` with `error_lags > 0` still requires
-  every period to be fully observed or fully missing.
 
 ## Priors
 
@@ -721,6 +719,13 @@ Changed behavior:
   `[0.0]`.
 - `DynamicFactorModel(…; rng)` takes the random number generator for the starting
   loadings. Previously it always drew from the global RNG.
+- With `error_lags > 0` the idiosyncratic errors are states with `H = 0`, starting
+  from their stationary distribution, and `loglikelihood` is the exact log-likelihood
+  of the observed values. EM updates the loadings, `δ` and `σ²_v` by conditional
+  maximization; previously the loadings stayed at their starting values. Any pattern
+  of missing values is allowed, `forecast` does not need the last `error_lags`
+  observations, and `state_cov(model)` is block diagonal with
+  `factor_innovation_cov(model)` and `Diagonal(idiosyncratic_variances(model))`.
 
 ## Removed names and utilities
 
