@@ -658,7 +658,8 @@ end
     @test system_matrices(em).Z ≈ system_matrices(ml).Z atol = 1e-3
 
     # Every cell of Z and H free: the log-likelihood rises at every iteration.
-    ws = KalmanWorkspace(reshape([1.0, 0.5, 0.5], 3, 1), [1.0 0.3 0.3; 0.3 1.0 0.3; 0.3 0.3 1.0],
+    ws = KalmanWorkspace(
+        reshape([1.0, 0.5, 0.5], 3, 1), [1.0 0.3 0.3; 0.3 1.0 0.3; 0.3 0.3 1.0],
         fill(0.5, 1, 1), fill(1.0, 1, 1), fill(0.5, 1, 1), [0.0], fill(10.0, 1, 1), n)
     res = Siphon.em_estimate!(ws, Siphon.EMWorkspace(ws), y; maxiter = 200, tol = 0.0,
         warn = false)

@@ -2809,9 +2809,11 @@ function _add_partial_obs_moments!(em_ws::EMWorkspace{T}, kf_ws::KalmanWorkspace
     AV = A * V_t
     S_yy, S_yα = em_ws.S_yy, em_ws.S_yα
     @inbounds for j in axes(S_yy, 2), i in axes(S_yy, 1)
+
         S_yy[i, j] += ŷ[i] * ŷ[j]
     end
     @inbounds for j in axes(S_yα, 2), i in axes(S_yα, 1)
+
         S_yα[i, j] += ŷ[i] * α_t[j]
     end
     view(S_yy, u, u) .+= AV * A' .+ Σw
