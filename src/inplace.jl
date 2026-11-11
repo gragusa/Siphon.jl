@@ -2530,10 +2530,13 @@ The EM algorithm computes sufficient statistics from smoothed states:
     S_11 = Σ_{t=2}^{n} E[α_t α_t' | Y]
     S_10 = Σ_{t=2}^{n} E[α_t α_{t-1}' | Y]
 
-For the observation equation, summed over the observed periods only:
-    S_yy = Σ_t y_t y_t'
-    S_yα = Σ_t y_t E[α_t' | Y]
+For the observation equation, summed over the periods with at least one
+observed row:
+    S_yy = Σ_t E[y_t y_t' | Y]
+    S_yα = Σ_t E[y_t α_t' | Y]
     S_αα = Σ_t E[α_t α_t' | Y]
+The expectations reduce to `y_t y_t'` and `y_t E[α_t' | Y]` in a fully observed
+period; see `compute_sufficient_stats!` for a partially observed one.
 
 # Free-cell masks
 The masks select which cells the M-step updates; every other cell keeps its
@@ -2561,8 +2564,8 @@ mutable struct EMWorkspace{T <: Real}
     S_10::Matrix{T}   # Σ E[α_t α_{t-1}' | Y] for t = 2:n
 
     # Sufficient statistics for observation equation
-    S_yy::Matrix{T}   # Σ y_t y_t' over observed t (p × p)
-    S_yα::Matrix{T}   # Σ y_t α_t' over observed t (p × m)
+    S_yy::Matrix{T}   # Σ E[y_t y_t' | Y] over observed t (p × p)
+    S_yα::Matrix{T}   # Σ E[y_t α_t' | Y] over observed t (p × m)
     S_αα::Matrix{T}   # Σ E[α_t α_t' | Y] over observed t (m × m)
 
     # Scratch space for M-step computations
@@ -2683,9 +2686,13 @@ end
     compute_sufficient_stats!(em_ws::EMWorkspace, kf_ws::KalmanWorkspace, y::AbstractMatrix) -> n_valid
 
 Compute the sufficient statistics of the M-step from the smoother output and
-return the number of observed periods. The observation-equation sums `S_yy`,
-`S_yα` and `S_αα` run over the observed periods only, so the `Z` and `H` updates
-stay unbiased when whole periods are missing. Requires
+return the number of periods with at least one observed row. The
+observation-equation sums `S_yy`, `S_yα` and `S_αα` run over those periods only:
+a period with no observed row drops out of the likelihood. In a partially
+observed period the missing rows of `yₜ` enter through their conditional
+moments `E[yₜ yₜ' | Y]` and `E[yₜ αₜ' | Y]` at the current `Z` and `H`
+(Shumway and Stoffer, 2006, §6.4), so the `Z` and `H` updates are the exact
+M-step with the missing elements treated as latent. Requires
 `kalman_smoother!(kf_ws; crosscov=true)` to have run on the current filter
 output, and throws an `ArgumentError` otherwise.
 """
@@ -2741,18 +2748,77 @@ function compute_sufficient_stats!(
         if observed
             n_valid += 1
             y_t = view(y, :, t)
-            for j in 1:p, i in 1:p
+            if kf_ws.n_observed[t] < p
+                _add_partial_obs_moments!(em_ws, kf_ws, y_t, α_t, V_t,
+                    view(kf_ws.observed_mask, :, t))
+            else
+                for j in 1:p, i in 1:p
 
-                em_ws.S_yy[i, j] += y_t[i] * y_t[j]
-            end
-            for j in 1:m, i in 1:p
+                    em_ws.S_yy[i, j] += y_t[i] * y_t[j]
+                end
+                for j in 1:m, i in 1:p
 
-                em_ws.S_yα[i, j] += y_t[i] * α_t[j]
+                    em_ws.S_yα[i, j] += y_t[i] * α_t[j]
+                end
             end
         end
     end
 
     return n_valid
+end
+
+# Add E[yₜ yₜ' | Y] to S_yy and E[yₜ αₜ' | Y] to S_yα for a partially observed
+# period, at the current Z and H. With o the observed and u the missing rows,
+# B = H[u, o] H[o, o]⁻¹ and A = Z[u, :] - B Z[o, :], the missing rows are
+#
+#     y_u = A αₜ + B y_o + w,   w ~ N(0, H[u, u] - B H[o, u]),
+#
+# with w independent of αₜ and of the data. Hence, with ŷ = E[yₜ | Y]
+# (y_o on the observed rows, A α̂ₜ + B y_o on the missing ones),
+#
+#     E[yₜ yₜ' | Y] = ŷ ŷ' + [0 0; 0 A Vₜ A' + H[u, u] - B H[o, u]],
+#     E[yₜ αₜ' | Y] = ŷ α̂ₜ' + [0; A Vₜ].
+#
+# These make the Z and H updates the exact M-step of the complete-data
+# likelihood in which y_u is latent. B = 0 when H[u, o] = 0, as for diagonal H.
+function _add_partial_obs_moments!(em_ws::EMWorkspace{T}, kf_ws::KalmanWorkspace{T},
+        y_t::AbstractVector, α_t::AbstractVector, V_t::AbstractMatrix,
+        obs::AbstractVector{Bool}) where {T}
+    Z, H = kf_ws.Z, kf_ws.H
+    o = findall(obs)
+    u = findall(!, obs)
+
+    A = Z[u, :]
+    Σw = H[u, u]
+    ŷ = Vector{T}(undef, em_ws.obs_dim)
+    ŷ[o] .= view(y_t, o)
+    ŷ[u] .= A * α_t
+    H_uo = H[u, o]
+    if any(!iszero, H_uo)
+        # H[o, o] is singular when an observed row has zero variance; the
+        # pseudo-inverse then gives the conditional mean and variance of y_u.
+        H_oo = Symmetric(H[o, o])
+        chol = cholesky(H_oo; check = false)
+        B = issuccess(chol) ? H_uo / chol : H_uo * pinv(H_oo)
+        e_o = view(y_t, o) - Z[o, :] * α_t
+        ŷ[u] .+= B * e_o
+        A .-= B * Z[o, :]
+        Σw .-= B * H_uo'
+    end
+
+    AV = A * V_t
+    S_yy, S_yα = em_ws.S_yy, em_ws.S_yα
+    @inbounds for j in axes(S_yy, 2), i in axes(S_yy, 1)
+
+        S_yy[i, j] += ŷ[i] * ŷ[j]
+    end
+    @inbounds for j in axes(S_yα, 2), i in axes(S_yα, 1)
+
+        S_yα[i, j] += ŷ[i] * α_t[j]
+    end
+    view(S_yy, u, u) .+= AV * A' .+ Σw
+    view(S_yα, u, :) .+= AV
+    return nothing
 end
 
 # ============================================
@@ -3414,7 +3480,6 @@ function em_estimate!(
         warn::Bool = true
 ) where {T}
     y = _nan_obs(y)
-    _require_no_partial_periods(y, "em_estimate!", "Use fit!(MLE(), ...), which handles them.")
     _require_plain_transition(kf_ws, "em_estimate!")
     _require_cov_storage(kf_ws, "em_estimate!")
     loglik_history = Vector{T}(undef, maxiter)
@@ -4510,15 +4575,16 @@ where:
     δ(L) = δ₁L + ... + δᵣLʳ       (AR idiosyncratic errors, common across i)
 
 State-space representation:
-    State vector: αₜ = [fₜ; fₜ₋₁; ...; fₜ₋ₛ₊₁], with s = max(q, p + r + 1)
+    With white-noise errors (r = 0) the state is αₜ = [fₜ; …; fₜ₋ₛ₊₁] and the
+    observation equation is Xₜ = λ(L) fₜ + vₜ with H = diag(σ²_v).
 
-    With white-noise errors (r = 0) the observation equation is
-    Xₜ = λ(L) fₜ + vₜ. With AR errors (r > 0) it is quasi-differenced:
+    With AR errors (r > 0) the errors are states,
+    αₜ = [fₜ; …; fₜ₋ₛ₊₁; eₜ; …; eₜ₋ᵣ₊₁], and the observation equation
+    Xₜ = λ(L) fₜ + eₜ has H = 0. The errors start from their stationary
+    distribution, so the log-likelihood is the exact log-likelihood of the
+    observed elements of X, for any pattern of missing values.
 
-        X̃ₜ = Xₜ - δ₁Xₜ₋₁ - ... - δᵣXₜ₋ᵣ = λ(L)(1 - δ(L)L) fₜ + vₜ,
-
-    so the observation noise is vₜ with H = diag(σ²_v) in both cases and the
-    errors eₜ are not states.
+    s = max(q, p + r + 1)
 
 Dimensions:
     N = number of observables
@@ -4527,7 +4593,7 @@ Dimensions:
     q = lags in Ψ(L) (factor VAR)
     r = lags in δ(L) (AR errors)
 
-    m = k * s (state dimension)
+    m = k * s + N * r (state dimension)
 """
 struct DynamicFactorModelSpec
     n_obs::Int           # N: number of observables
@@ -4541,8 +4607,7 @@ end
     DynamicFactorModelWorkspace{T}
 
 Internal workspace for DFM estimation: the model parameters in their natural
-form, plus the quasi-differenced data and sufficient statistics used when the
-idiosyncratic errors are autoregressive.
+form and the dimensions of the state.
 """
 mutable struct DynamicFactorModelWorkspace{T <: Real}
     # Model specification
@@ -4555,7 +4620,8 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
     factor_lags::Int     # q
     error_lags::Int      # r
     n_times::Int         # n
-    state_dim::Int       # m = k * s, s = max(q, p + r + 1)
+    state_dim::Int       # m = k * s + N * r, s = max(q, p + r + 1)
+    factor_dim::Int      # k * s: the factor states fₜ, …, fₜ₋ₛ₊₁ come first
 
     # Parameter storage (separate from KalmanWorkspace for clarity)
     # Factor loadings: Λ[j] is N × k for lag j, j = 0, 1, ..., p
@@ -4572,11 +4638,6 @@ mutable struct DynamicFactorModelWorkspace{T <: Real}
 
     # Idiosyncratic innovation variances (diagonal)
     σ²_v::Vector{T}  # N × 1
-
-    # AR errors only (r > 0)
-    y_qd::Matrix{T}        # N × n: quasi-differenced data X̃ₜ, NaN where undefined
-    y_tail::Matrix{T}      # N × r: last r observations, for forecasting
-    S_cc::Array{T, 3}      # (r+1) × (r+1) × N: moments of (eᵢₜ, …, eᵢ,ₜ₋ᵣ)
 end
 
 """
@@ -4601,19 +4662,22 @@ function _setup_dfm(
     q = spec.factor_lags
     r = spec.error_lags
 
-    # The state holds fₜ, …, fₜ₋ₛ₊₁: q lags for the VAR, and p + r + 1 for the
-    # quasi-differenced loadings λ(L)(1 - δ(L)L), which reach fₜ₋ₚ₋ᵣ.
+    # The state is [fₜ; …; fₜ₋ₛ₊₁; eₜ; …; eₜ₋ᵣ₊₁]. The factor block holds q lags
+    # for the VAR and p + r + 1 for the M-step of the loadings and δ, whose
+    # moments involve λ(L) fₜ₋ₗ for l ≤ r, which reaches fₜ₋ₚ₋ᵣ.
     s = max(q, p + r + 1)
-    m = k * s
+    m_f = k * s
+    m = m_f + N * r
 
     # ========================================
     # Build state-space matrices
     # ========================================
 
-    # Observation equation: Z = Λ W(δ) is filled by sync_params_to_ssm! below;
-    # H = diag(σ²_v).
+    # Observation equation, filled by sync_params_to_ssm! below:
+    # Xₜ = Λ₀fₜ + … + Λₚfₜ₋ₚ + vₜ with H = diag(σ²_v) for white-noise errors, and
+    # Xₜ = Λ₀fₜ + … + Λₚfₜ₋ₚ + eₜ with H = 0 for AR errors.
     Z = zeros(T, N, m)
-    H = Matrix{T}(I, N, N)
+    H = r > 0 ? zeros(T, N, N) : Matrix{T}(I, N, N)
 
     # --- State equation: αₜ₊₁ = T αₜ + R ηₜ ---
     # Factor block: companion form for VAR(q)
@@ -4637,29 +4701,47 @@ function _setup_dfm(
         end
     end
 
-    # Factor shocks enter the first k states.
-    R = zeros(T, m, k)
+    # Error block: eₜ₊₁ = δ₁eₜ + … + δᵣeₜ₋ᵣ₊₁ + vₜ₊₁ (δ set by sync_params_to_ssm!),
+    # and the lags shift down.
+    for l in 1:(r - 1), i in 1:N
+
+        Tmat[m_f + l * N + i, m_f + (l - 1) * N + i] = one(T)
+    end
+
+    # Factor shocks ηₜ enter the first k states, error shocks vₜ the states eₜ.
+    n_shocks = r > 0 ? k + N : k
+    R = zeros(T, m, n_shocks)
     for i in 1:k
         R[i, i] = one(T)
     end
-    Q = Matrix{T}(I, k, k) * T(0.1)
+    for i in 1:(n_shocks - k)
+        R[m_f + i, k + i] = one(T)
+    end
+    Q = zeros(T, n_shocks, n_shocks)
+    for i in 1:k
+        Q[i, i] = T(0.1)
+    end
 
-    # Initial state
+    # Initial state: a fixed prior on the factor block; the error block is
+    # stationary, Var(eₜ, …, eₜ₋ᵣ₊₁) = Γ(δ) ⊗ diag(σ²_v), set by sync_params_to_ssm!.
     a1 = zeros(T, m)
-    P1 = Matrix{T}(I, m, m) * T(10.0)
+    P1 = zeros(T, m, m)
+    for i in 1:m_f
+        P1[i, i] = T(10.0)
+    end
 
     kf_ws = KalmanWorkspace(Z, H, Tmat, R, Q, a1, P1, n_times)
     em_ws = EMWorkspace(kf_ws)
 
     # EM constraints. With white-noise errors the loadings are the free cells of
-    # Z (columns of fₜ, …, fₜ₋ₚ); with AR errors Z = Λ W(δ) is not free cell by
-    # cell and the loadings have their own M-step (_update_dfm_ar!).
+    # Z (columns of fₜ, …, fₜ₋ₚ). With AR errors H = 0, so the Z update does not
+    # apply and the loadings have their own M-step (_update_dfm_ar!).
     fill!(em_ws.Z_free, false)
     for lag in 0:p
         col_start = lag * k + 1
         for j in 1:k, i in 1:N
 
-            em_ws.Z_free[i, col_start + j - 1] = true
+            em_ws.Z_free[i, col_start + j - 1] = r == 0
         end
     end
     em_ws.H_diag_only = true
@@ -4675,8 +4757,10 @@ function _setup_dfm(
         end
     end
 
-    # Q: the factor innovation covariance is free
-    fill!(em_ws.Q_free, true)
+    # Q: the factor innovation covariance is free; σ²_v has its own M-step with
+    # AR errors.
+    fill!(em_ws.Q_free, false)
+    em_ws.Q_free[1:k, 1:k] .= true
 
     # ========================================
     # Create DFM-specific workspace
@@ -4713,14 +4797,12 @@ function _setup_dfm(
         r,
         n_times,
         m,
+        m_f,
         Λ,
         Φ,
         Σ_η,
         δ_vec,
-        σ²_v,
-        r > 0 ? fill(T(NaN), N, n_times) : Matrix{T}(undef, N, 0),  # y_qd
-        Matrix{T}(undef, N, r),                                     # y_tail
-        zeros(T, r + 1, r + 1, r > 0 ? N : 0)                       # S_cc
+        σ²_v
     )
     sync_params_to_ssm!(kf_ws, dfm_ws)
 
@@ -4728,37 +4810,24 @@ function _setup_dfm(
 end
 
 """
-    _dfm_composite_loadings!(Z, dfm_ws::DynamicFactorModelWorkspace)
-
-Fill `Z` (N × m) with the loadings of the observation equation on the factor
-state, `Λ W(δ)`: block column `c` (the loading on fₜ₋꜀) is `Σ_{a+b=c} Λₐ dᵦ`
-with `d₀ = 1` and `dᵦ = -δᵦ`. With white-noise errors this is
-`[Λ₀ … Λₚ 0 … 0]`.
-"""
-function _dfm_composite_loadings!(Z, dfm_ws::DynamicFactorModelWorkspace{T}) where {T}
-    k, p, r = dfm_ws.n_factors, dfm_ws.loading_lags, dfm_ws.error_lags
-    fill!(Z, zero(T))
-    for a in 0:p, b in 0:r
-
-        d = b == 0 ? one(T) : -dfm_ws.δ[b]
-        cols = ((a + b) * k + 1):((a + b + 1) * k)
-        view(Z, :, cols) .+= d .* dfm_ws.Λ[a + 1]
-    end
-    return Z
-end
-
-"""
     sync_params_to_ssm!(kf_ws::KalmanWorkspace, dfm_ws::DynamicFactorModelWorkspace)
 
-Copy parameters from DynamicFactorModelWorkspace to KalmanWorkspace state-space matrices.
+Copy parameters from DynamicFactorModelWorkspace to KalmanWorkspace state-space
+matrices. With AR errors this also sets the error block of `T`, `Q` and of the
+initial covariance `P₁`, which is the stationary `Γ(δ) ⊗ diag(σ²_v)`.
 """
 function sync_params_to_ssm!(
         kf_ws::KalmanWorkspace{T},
         dfm_ws::DynamicFactorModelWorkspace{T}
 ) where {T}
-    N, k, q = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.factor_lags
+    N, k, p, q, r = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.loading_lags,
+    dfm_ws.factor_lags, dfm_ws.error_lags
+    m_f = dfm_ws.factor_dim
 
-    _dfm_composite_loadings!(kf_ws.Z, dfm_ws)
+    fill!(kf_ws.Z, zero(T))
+    for a in 0:p
+        view(kf_ws.Z, :, (a * k + 1):((a + 1) * k)) .= dfm_ws.Λ[a + 1]
+    end
 
     # Factor VAR coefficients
     for lag in 1:q
@@ -4769,10 +4838,26 @@ function sync_params_to_ssm!(
         end
     end
 
-    kf_ws.Q .= dfm_ws.Σ_η
+    view(kf_ws.Q, 1:k, 1:k) .= dfm_ws.Σ_η
 
-    for i in 1:N
-        kf_ws.H[i, i] = dfm_ws.σ²_v[i]
+    if r == 0
+        for i in 1:N
+            kf_ws.H[i, i] = dfm_ws.σ²_v[i]
+        end
+    else
+        Γ = _ar_autocov(view(dfm_ws.δ, 1:r))
+        for i in 1:N
+            kf_ws.Z[i, m_f + i] = one(T)
+            for l in 1:r
+                kf_ws.Tmat[m_f + i, m_f + (l - 1) * N + i] = dfm_ws.δ[l]
+            end
+            kf_ws.Q[k + i, k + i] = dfm_ws.σ²_v[i]
+        end
+        P1_e = view(kf_ws.P1, (m_f + 1):(m_f + N * r), (m_f + 1):(m_f + N * r))
+        fill!(P1_e, zero(T))
+        for l2 in 1:r, l1 in 1:r, i in 1:N
+            P1_e[(l1 - 1) * N + i, (l2 - 1) * N + i] = Γ[l1, l2] * dfm_ws.σ²_v[i]
+        end
     end
 
     _update_RQR!(kf_ws)
@@ -4815,158 +4900,241 @@ function sync_params_from_ssm!(
         end
     end
 
-    dfm_ws.Σ_η .= kf_ws.Q
+    dfm_ws.Σ_η .= view(kf_ws.Q, 1:k, 1:k)
 
     return nothing
 end
 
-"""
-    _dfm_quasi_difference!(dfm_ws::DynamicFactorModelWorkspace, y::AbstractMatrix)
-
-Store `X̃ₜ = Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ` in `dfm_ws.y_qd`. It is `NaN` for
-`t ≤ r` and wherever one of `Xₜ, …, Xₜ₋ᵣ` is missing, so the likelihood is
-conditional on the first `r` observations.
-"""
-function _dfm_quasi_difference!(dfm_ws::DynamicFactorModelWorkspace{T}, y::AbstractMatrix) where {T}
-    N, r, n = dfm_ws.n_obs, dfm_ws.error_lags, dfm_ws.n_times
-    y_qd, δ = dfm_ws.y_qd, dfm_ws.δ
-    @inbounds for t in 1:n
-        usable = t > r && all(l -> !any(isnan, view(y, :, t - l)), 0:r)
-        for i in 1:N
-            if usable
-                s = T(y[i, t])
-                for l in 1:r
-                    s -= δ[l] * y[i, t - l]
-                end
-                y_qd[i, t] = s
-            else
-                y_qd[i, t] = T(NaN)
-            end
-        end
-    end
-    return y_qd
+# Autocovariance matrix Γ[a, b] = Cov(eₜ₋ₐ₊₁, eₜ₋ᵦ₊₁) of the stationary AR(r)
+# process eₜ = δ₁eₜ₋₁ + … + δᵣeₜ₋ᵣ + vₜ with Var(vₜ) = 1. It solves
+# Γ = C Γ C' + e₁e₁' for the companion matrix C of δ.
+function _ar_autocov(δ::AbstractVector{T}) where {T}
+    r = length(δ)
+    C = _ar_companion(δ)
+    E = zeros(T, r, r)
+    E[1, 1] = one(T)
+    Γ = reshape((I - kron(C, C)) \ vec(E), r, r)
+    return (Γ + Γ') / 2
 end
 
-"""
-    _update_dfm_ar!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace, y)
-
-M-step for the loadings, AR coefficients and idiosyncratic variances of a DFM
-with AR errors, run after the smoother on the quasi-differenced data. Three
-conditional maximisations (an ECM step), each increasing the expected
-complete-data log-likelihood, so the EM log-likelihood still increases:
-
-1. Loadings given `δ`. With `Λ = [Λ₀ … Λₚ]` and `Z = Λ W(δ)`, the observation
-   equation is `X̃ₜ = Λ (W αₜ) + vₜ`, a regression on `W αₜ`:
-   `Λ = S_yα W' (W S_αα W')⁻¹`, summed over the periods where `X̃ₜ` is defined.
-2. `δ` given `Λ` and `σ²`. The residual `X̃ₜ - Z αₜ` equals
-   `cₜ,₀ - Σₗ δₗ cₜ,ₗ` with `cₜ,ₗ = Xₜ₋ₗ - Λ Bₗ αₜ = eₜ₋ₗ`, where `Bₗ αₜ` stacks
-   `fₜ₋ₗ, …, fₜ₋ₗ₋ₚ`. With `S_cc[:, :, i] = Σₜ E[cᵢ cᵢ' | Y]`, `δ` is the weighted
-   least-squares solution `(Σᵢ S_cc[1:, 1:, i]/σ²ᵢ) \\ (Σᵢ S_cc[1:, 0, i]/σ²ᵢ)`
-   (indices from 0). If it is not stationary it is shrunk so the spectral
-   radius of the AR companion matrix is 0.99.
-3. `σ²ᵢ = (S_cc[0, 0, i] - 2δ'S_cc[1:, 0, i] + δ'S_cc[1:, 1:, i]δ) / n_valid`.
-"""
-function _update_dfm_ar!(
-        dfm_ws::DynamicFactorModelWorkspace{T},
-        kf_ws::KalmanWorkspace{T},
-        y::AbstractMatrix
-) where {T}
-    N, k, p, r = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.loading_lags, dfm_ws.error_lags
-    m, n = dfm_ws.state_dim, dfm_ws.n_times
-    αs, Vs, y_qd = kf_ws.αs, kf_ws.Vs, dfm_ws.y_qd
-    valid = [!any(isnan, view(y_qd, :, t)) for t in 1:n]
-    n_valid = count(valid)
-
-    # --- 1. Loadings ---
-    P = k * (p + 1)
-    W = zeros(T, P, m)
-    for a in 0:p, b in 0:r
-
-        d = b == 0 ? one(T) : -dfm_ws.δ[b]
-        for j in 1:k
-            W[a * k + j, (a + b) * k + j] += d
-        end
-    end
-    S_yα = zeros(T, N, m)
-    S_αα = zeros(T, m, m)
-    for t in 1:n
-        valid[t] || continue
-        a_t = view(αs, :, t)
-        mul!(S_yα, view(y_qd, :, t), a_t', one(T), one(T))
-        S_αα .+= view(Vs, :, :, t)
-        mul!(S_αα, a_t, a_t', one(T), one(T))
-    end
-    WSW = W * S_αα * W'
-    for i in 1:P
-        WSW[i, i] += T(1e-10)
-    end
-    Λall = (S_yα * W') / cholesky(Symmetric(WSW))
-    for a in 0:p
-        dfm_ws.Λ[a + 1] .= view(Λall, :, (a * k + 1):((a + 1) * k))
-    end
-
-    # --- 2. AR coefficients ---
-    # G[l + 1] = Λ Bₗ: the loadings of eₜ₋ₗ = Xₜ₋ₗ - G[l + 1] αₜ on the state.
-    G = [zeros(T, N, m) for _ in 0:r]
-    for l in 0:r, a in 0:p
-
-        view(G[l + 1], :, ((l + a) * k + 1):((l + a + 1) * k)) .= dfm_ws.Λ[a + 1]
-    end
-    S_cc = dfm_ws.S_cc
-    fill!(S_cc, zero(T))
-    μ = Matrix{T}(undef, N, r + 1)
-    U = [Matrix{T}(undef, m, N) for _ in 0:r]
-    for t in 1:n
-        valid[t] || continue
-        a_t = view(αs, :, t)
-        V_t = view(Vs, :, :, t)
-        for l in 0:r
-            mul!(view(μ, :, l + 1), G[l + 1], a_t)
-            for i in 1:N
-                μ[i, l + 1] = y[i, t - l] - μ[i, l + 1]
-            end
-            mul!(U[l + 1], V_t, G[l + 1]')
-        end
-        @inbounds for i in 1:N, l2 in 0:r, l1 in 0:r
-            S_cc[l1 + 1, l2 + 1, i] += μ[i, l1 + 1] * μ[i, l2 + 1] +
-                                       dot(view(G[l1 + 1], i, :), view(U[l2 + 1], :, i))
-        end
-    end
-
-    A = zeros(T, r, r)
-    b = zeros(T, r)
-    for i in 1:N
-        w = one(T) / dfm_ws.σ²_v[i]
-        for j in 1:r
-            b[j] += w * S_cc[j + 1, 1, i]
-            for l in 1:r
-                A[j, l] += w * S_cc[j + 1, l + 1, i]
-            end
-        end
-    end
-    δ = Symmetric(A) \ b
-
-    # Spectral radius of the AR companion matrix; shrink δⱼ by c^j to rescale it.
+function _ar_companion(δ::AbstractVector{T}) where {T}
+    r = length(δ)
     C = zeros(T, r, r)
     C[1, :] .= δ
     for j in 2:r
         C[j, j - 1] = one(T)
     end
-    ρ = maximum(abs, eigvals(C))
-    if ρ >= T(0.99)
-        c = T(0.99) / ρ
-        for j in 1:r
-            δ[j] *= c^j
+    return C
+end
+
+_ar_is_stationary(δ) = maximum(abs, eigvals(_ar_companion(δ))) < 1
+
+# Expected complete-data log-likelihood of the AR errors as a function of δ, up to
+# terms free of δ: with Γ = Γ(δ) and d = (1, -δ₁, …, -δᵣ),
+#
+#     -½ [N log|Γ| + tr(Γ⁻¹ A_init) + d' A_ar d],
+#
+# where A_init = Σᵢ E[eᵢ,₁:ᵣ eᵢ,₁:ᵣ' | Y] / σ²ᵢ and A_ar = Σᵢ Σₜ₌ᵣ₊₁ⁿ E[cᵢₜ cᵢₜ' | Y] / σ²ᵢ
+# with cᵢₜ = (eᵢₜ, …, eᵢ,ₜ₋ᵣ). Generic in the element type of δ, for ForwardDiff;
+# -Inf when Γ(δ) is not numerically positive definite.
+function _dfm_ar_objective(δ::AbstractVector{T}, N::Int, A_init, A_ar) where {T}
+    chol = cholesky(Symmetric(_ar_autocov(δ)); check = false)
+    issuccess(chol) || return T(-Inf)
+    d = [one(T); -δ]
+    return -(N * logdet(chol) + tr(chol \ A_init) + dot(d, A_ar, d)) / 2
+end
+
+# Maximize _dfm_ar_objective over stationary δ by Newton steps (gradient steps
+# where the Hessian is not negative definite), each halved until the objective
+# increases. Starts from the better of δ0 and δ_start, so the result is never
+# worse than δ0.
+function _dfm_maximize_ar(δ0::Vector{T}, δ_start::Vector{T}, N::Int, A_init,
+        A_ar) where {T}
+    obj(δ) = _ar_is_stationary(δ) ? _dfm_ar_objective(δ, N, A_init, A_ar) : T(-Inf)
+    f(δ) = _dfm_ar_objective(δ, N, A_init, A_ar)
+    δ, best = δ0, obj(δ0)
+    if obj(δ_start) > best
+        δ, best = δ_start, obj(δ_start)
+    end
+    for _ in 1:100
+        g = ForwardDiff.gradient(f, δ)
+        Hc = cholesky(Symmetric(-ForwardDiff.hessian(f, δ)); check = false)
+        step = issuccess(Hc) ? Hc \ g : g
+        τ, moved = one(T), false
+        for _ in 1:60
+            δ_try = δ .+ τ .* step
+            v = obj(δ_try)
+            if v > best
+                δ, best, moved = δ_try, v, true
+                break
+            end
+            τ /= 2
+        end
+        (moved && τ * norm(step) > sqrt(eps(T)) * (1 + norm(δ))) || break
+    end
+    return δ
+end
+
+"""
+    _update_dfm_ar!(dfm_ws::DynamicFactorModelWorkspace, kf_ws::KalmanWorkspace)
+
+M-step for the loadings, AR coefficients and idiosyncratic variances of a DFM
+with AR errors, run after the smoother. The state carries the errors and
+`H = 0`, so the complete data are the factors and `X`, with its missing elements
+latent. Per series, `eᵢₜ = xᵢₜ - Λᵢ Fₜ` with `Fₜ = (fₜ, …, fₜ₋ₚ)` is a stationary
+AR(r): `(eᵢ₁, …, eᵢᵣ) ~ N(0, σ²ᵢ Γ(δ))` and `eᵢₜ - Σₗ δₗ eᵢ,ₜ₋ₗ ~ N(0, σ²ᵢ)` for
+`t > r`. Under the current parameters `xᵢₜ = Λᵢ⁰ Fₜ + eᵢₜ⁰`, so with
+`Dᵢ = Λᵢ - Λᵢ⁰` the new errors are `eᵢₜ⁰ - Dᵢ Fₜ`, and every moment comes from
+the smoothed state (lag-r moments from the cross-lag covariances). Three
+conditional maximisations (an ECM step):
+
+1. Loadings given `δ`: the expected complete-data log-likelihood is quadratic
+   in `Dᵢ`, so `Dᵢ = A⁻¹ bᵢ` in closed form, including the initial term.
+2. `δ` given `Λ` and `σ²` (see `_dfm_ar_objective`): `Γ(δ)` enters through
+   `log|Γ|` and `Γ⁻¹`, so there is no closed form, and safeguarded Newton steps
+   maximize it over stationary `δ` (`_dfm_maximize_ar`).
+3. `σ²ᵢ = (tr(Γ⁻¹ Sᵢ,init) + d' Sᵢ,ar d) / n`.
+
+Each step does not decrease the expected complete-data log-likelihood, so the
+log-likelihood does not decrease.
+"""
+function _update_dfm_ar!(
+        dfm_ws::DynamicFactorModelWorkspace{T},
+        kf_ws::KalmanWorkspace{T}
+) where {T}
+    N, k, p, r = dfm_ws.n_obs, dfm_ws.n_factors, dfm_ws.loading_lags, dfm_ws.error_lags
+    n, m_f = dfm_ws.n_times, dfm_ws.factor_dim
+    αs, Vs, Pc = kf_ws.αs, kf_ws.Vs, kf_ws.Pcross
+    P = k * (p + 1)          # loadings of one series
+    K = k * (p + r + 1)      # factor states fₜ, …, fₜ₋ₚ₋ᵣ; Fₜ₋ₗ is block l .+ (1:P)
+    φ = 1:K
+    eidx(i, l) = m_f + l * N + i   # eᵢ,ₜ₋ₗ in αₜ, l = 0, …, r - 1
+
+    # Moments of φₜ = (fₜ, …, fₜ₋ₚ₋ᵣ) and cᵢₜ = (eᵢₜ, …, eᵢ,ₜ₋ᵣ), summed over
+    # t = r+1:n. eᵢₜ is read from αₜ, the lags eᵢ,ₜ₋ₗ (l ≥ 1) from αₜ₋₁, and
+    # Pcross[:, :, t-1] = Cov(αₜ, αₜ₋₁ | Y).
+    S_φφ = zeros(T, K, K)
+    S_φe = zeros(T, K, r + 1, N)
+    S_ee = zeros(T, r + 1, r + 1, N)
+    for t in (r + 1):n
+        a, V = view(αs, :, t), view(Vs, :, :, t)
+        a₋, V₋, C = view(αs, :, t - 1), view(Vs, :, :, t - 1), view(Pc, :, :, t - 1)
+        @inbounds for j in φ, u in φ
+
+            S_φφ[u, j] += V[u, j] + a[u] * a[j]
+        end
+        @inbounds for i in 1:N
+            e0 = eidx(i, 0)
+            for u in φ
+                S_φe[u, 1, i] += V[u, e0] + a[u] * a[e0]
+            end
+            S_ee[1, 1, i] += V[e0, e0] + a[e0]^2
+            for l in 1:r
+                c = eidx(i, l - 1)
+                for u in φ
+                    S_φe[u, l + 1, i] += C[u, c] + a[u] * a₋[c]
+                end
+                v = C[e0, c] + a[e0] * a₋[c]
+                S_ee[1, l + 1, i] += v
+                S_ee[l + 1, 1, i] += v
+                for l2 in 1:r
+                    c2 = eidx(i, l2 - 1)
+                    S_ee[l + 1, l2 + 1, i] += V₋[c, c2] + a₋[c] * a₋[c2]
+                end
+            end
         end
     end
-    copyto!(dfm_ws.δ, δ)
+
+    # The same moments for the initial window (eᵢᵣ, …, eᵢ₁), all in αᵣ.
+    a, V = view(αs, :, r), view(Vs, :, :, r)
+    S0_φφ = V[φ, φ] .+ a[φ] .* a[φ]'
+    S0_φe = zeros(T, K, r, N)
+    S0_ee = zeros(T, r, r, N)
+    @inbounds for i in 1:N, l in 0:(r - 1)
+
+        c = eidx(i, l)
+        for u in φ
+            S0_φe[u, l + 1, i] = V[u, c] + a[u] * a[c]
+        end
+        for l2 in 0:(r - 1)
+            c2 = eidx(i, l2)
+            S0_ee[l + 1, l2 + 1, i] = V[c, c2] + a[c] * a[c2]
+        end
+    end
+    blk(l) = (l * k + 1):(l * k + P)
+
+    # --- 1. Loadings given δ ---
+    δ0 = dfm_ws.δ[1:r]
+    d0 = [one(T); -δ0]
+    G = inv(cholesky(Symmetric(_ar_autocov(δ0))))
+    Wδ = zeros(T, P, K)
+    for l in 0:r, j in 1:P
+
+        Wδ[j, l * k + j] += d0[l + 1]
+    end
+    A = Wδ * S_φφ * Wδ'
+    for l2 in 0:(r - 1), l1 in 0:(r - 1)
+
+        A .+= G[l1 + 1, l2 + 1] .* view(S0_φφ, blk(l1), blk(l2))
+    end
+    for j in 1:P
+        A[j, j] += T(1e-10)
+    end
+    Achol = cholesky(Symmetric(A))
+    D = zeros(T, P, N)
+    for i in 1:N
+        b = Wδ * (view(S_φe, :, :, i) * d0)
+        for l2 in 0:(r - 1), l1 in 0:(r - 1)
+
+            b .+= G[l1 + 1, l2 + 1] .* view(S0_φe, blk(l1), l2 + 1, i)
+        end
+        D[:, i] .= Achol \ b
+    end
+    for a in 0:p
+        dfm_ws.Λ[a + 1] .+= view(D, (a * k + 1):((a + 1) * k), :)'
+    end
+
+    # Moments of the errors at the new loadings, eᵢ,ₜ₋ₗ⁰ - Dᵢ Fₜ₋ₗ.
+    S_ar = zeros(T, r + 1, r + 1, N)
+    S_init = zeros(T, r, r, N)
+    for i in 1:N
+        Dᵢ = view(D, :, i)
+        for l2 in 0:r, l1 in 0:r
+
+            S_ar[l1 + 1, l2 + 1, i] = S_ee[l1 + 1, l2 + 1, i] -
+                                      dot(Dᵢ, view(S_φe, blk(l1), l2 + 1, i)) -
+                                      dot(Dᵢ, view(S_φe, blk(l2), l1 + 1, i)) +
+                                      dot(Dᵢ, view(S_φφ, blk(l1), blk(l2)), Dᵢ)
+        end
+        for l2 in 0:(r - 1), l1 in 0:(r - 1)
+
+            S_init[l1 + 1, l2 + 1, i] = S0_ee[l1 + 1, l2 + 1, i] -
+                                        dot(Dᵢ, view(S0_φe, blk(l1), l2 + 1, i)) -
+                                        dot(Dᵢ, view(S0_φe, blk(l2), l1 + 1, i)) +
+                                        dot(Dᵢ, view(S0_φφ, blk(l1), blk(l2)), Dᵢ)
+        end
+    end
+
+    # --- 2. AR coefficients ---
+    A_ar = zeros(T, r + 1, r + 1)
+    A_init = zeros(T, r, r)
+    for i in 1:N
+        w = one(T) / dfm_ws.σ²_v[i]
+        A_ar .+= w .* view(S_ar, :, :, i)
+        A_init .+= w .* view(S_init, :, :, i)
+    end
+    # The weighted least-squares solution, which ignores the initial term, is
+    # close to the maximizer and starts the Newton iteration.
+    δ_ls = Symmetric(A_ar[2:end, 2:end]) \ A_ar[2:end, 1]
+    δ = _dfm_maximize_ar(δ0, δ_ls, N, A_init, A_ar)
+    dfm_ws.δ[1:r] .= δ
 
     # --- 3. Idiosyncratic variances ---
+    Γchol = cholesky(Symmetric(_ar_autocov(δ)))
+    d = [one(T); -δ]
     for i in 1:N
-        Sxe = view(S_cc, 2:(r + 1), 1, i)
-        Sxx = view(S_cc, 2:(r + 1), 2:(r + 1), i)
-        s = S_cc[1, 1, i] - 2 * dot(δ, Sxe) + dot(δ, Sxx, δ)
-        dfm_ws.σ²_v[i] = max(s / n_valid, T(1e-10))
+        s = tr(Γchol \ view(S_init, :, :, i)) + dot(d, view(S_ar, :, :, i), d)
+        dfm_ws.σ²_v[i] = max(s / n, T(1e-10))
     end
 
     return nothing
@@ -4978,8 +5146,8 @@ end
 
 EM algorithm for full dynamic factor model.
 
-With AR errors each iteration filters the quasi-differenced data for the current
-`δ`, so the log-likelihood is that of `X_{r+1:n}` given `X_{1:r}`.
+With AR errors the state carries the errors and the log-likelihood is the exact
+log-likelihood of the observed elements of `y`.
 """
 function _em_dfm!(
         kf_ws::KalmanWorkspace{T},
@@ -4998,9 +5166,6 @@ function _em_dfm!(
     converged = false
     iter = 0
 
-    # The data the filter sees: y itself, or its quasi-difference for the current δ.
-    filter_data!() = r > 0 ? _dfm_quasi_difference!(dfm_ws, y) : y
-
     for i in 1:maxiter
         iter = i
 
@@ -5008,8 +5173,7 @@ function _em_dfm!(
         sync_params_to_ssm!(kf_ws, dfm_ws)
 
         # E-step: Filter and smooth
-        y_f = filter_data!()
-        kalman_filter_and_smooth!(kf_ws, y_f; crosscov = true)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
         ll = kf_ws.loglik
         loglik_history[i] = ll
         kf_ws.status == 0 || break
@@ -5035,13 +5199,13 @@ function _em_dfm!(
         ll_prev = ll
 
         # Compute sufficient statistics
-        n_valid = compute_sufficient_stats!(em_ws, kf_ws, y_f)
+        n_valid = compute_sufficient_stats!(em_ws, kf_ws, y)
 
         if r > 0
             # Factor dynamics, then loadings, δ and σ²_v
             update_T!(kf_ws, em_ws)
             update_Q!(kf_ws, em_ws)
-            _update_dfm_ar!(dfm_ws, kf_ws, y)
+            _update_dfm_ar!(dfm_ws, kf_ws)
         else
             update_Z!(kf_ws, em_ws, n_valid)  # Updates Λ
             update_T!(kf_ws, em_ws)           # Updates Φ
@@ -5060,13 +5224,9 @@ function _em_dfm!(
     # so the workspace already holds the run at the current parameters.
     if kf_ws.status == 0
         sync_params_to_ssm!(kf_ws, dfm_ws)
-        kalman_filter_and_smooth!(kf_ws, filter_data!(); crosscov = true)
+        kalman_filter_and_smooth!(kf_ws, y; crosscov = true)
     end
     warn && _warn_em(converged, iter, kf_ws.status, tol)
-    if r > 0
-        n = dfm_ws.n_times
-        dfm_ws.y_tail .= view(y, :, (n - r + 1):n)
-    end
 
     return (
         converged = converged,
@@ -5184,6 +5344,8 @@ function DynamicFactorModel{T}(
         (:error_lags, error_lags))
         val >= 0 || throw(ArgumentError("$name must be non-negative, got $val"))
     end
+    error_lags < n_times || throw(ArgumentError(
+        "error_lags must be smaller than n_times, got $error_lags and $n_times"))
     spec = DynamicFactorModelSpec(n_obs, n_factors, loading_lags, factor_lags, error_lags)
     kf_ws, em_ws, dfm_ws = _setup_dfm(spec, n_times, T, rng)
 
@@ -5215,7 +5377,7 @@ _fit_hint(::DynamicFactorModel) = "fit!(EM(), model, y)"
 # ============================================
 
 # The workspace holds the filter and smoother output of the last EM pass at the
-# fitted parameters. With AR errors that output is for the quasi-differenced data.
+# fitted parameters.
 function _fitted_workspace(model::DynamicFactorModel)
     _require_fitted(model)
     return model.kf_ws
@@ -5231,11 +5393,12 @@ end
 """
     system_matrices(model::DynamicFactorModel) -> KFParms
 
-Return a copy of the state-space matrices at the fitted parameters. The state is
-`αₜ = [fₜ; …; fₜ₋ₛ₊₁]`, `Q` is the factor innovation covariance and `H` the
-diagonal of idiosyncratic variances. With AR errors (`error_lags > 0`) the
-observation equation is that of the quasi-differenced data
-`Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ`, and `Z` holds the composite loadings `λ(L)(1 - δ(L)L)`.
+Return a copy of the state-space matrices at the fitted parameters. With
+white-noise errors the state is `αₜ = [fₜ; …; fₜ₋ₛ₊₁]`, `Q` is the factor
+innovation covariance and `H` the diagonal of idiosyncratic variances. With AR
+errors (`error_lags > 0`) the state is `[fₜ; …; fₜ₋ₛ₊₁; eₜ; …; eₜ₋ᵣ₊₁]`, `Z` loads
+`eₜ` with an identity block, `H = 0`, and `Q` is block diagonal with the factor
+innovation covariance and `diag(σ²_v)`.
 """
 function system_matrices(model::DynamicFactorModel)
     p = system_matrices(_fitted_workspace(model))
@@ -5331,7 +5494,8 @@ end
     factor_innovation_cov(model::DynamicFactorModel)
 
 Return a copy of the factor innovation covariance Σ_η (k × k) from a fitted model.
-It equals `state_cov(model)`.
+It equals `state_cov(model)` with white-noise errors, and its leading `k × k`
+block with AR errors.
 """
 function factor_innovation_cov(model::DynamicFactorModel)
     _require_fitted(model)
@@ -5374,7 +5538,7 @@ Fit a dynamic factor model using the EM algorithm.
 # Arguments
 - `EM()`: Estimation method selector
 - `model`: DynamicFactorModel to fit (mutated in-place)
-- `y`: Observations (N × n matrix), missing values as NaN
+- `y`: Observations (N × n matrix), missing values as NaN, one element at a time
 
 # Keyword Arguments
 - `maxiter`: Maximum EM iterations (default: 500)
@@ -5385,11 +5549,11 @@ Fit a dynamic factor model using the EM algorithm.
 # Returns
 - The fitted `model` (same object, mutated)
 
-With AR errors (`error_lags = r > 0`) the model is estimated on the
-quasi-differenced data `Xₜ - δ₁Xₜ₋₁ - … - δᵣXₜ₋ᵣ`, so the log-likelihood is that
-of `X_{r+1:n}` given `X_{1:r}`, and a period contributes only when it and its `r`
-predecessors are observed. The smoothed factors of the first `r` periods are
-informed by the factor dynamics only.
+With AR errors (`error_lags = r > 0`) the errors are states that start from
+their stationary distribution, and the log-likelihood is the exact
+log-likelihood of the observed elements of `y`. The state has `N r` more
+elements than with white-noise errors, which makes each iteration more expensive
+for a large panel.
 
 # Example
 ```julia
@@ -5419,7 +5583,6 @@ function fit!(
         "Data has $n time periods but model workspace allocated for $(model.kf_ws.n_times)",
     ),
     )
-    _require_no_partial_periods(y, "fit!(EM(), ::DynamicFactorModel, ...)")
 
     verbose &&
         @info "Fitting DynamicFactorModel via EM" n_obs=spec.n_obs n_factors=spec.n_factors loading_lags=spec.loading_lags factor_lags=spec.factor_lags error_lags=spec.error_lags state_dim=model.dfm_ws.state_dim
@@ -5460,9 +5623,8 @@ the state equation forward:
     E[αₙ₊ₕ|Y₁:ₙ] = Tʰ αₙ|ₙ
     Var[αₙ₊ₕ|Y₁:ₙ] = Tʰ Pₙ|ₙ (T')ʰ + Σⱼ₌₀ʰ⁻¹ Tʲ RQR' (T')ʲ
 
-With AR errors the observation forecast also iterates
-`Xₙ₊ⱼ = δ₁Xₙ₊ⱼ₋₁ + … + δᵣXₙ₊ⱼ₋ᵣ + Z αₙ₊ⱼ + vₙ₊ⱼ` from the last `r` observations,
-which must not be missing.
+With AR errors the errors are states, so the observation forecast `Z αₙ₊ₕ` includes
+their forecast.
 
 The factor forecasts are the first `k` states: `forecast_states(fc)[1:k, :]`, with
 intervals from `forecast_interval(fc; what = :states)`.
@@ -5478,71 +5640,9 @@ lower, upper = forecast_interval(fc, 0.95)
 function forecast(model::DynamicFactorModel{T}, h::Integer) where {T}
     _require_fitted(model)
 
-    model.spec.error_lags > 0 && return _forecast_dfm_ar(model, h)
-
     kf_ws = model.kf_ws
     m, n = kf_ws.state_dim, kf_ws.n_times
     # The workspace keeps RQR' only, so it stands in for Q with R = I.
     p = KFParms(kf_ws.Z, kf_ws.H, kf_ws.Tmat, Matrix{T}(I, m, m), kf_ws.RQR)
     return _forecast_from_filtered(p, kf_ws.att[:, n], kf_ws.Ptt[:, :, n], n, h)
-end
-
-# Forecast of a DFM with AR errors. The observations follow
-#   Xₜ₊₁ = δ₁Xₜ + … + δᵣXₜ₋ᵣ₊₁ + Z αₜ₊₁ + vₜ₊₁,
-# so the forecast iterates the augmented state βₜ = [αₜ; Xₜ; …; Xₜ₋ᵣ₊₁] from the
-# filtered αₙ and the last r observations, which are known.
-function _forecast_dfm_ar(model::DynamicFactorModel{T}, h::Integer) where {T}
-    h >= 1 || throw(ArgumentError("forecast horizon must be at least 1, got $h"))
-    N, r = model.spec.n_obs, model.spec.error_lags
-    kf_ws, dfm_ws = model.kf_ws, model.dfm_ws
-    m, n = kf_ws.state_dim, kf_ws.n_times
-    any(isnan, dfm_ws.y_tail) && throw(ArgumentError(
-        "forecasting a DFM with AR errors needs the last $r observations; some are missing"))
-
-    Z, Tm, H, RQR = kf_ws.Z, kf_ws.Tmat, kf_ws.H, kf_ws.RQR
-    M = m + N * r
-    xs = (m + 1):(m + N)                       # rows of Xₜ in βₜ
-
-    Ta = zeros(T, M, M)
-    Ta[1:m, 1:m] .= Tm
-    Ta[xs, 1:m] .= Z * Tm
-    for l in 1:r
-        for i in 1:N
-            Ta[m + i, m + (l - 1) * N + i] = dfm_ws.δ[l]
-        end
-    end
-    for l in 1:(r - 1), i in 1:N
-
-        Ta[m + l * N + i, m + (l - 1) * N + i] = one(T)
-    end
-
-    # Shocks: Rηₜ₊₁ to αₜ₊₁, Z Rηₜ₊₁ + vₜ₊₁ to Xₜ₊₁.
-    Qa = zeros(T, M, M)
-    Qa[1:m, 1:m] .= RQR
-    Qa[1:m, xs] .= RQR * Z'
-    Qa[xs, 1:m] .= Z * RQR
-    Qa[xs, xs] .= Z * RQR * Z' .+ H
-
-    a = zeros(T, M)
-    a[1:m] .= view(kf_ws.att, :, n)
-    for l in 1:r
-        a[(m + (l - 1) * N + 1):(m + l * N)] .= view(dfm_ws.y_tail, :, r - l + 1)
-    end
-    P = zeros(T, M, M)
-    P[1:m, 1:m] .= view(kf_ws.Ptt, :, :, n)
-
-    state_mean = Matrix{T}(undef, m, h)
-    state_cov = Array{T, 3}(undef, m, m, h)
-    obs_mean = Matrix{T}(undef, N, h)
-    obs_cov = Array{T, 3}(undef, N, N, h)
-    for j in 1:h
-        a = Ta * a
-        P = Ta * P * Ta' + Qa
-        state_mean[:, j] .= view(a, 1:m)
-        state_cov[:, :, j] .= view(P, 1:m, 1:m)
-        obs_mean[:, j] .= view(a, xs)
-        obs_cov[:, :, j] .= view(P, xs, xs)
-    end
-
-    return ForecastResult(obs_mean, obs_cov, state_mean, state_cov, n)
 end

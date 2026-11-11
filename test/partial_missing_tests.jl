@@ -602,7 +602,90 @@ end
     @test smoothed_states(model) ≈
           smoothed_states(kalman_smoother(ss_fit.p, y, ss_fit.a1, ss_fit.P1))
 
-    @test_throws "Use fit!(MLE(), ...)" fit!(EM(), StateSpaceModel(spec, n), y)
+    model_em = fit!(EM(), StateSpaceModel(spec, n), y; maxiter = 5000, tol = 1e-12)
+    @test loglikelihood(model_em) ≈ loglikelihood(model) rtol = 1e-7
+end
+
+# issue #13: EM treats the missing elements of a partially observed period as
+# latent, so it converges to the maximum likelihood estimate of the observed data.
+@testset "partial missing — EM reaches the MLE" begin
+    # Diagonal H: the missing rows enter with their current variances.
+    spec = custom_ssm(;
+        Z = reshape(Any[1.0, 1.0], 2, 1),
+        T = reshape(Any[FreeParam(:phi; init = 0.9)], 1, 1),
+        R = reshape([1.0], 1, 1),
+        Q = reshape(Any[FreeParam(:q; init = 1.0, lower = 0.0)], 1, 1),
+        H = diag_free(2, :h; init = [0.5, 0.5], lower = 0.0),
+        a1 = [0.0], P1 = reshape([10.0], 1, 1))
+    rng = Random.Xoshiro(1)
+    n = 200
+    y = randn(rng, 2, n)
+    y[2, 20:40] .= NaN
+    y[1, 100:110] .= NaN
+    y[:, 150] .= NaN
+    em = fit!(EM(), StateSpaceModel(spec, n), y; maxiter = 5000, tol = 1e-12)
+    ml = fit!(MLE(), StateSpaceModel(spec, n), y)
+    @test isconverged(em)
+    @test loglikelihood(em) ≈ loglikelihood(ml) rtol = 1e-8
+    @test collect(parameters(em)) ≈ collect(parameters(ml)) atol = 1e-3
+
+    # Full H: the missing rows are also predicted from the observed ones through
+    # the off-diagonal blocks of H.
+    p, n = 3, 300
+    rng = Random.Xoshiro(3)
+    x = zeros(n)
+    for t in 2:n
+        x[t] = 0.7 * x[t - 1] + 0.6 * randn(rng)
+    end
+    H = [1.0 0.5 0.2; 0.5 1.0 0.3; 0.2 0.3 0.8]
+    y = [1.0, 0.8, -0.5] * x' .+ cholesky(H).L * randn(rng, p, n)
+    y[3, 30:60] .= NaN
+    y[1, 80:90] .= NaN
+    y[2:3, 200:215] .= NaN
+    y[:, 250] .= NaN
+    spec = custom_ssm(;
+        Z = reshape(Any[1.0, FreeParam(:z2; init = 0.5), FreeParam(:z3; init = 0.5)], 3, 1),
+        T = reshape(Any[FreeParam(:phi; init = 0.5)], 1, 1),
+        R = reshape([1.0], 1, 1),
+        Q = reshape(Any[FreeParam(:q; init = 0.5, lower = 0.0)], 1, 1),
+        H = cov_free(3, :H),
+        a1 = [0.0], P1 = reshape([10.0], 1, 1))
+    em = fit!(EM(), StateSpaceModel(spec, n), y; maxiter = 20000, tol = 1e-13)
+    ml = fit!(MLE(), StateSpaceModel(spec, n), y)
+    @test isconverged(em)
+    @test loglikelihood(em) ≈ loglikelihood(ml) rtol = 1e-8
+    @test system_matrices(em).H ≈ system_matrices(ml).H atol = 1e-3
+    @test system_matrices(em).Z ≈ system_matrices(ml).Z atol = 1e-3
+
+    # Every cell of Z and H free: the log-likelihood rises at every iteration.
+    ws = KalmanWorkspace(
+        reshape([1.0, 0.5, 0.5], 3, 1), [1.0 0.3 0.3; 0.3 1.0 0.3; 0.3 0.3 1.0],
+        fill(0.5, 1, 1), fill(1.0, 1, 1), fill(0.5, 1, 1), [0.0], fill(10.0, 1, 1), n)
+    res = Siphon.em_estimate!(ws, Siphon.EMWorkspace(ws), y; maxiter = 200, tol = 0.0,
+        warn = false)
+    @test all(>(0), diff(res.loglik_history))
+    @test res.loglik ≈ kalman_loglik(KFParms(res.Z, res.H, res.T, res.R, res.Q), y,
+        res.a1, res.P1) rtol = 1e-10
+end
+
+@testset "partial missing — DynamicFactorModel EM" begin
+    rng = Random.Xoshiro(5)
+    N, n = 6, 150
+    f = zeros(n)
+    for t in 2:n
+        f[t] = 0.8 * f[t - 1] + randn(rng)
+    end
+    y = randn(rng, N) * f' .+ 0.5 * randn(rng, N, n)
+    y[2, 10:30] .= NaN
+    y[5, 60:70] .= NaN
+    model = fit!(EM(), DynamicFactorModel(N, 1, n), y; maxiter = 2000)
+    @test isconverged(model)
+    @test isfinite(loglikelihood(model))
+    model = fit!(
+        EM(), DynamicFactorModel(N, 1, n; error_lags = 1, rng = Random.Xoshiro(3)),
+        y; maxiter = 2000)
+    @test all(diff(model.loglik_history) .>= -1e-8 * abs(loglikelihood(model)))
+    @test isfinite(loglikelihood(model))
 end
 
 @testset "kalman_loglik and kalman_filter agree for a nearly asymmetric F" begin

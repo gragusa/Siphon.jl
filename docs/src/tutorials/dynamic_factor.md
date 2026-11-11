@@ -73,10 +73,11 @@ The parameter accessors return copies. `DynamicFactorModel` also has the
 accessors shared by all models: `filtered_states`, `smoothed_states` and their
 `_cov` versions refer to the full state ``[f_t; f_{t-1}; \ldots]``, and
 `system_matrices(model)` returns the state-space matrices at the fitted
-parameters, so `state_cov(model)` equals `factor_innovation_cov(model)`.
+parameters, so `state_cov(model)` equals `factor_innovation_cov(model)` with
+white-noise errors (with AR errors it also holds the idiosyncratic variances).
 `filtered_factors`, `factors_cov` and `filtered_factors_cov` give the factor
-block of the state. With AR errors the filter runs on the quasi-differenced data
-(below), so `prediction_errors` and `obs_matrix` refer to that data.
+block of the state. With AR errors the state also holds the idiosyncratic errors
+(below).
 
 The starting values of the contemporaneous loadings are random. Pass
 `rng = Xoshiro(1)` (or any `AbstractRNG`) to the constructor for reproducible
@@ -93,24 +94,27 @@ fits.
 
 ### State Dimension
 
-The state vector stacks current and lagged factors:
+With white-noise errors the state vector stacks current and lagged factors:
 
 ```math
 \alpha_t = [f_t', f_{t-1}', \ldots, f_{t-s+1}']'
 ```
 
-where ``s = \max(q, p+r+1)``. State dimension: ``m = k \times s``.
+where ``s = \max(q, p+r+1)``, and the state dimension is ``m = k s``.
 
-With AR errors (``r > 0``) the idiosyncratic errors are not states. The model is
-estimated on the quasi-differenced data
+With AR errors (``r > 0``) the idiosyncratic errors are states too:
 
 ```math
-\tilde x_t = x_t - \delta_1 x_{t-1} - \cdots - \delta_r x_{t-r}
-  = \lambda(L)\,(1 - \delta(L)L)\, f_t + v_t,
+\alpha_t = [f_t', \ldots, f_{t-s+1}', e_t', \ldots, e_{t-r+1}']',
+\qquad x_t = \Lambda_0 f_t + \cdots + \Lambda_p f_{t-p} + e_t,
 ```
 
-so the log-likelihood is conditional on the first ``r`` observations, and the EM
-alternates the loadings, ``\delta`` and the idiosyncratic variances.
+with no measurement noise, so ``m = k s + N r``. The errors start from their
+stationary distribution, and the log-likelihood is the exact log-likelihood of
+the observed values, for any pattern of missing values (Bańbura and Modugno,
+2014). The EM alternates the loadings, ``\delta`` and the idiosyncratic
+variances. For a large panel the extra ``N r`` states make each iteration
+noticeably more expensive.
 
 ## DSL Approach: dynamic_factor Template
 
